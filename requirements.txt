@@ -1,0 +1,10 @@
+streamlit==1.50.0
+langchain==1.0.1
+langgraph==1.0.1
+langchain-openai==1.0.0
+openai==2.3.0
+typing-extensions==4.15.0
+
+# Visualization dependencies
+pygraphviz>=0.20.0
+streamlit-mermaid==0.3.0
