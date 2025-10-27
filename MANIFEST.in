@@ -1,0 +1,9 @@
+# Include files
+include README.md
+include LICENSE
+include requirements.txt
+recursive-include streamlit_langgraph *.py
+
+# Exclude files
+prune .streamlit
+global-exclude .streamlit/*
