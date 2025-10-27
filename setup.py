@@ -14,7 +14,7 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/JjongX/streamlit-langgraph",
-    packages=find_packages(exclude=["tests*", "examples*"]),
+    packages=find_packages(exclude=["examples*"]),
     install_requires=[
         "streamlit>=1.50.0",
         "langchain>=1.0.1",
@@ -33,7 +33,6 @@ setup(
     classifiers=[
         "Development Status :: 2 - Pre-Alpha",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
