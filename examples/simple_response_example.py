@@ -9,12 +9,12 @@ def main():
         role="Helpful Assistant", 
         instructions="You are a helpful assistant that can answer questions and have conversations.",
         type="response",
+        provider="openai",
+        model="gpt-4.1",
         allow_file_search=True,
         allow_code_interpreter=True,
         allow_web_search=True,
         temperature=0.7,
-        provider="openai",
-        model="gpt-4.1",
     )
 
     # Create UI configuration

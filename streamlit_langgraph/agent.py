@@ -2,9 +2,6 @@ from typing import List, Optional, Dict
 from dataclasses import dataclass, field
 
 from langchain.agents import create_agent
-import logging
-
-logger = logging.getLogger(__name__)
 
 @dataclass
 class Agent:
@@ -23,21 +20,16 @@ class Agent:
     temperature: float = 0.0
     allow_file_search: bool = False
     allow_code_interpreter: bool = False
+    container_id: Optional[str] = None  # For code_interpreter functionality
     allow_web_search: bool = False
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
-    container_id: Optional[str] = None  # For code_interpreter functionality
 
     def __post_init__(self):
         """Post-initialization processing and validation."""
-        if not self.provider:
-            self.provider = "openai"
-        if not self.model:
-            self.model = "gpt-4o"
-        if not self.type:
-            raise ValueError("Agent must specify type ('response' or 'agent')")
         if self.type not in ("response", "agent"):
-            raise ValueError("Agent 'type' must be either 'response' or 'agent'")
+            raise ValueError("Agent 'type' must be either 'response' or 'agent'.")
+        # Compose system_message if not provided
         if self.system_message is None:
             self.system_message = f"You are a {self.role}. {self.instructions}"
         # Auto-enable native tools based on tools list
@@ -49,22 +41,24 @@ class Agent:
             self.allow_web_search = True
         if "image_generation" in self.tools:
             self.allow_image_generation = True
-    
+
     def to_dict(self) -> Dict:
         """Convert agent configuration to dictionary for serialization."""
         return {
             "name": self.name,
             "role": self.role,
             "instructions": self.instructions,
+            "type": self.type,
             "provider": self.provider,
             "model": self.model,
-            "type": self.type,
-            "tools": self.tools,
+            "system_message": self.system_message,
             "temperature": self.temperature,
             "allow_file_search": self.allow_file_search,
             "allow_code_interpreter": self.allow_code_interpreter,
+            "container_id": self.container_id,
             "allow_web_search": self.allow_web_search,
             "allow_image_generation": self.allow_image_generation,
+            "tools": self.tools,
         }
     
     @classmethod
@@ -88,41 +82,26 @@ class ResponseAPIExecutor:
         """Create container for code_interpreter if needed and not already created."""
         current_container_id = getattr(self.agent, 'container_id', None)
         if self.agent.allow_code_interpreter and not current_container_id:
-            logger.info(f"Creating container for agent {self.agent.name}")
             try:
                 container = llm_client.containers.create(name=f"streamlit-{self.agent.name}")
                 self.agent.container_id = container.id
-                logger.info(f"Successfully created container {container.id} for agent {self.agent.name}")
-            except Exception as e:
-                logger.error(f"Failed to create container for agent {self.agent.name}: {str(e)}")
+            except Exception:
                 # Disable code_interpreter if container creation fails
                 self.agent.allow_code_interpreter = False
-        elif self.agent.allow_code_interpreter:
-            logger.info(f"Agent {self.agent.name} already has container_id: {current_container_id}")
     
     def _check_container_status(self, llm_client):
         """Check container status and recreate if expired."""
         container_id = getattr(self.agent, 'container_id', None)
         if self.agent.allow_code_interpreter and container_id:
-            logger.info(f"Checking container status for agent {self.agent.name}, container_id: {container_id}")
-            
             if not container_id:
-                logger.warning(f"Agent {self.agent.name} has no container_id, creating one")
                 self._create_container_if_needed(llm_client)
                 return
-            
             try:
                 result = llm_client.containers.retrieve(container_id=container_id)
-                logger.info(f"Container {container_id} status: {result.status}")
                 if result.status == "expired":
-                    logger.info(f"Container {container_id} expired, creating new one")
                     container = llm_client.containers.create(name=f"streamlit-{self.agent.name}")
                     self.agent.container_id = container.id
-                    logger.info(f"Created new container {container.id} to replace expired one")
-            except Exception as e:
-                logger.error(f"Failed to check/recreate container: {str(e)}")
-                # Try to create a new container
-                logger.info("Attempting to create new container after check failure")
+            except Exception:
                 self._create_container_if_needed(llm_client)
 
     def execute(self, llm_client, prompt: str, stream: bool = True, file_messages: Optional[List] = None):
@@ -148,34 +127,24 @@ class ResponseAPIExecutor:
 
         # Handle container creation and management for code_interpreter
         if self.agent.allow_code_interpreter:
-            logger.info(f"Agent {self.agent.name} has code_interpreter enabled")
             self._create_container_if_needed(llm_client)
             self._check_container_status(llm_client)
 
         # Build tools configuration based on agent capabilities
         tools = []
+        # Note: file_search requires vector_store_ids, so we skip it if none are configured
+        # This will be handled by the FileHandler's dynamic vector store creation
         if self.agent.allow_code_interpreter:
-            container_id_value = getattr(self.agent, 'container_id', None)
-            logger.info(f"Agent {self.agent.name}: container_id={container_id_value}")
-            
+            container_id_value = getattr(self.agent, 'container_id', None)            
             if container_id_value:
                 tools.append({
                     "type": "code_interpreter",
                     "container": container_id_value
                 })
-                logger.info(f"Added code_interpreter tool with container: {container_id_value}")
-            else:
-                logger.warning(f"Agent {self.agent.name}: code_interpreter enabled but no valid container_id")
-        # Note: file_search requires vector_store_ids, so we skip it if none are configured
-        # This will be handled by the FileHandler's dynamic vector store creation
-        # if self.agent.allow_file_search:
-        #     tools.append({"type": "file_search"})
         if self.agent.allow_web_search:
             tools.append({"type": "web_search"})
         if self.agent.allow_image_generation:
             tools.append({"type": "image_generation", "partial_images": 3})
-
-        logger.info(f"Final tools configuration for agent {self.agent.name}: {tools}")
 
         try:
             # Prepare API call parameters
@@ -189,7 +158,6 @@ class ResponseAPIExecutor:
             # Add tools if any are enabled
             if tools:
                 api_params["tools"] = tools
-                logger.info(f"API call will include tools: {tools}")
 
             if stream:
                 stream_iter = llm_client.responses.create(**api_params)
@@ -213,7 +181,6 @@ class ResponseAPIExecutor:
                 return {"role": "assistant", "content": response_content, "agent": self.agent.name}
 
         except Exception as e:
-            logger.exception("Responses API call failed")
             return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
 
 class CreateAgentExecutor:
@@ -267,7 +234,6 @@ class CreateAgentExecutor:
 
             except Exception:
                 # If the agent returns a complex object, stringify gracefully
-                logger.exception("Error calling LangChain agent; attempting best-effort stringify")
                 try:
                     result_text = str(out)
                 except Exception:
@@ -276,7 +242,6 @@ class CreateAgentExecutor:
             return {"role": "assistant", "content": result_text, "agent": self.agent.name}
 
         except Exception as e:
-            logger.exception("create_agent execution failed")
             return {"role": "assistant", "content": f"create_agent error: {str(e)}", "agent": self.agent.name}
 
 class AgentManager:
