@@ -629,19 +629,3 @@ Assistant:"""
                 "agent": agent.name
             }
     
-    def add_agent(self, agent: Agent):
-        """Add an agent to the chat."""
-        self.agent_manager.add_agent(agent)
-    
-    def remove_agent(self, agent_name: str):
-        """Remove an agent from the chat."""
-        self.agent_manager.remove_agent(agent_name)
-    
-    def add_tool(self, tool: CustomTool):
-        """Add a custom tool to the chat."""
-        CustomTool.register_tool(tool.name, tool.description, tool.function, parameters=tool.parameters, return_direct=tool.return_direct)
-    
-    def set_workflow(self, workflow):
-        """Set or update the workflow."""
-        self.workflow = workflow
-        self.workflow_executor = WorkflowExecutor() if workflow else None
