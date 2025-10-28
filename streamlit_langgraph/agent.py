@@ -146,7 +146,7 @@ class CreateAgentExecutor:
     """Executor that builds a LangChain using `create_agent`.
 
     Uses LangChain's standard `create_agent` function which works with any provider
-    (OpenAI, Anthropic, Google, etc.) via init_chat_model.
+    (OpenAI, Anthropic, Google, etc.).
     """
 
     def __init__(self, agent: Agent, tools: Optional[List] = None):

@@ -462,12 +462,6 @@ class LangGraphChat:
                 # Use simple agent selection - first available agent
                 agent = next(iter(self.agent_manager.agents.values()))
                 return self._execute_agent(prompt, agent)
-            else:
-                return {
-                    "role": "assistant",
-                    "content": "No agents are available. Please define agents in your application.",
-                    "agent": "system"
-                }
         except Exception as e:
             import traceback
             traceback.print_exc()

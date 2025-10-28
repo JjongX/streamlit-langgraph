@@ -11,10 +11,6 @@ class WorkflowExecutor:
     Handles execution of compiled workflows with Streamlit integration.
     """
     
-    def __init__(self):
-        """Initialize the workflow executor."""
-        pass
-    
     def execute_workflow(self, workflow: StateGraph, user_input: str, 
                         display_callback: Optional[Callable] = None,
                         config: Optional[Dict[str, Any]] = None) -> WorkflowState:
@@ -33,25 +29,15 @@ class WorkflowExecutor:
         # Initialize workflow state
         initial_state = create_initial_state(
             messages=[{"role": "user", "content": user_input}]
-        )
-        
+        )    
         if config:
             initial_state["metadata"].update(config)
-        
-        try:
-            # Execute the workflow
-            if display_callback:
-                return self._execute_with_display(workflow, initial_state, display_callback)
-            else:
-                return self._execute_basic(workflow, initial_state)
-                
-        except Exception as e:
-            st.error(f"Workflow execution failed: {str(e)}")
-            # Return state with error information
-            error_message = {"role": "system", "content": f"Execution error: {str(e)}", "agent": None, "timestamp": None}
-            initial_state["messages"].append(error_message)
-            return initial_state
     
+        if display_callback:
+            return self._execute_with_display(workflow, initial_state, display_callback)
+        else:
+            return self._execute_basic(workflow, initial_state)
+
     def _execute_basic(self, workflow: StateGraph, initial_state: WorkflowState) -> WorkflowState:
         """Execute workflow without display callbacks."""
         config = {"recursion_limit": 50}
