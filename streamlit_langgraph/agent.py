@@ -143,11 +143,10 @@ class ResponseAPIExecutor:
             return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
 
 class CreateAgentExecutor:
-    """Executor that builds a LangChain agent using `create_agent`.
+    """Executor that builds a LangChain using `create_agent`.
 
-    This executor is intended for non-OpenAI providers (for example, Gemini via
-    a LangChain chat model). It will initialize a chat model using
-    `init_chat_model` and call `create_agent` to produce an agent instance.
+    Uses LangChain's standard `create_agent` function which works with any provider
+    (OpenAI, Anthropic, Google, etc.) via init_chat_model.
     """
 
     def __init__(self, agent: Agent, tools: Optional[List] = None):
@@ -155,53 +154,48 @@ class CreateAgentExecutor:
         self.tools = tools or []
 
     def execute(self, llm_chat_model, prompt: str, stream: bool = False):
-        """Run the prompt through a LangChain-created agent.
+        """Execute prompt through a LangChain v1 agent.
 
         Args:
-            llm_chat_model: A LangChain chat model (returned by init_chat_model)
-            prompt: Prompt string
-            stream: Streaming support is implementation-dependent; default False
+            llm_chat_model: A LangChain chat model instance
+            prompt: User's question/prompt
+            stream: Streaming support (not currently implemented)
 
         Returns:
-            Dict with keys 'role','content','agent'
+            Dict with keys 'role', 'content', 'agent'
         """
         try:
-            # Build agent using LangChain helper
+            # Create agent using LangChain's create_agent
             agent_obj = create_agent(
-                model=self.agent.model,
+                model=llm_chat_model,
                 tools=self.tools,
                 system_prompt=self.agent.system_message
             )
 
-            # Different LangChain agent implementations expose different run/invoke APIs.
+            # Invoke agent with proper message format
+            out = agent_obj.invoke({
+                "messages": [{"role": "user", "content": prompt}]
+            })
+            
+            # Extract response text
             result_text = ""
-            try:
-                # `invoke` is a common method on new agent APIs
-                if hasattr(agent_obj, 'invoke'):
-                    out = agent_obj.invoke({"input": prompt})
-                    # try to extract a string
-                    if isinstance(out, dict) and 'output' in out:
-                        result_text = str(out['output'])
-                    else:
-                        result_text = str(out)
-                # fall back to run
-                elif hasattr(agent_obj, 'run'):
-                    result_text = str(agent_obj.run(prompt))
-                else:
-                    # last resort: try calling the object
-                    result_text = str(agent_obj(prompt))
-
-            except Exception:
-                # If the agent returns a complex object, stringify gracefully
-                try:
-                    result_text = str(out)
-                except Exception:
-                    result_text = "<unable to extract agent output>"
+            if isinstance(out, dict):
+                if 'output' in out:
+                    result_text = str(out['output'])
+                elif 'messages' in out and out['messages']:
+                    last_message = out['messages'][-1]
+                    result_text = last_message.content if hasattr(last_message, 'content') else str(last_message)
+            elif isinstance(out, str):
+                result_text = out
+            elif hasattr(out, 'content'):
+                result_text = out.content
+            else:
+                result_text = str(out)
 
             return {"role": "assistant", "content": result_text, "agent": self.agent.name}
 
         except Exception as e:
-            return {"role": "assistant", "content": f"create_agent error: {str(e)}", "agent": self.agent.name}
+            return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
 
 class AgentManager:
     """

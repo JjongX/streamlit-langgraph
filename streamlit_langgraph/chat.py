@@ -614,16 +614,14 @@ Current conversation context:
 
 User: {prompt}
 Assistant:"""
-            llm_obj = self.llm
-            agent_provider = agent.provider.lower()
-            agent_type = agent.type
+            # agent_provider = agent.provider.lower()
             file_messages = self.file_handler.get_openai_input_messages()
-            if agent_provider == "openai" and agent_type == "response" and hasattr(llm_obj, 'responses') and hasattr(llm_obj.responses, 'create'):
+            if agent.type == "response":
                 executor = ResponseAPIExecutor(agent)
-                return executor.execute(llm_obj, enhanced_instructions, stream=self.config.stream, file_messages=file_messages)
+                return executor.execute(self.llm, enhanced_instructions, stream=self.config.stream, file_messages=file_messages)
             else:
                 executor = CreateAgentExecutor(agent, tools=[])
-                return executor.execute(llm_obj, enhanced_instructions, stream=False)
+                return executor.execute(self.llm, prompt, stream=False)
         except Exception as e:
             return {
                 "role": "assistant",
