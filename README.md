@@ -1,6 +1,8 @@
 
 # streamlit-langgraph
 
+[![PyPI version](https://badge.fury.io/py/streamlit-langgraph.svg)](https://badge.fury.io/py/streamlit-langgraph)
+
 A Python package that integrates Streamlit’s intuitive web interface with LangGraph’s advanced multi-agent orchestration. Build interactive AI applications featuring multiple specialized agents collaborating in customizable workflows.
 
 If you’re using Streamlit with a single agent, consider [streamlit-openai](https://github.com/sbslee/streamlit-openai/tree/main) instead. This project is inspired by that work, especially its integration with the OpenAI API.
