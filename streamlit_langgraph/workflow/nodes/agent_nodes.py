@@ -106,10 +106,6 @@ DELEGATION FORMAT (when needed):
 • To delegate: End your response with "HANDOFF to [worker_name]"
 • To complete: When you have provided the final output and no further delegation is needed, the workflow will finish automatically.
 
-EXAMPLES:
-✓ "We need research data first. HANDOFF to Information_Gatherer"
-✓ "Based on the research, here's the comprehensive proposal: [content]."
-✓ "The work is complete."
 """
             response = AgentNodeFactory._execute_agent(supervisor, state, supervisor_instructions, [], 0)
 
@@ -134,7 +130,7 @@ EXAMPLES:
                     "timestamp": None
                 }],
                 "agent_outputs": updated_agent_outputs,
-                "metadata": {**state["metadata"], "handoff_command": handoff_command}
+                "metadata": {**state["metadata"], "handoff_command": handoff_command} # Handoff command is used to determine which worker to delegate to
             }
         
         return supervisor_agent_node

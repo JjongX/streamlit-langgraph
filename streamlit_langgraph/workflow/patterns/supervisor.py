@@ -1,4 +1,5 @@
-from typing import List, Dict, Any
+from typing import List
+
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
@@ -23,33 +24,64 @@ class SupervisorPattern:
         Returns:
             StateGraph: Compiled workflow graph
         """
-        if not worker_agents:
-            raise ValueError("At least one worker agent is required")
+        if not supervisor_agent or not worker_agents:
+            raise ValueError("At least one supervisor agent and one worker agent are required")
 
         graph = StateGraph(WorkflowState)
-
-        def supervisor_node_with_mode(state: WorkflowState) -> Dict[str, Any]:
-            supervisor_node_func = AgentNodeFactory.create_supervisor_agent_node(supervisor_agent, worker_agents)
-            supervisor_updates = supervisor_node_func(state)
-            updated_metadata = supervisor_updates.get("metadata", state["metadata"]).copy()
-            updated_metadata["execution_mode"] = execution_mode
-            supervisor_updates["metadata"] = updated_metadata
-            return supervisor_updates
-
-        graph.add_node(supervisor_agent.name, supervisor_node_with_mode)
+        # Initial node and edge for supervisor
+        supervisor_node = AgentNodeFactory.create_supervisor_agent_node(supervisor_agent, worker_agents)
+        graph.add_node(supervisor_agent.name, supervisor_node)
         graph.add_edge(START, supervisor_agent.name)
 
-        if execution_mode == "parallel":
-            return SupervisorPattern._create_parallel_supervisor_workflow(
-                graph, supervisor_agent, worker_agents)
-        else:
+        if execution_mode == "sequential":
             return SupervisorPattern._create_sequential_supervisor_workflow(
                 graph, supervisor_agent, worker_agents)
+        else: # parallel
+            return SupervisorPattern._create_parallel_supervisor_workflow(
+                graph, supervisor_agent, worker_agents)
     
+    @staticmethod
+    def _create_sequential_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
+                                             worker_agents: List[Agent]) -> StateGraph:
+        """Create sequential supervisor workflow."""
+
+        # Nodes
+        for worker in worker_agents:
+            graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
+
+        # Routes
+        def supervisor_sequential_route(state: WorkflowState) -> str:
+            """Parse structured supervisor output to determine routing."""
+            handoff_command = state["metadata"].get("handoff_command", "")
+            worker_names = [worker.name for worker in worker_agents]
+            
+            if handoff_command.startswith("HANDOFF to "):
+                target_agent = handoff_command.replace("HANDOFF to ", "").strip()
+                if target_agent in worker_names:
+                    return target_agent
+                else:
+                    return "__end__"
+            else:
+                return "__end__"
+        def worker_sequential_route(state: WorkflowState) -> str:
+            """Workers always route back to supervisor."""
+            return supervisor_agent.name
+        supervisor_routes = {worker.name: worker.name for worker in worker_agents}
+        supervisor_routes["__end__"] = END
+        worker_routes = {supervisor_agent.name: supervisor_agent.name}
+
+        # Edges
+        graph.add_conditional_edges(supervisor_agent.name, supervisor_sequential_route, supervisor_routes)
+        for worker in worker_agents:
+            graph.add_conditional_edges(worker.name, worker_sequential_route, worker_routes)
+        
+        return graph.compile()
+
     @staticmethod
     def _create_parallel_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
                                            worker_agents: List[Agent]) -> StateGraph:
         """Create parallel supervisor workflow."""
+
         graph.add_node("parallel_dispatcher", UtilityNodeFactory.create_parallel_dispatcher_node(worker_agents))
         
         for worker in worker_agents:
@@ -78,38 +110,3 @@ class SupervisorPattern:
         
         return graph.compile()
     
-    @staticmethod
-    def _create_sequential_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
-                                             worker_agents: List[Agent]) -> StateGraph:
-        """Create sequential supervisor workflow with structured output parsing."""
-        for worker in worker_agents:
-            graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
-        
-        def supervisor_sequential_route(state: WorkflowState) -> str:
-            """Parse structured supervisor output to determine routing."""
-            handoff_command = state["metadata"].get("handoff_command", "")
-            worker_names = [worker.name for worker in worker_agents]
-            
-            if handoff_command.startswith("HANDOFF to "):
-                target_agent = handoff_command.replace("HANDOFF to ", "").strip()
-                if target_agent in worker_names:
-                    return target_agent
-                else:
-                    return "__end__"
-            else:
-                return "__end__"
-        
-        def worker_sequential_route(state: WorkflowState) -> str:
-            """Workers always route back to supervisor."""
-            return supervisor_agent.name
-        
-        supervisor_routes = {worker.name: worker.name for worker in worker_agents}
-        supervisor_routes["__end__"] = END
-        worker_routes = {supervisor_agent.name: supervisor_agent.name}
-
-        graph.add_conditional_edges(supervisor_agent.name, supervisor_sequential_route, supervisor_routes)
-        for worker in worker_agents:
-            graph.add_conditional_edges(worker.name, worker_sequential_route, worker_routes)
-        
-        return graph.compile()
-

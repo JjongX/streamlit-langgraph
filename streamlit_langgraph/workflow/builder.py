@@ -13,10 +13,6 @@ class WorkflowBuilder:
     that delegates to pattern-specific implementations.
     """
     
-    def __init__(self):
-        """Initialize the workflow builder."""
-        pass
-    
     def create_sequential_workflow(self, agents: List[Agent]) -> StateGraph:
         """
         Create a sequential workflow where agents execute one after another.

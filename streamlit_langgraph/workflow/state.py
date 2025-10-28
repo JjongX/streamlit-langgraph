@@ -15,10 +15,7 @@ class WorkflowState(TypedDict):
 
 # Helper functions to work with WorkflowState
 
-def create_initial_state(
-    messages: Optional[List[Dict[str, Any]]] = None,
-    current_agent: Optional[str] = None
-) -> WorkflowState:
+def create_initial_state(messages: Optional[List[Dict[str, Any]]] = None, current_agent: Optional[str] = None) -> WorkflowState:
     """Create an initial WorkflowState with default values."""
     return WorkflowState(
         messages=messages or [],
@@ -73,17 +70,3 @@ def set_delegated_agent(state: WorkflowState, agent_name: str) -> Dict[str, Any]
 def get_delegated_agent(state: WorkflowState) -> Optional[str]:
     """Get the delegated agent from state."""
     return get_metadata(state, "delegated_agent")
-
-def is_workflow_complete(state: WorkflowState) -> bool:
-    """Check if workflow is marked as complete."""
-    metadata = state["metadata"]
-    return (metadata.get("delegated_agent") == "COMPLETE" or
-            metadata.get("task_complete") or
-            metadata.get("workflow_complete"))
-
-def mark_workflow_complete(state: WorkflowState) -> Dict[str, Any]:
-    """Return state update to mark workflow as complete."""
-    updated_metadata = state["metadata"].copy()
-    updated_metadata["workflow_complete"] = True
-    updated_metadata["delegated_agent"] = "COMPLETE"
-    return {"metadata": updated_metadata}
