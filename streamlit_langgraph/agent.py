@@ -78,32 +78,6 @@ class ResponseAPIExecutor:
     def __init__(self, agent: Agent):
         self.agent = agent
 
-    def _create_container_if_needed(self, llm_client):
-        """Create container for code_interpreter if needed and not already created."""
-        current_container_id = getattr(self.agent, 'container_id', None)
-        if self.agent.allow_code_interpreter and not current_container_id:
-            try:
-                container = llm_client.containers.create(name=f"streamlit-{self.agent.name}")
-                self.agent.container_id = container.id
-            except Exception:
-                # Disable code_interpreter if container creation fails
-                self.agent.allow_code_interpreter = False
-    
-    def _check_container_status(self, llm_client):
-        """Check container status and recreate if expired."""
-        container_id = getattr(self.agent, 'container_id', None)
-        if self.agent.allow_code_interpreter and container_id:
-            if not container_id:
-                self._create_container_if_needed(llm_client)
-                return
-            try:
-                result = llm_client.containers.retrieve(container_id=container_id)
-                if result.status == "expired":
-                    container = llm_client.containers.create(name=f"streamlit-{self.agent.name}")
-                    self.agent.container_id = container.id
-            except Exception:
-                self._create_container_if_needed(llm_client)
-
     def execute(self, llm_client, prompt: str, stream: bool = True, file_messages: Optional[List] = None):
         """Execute prompt using the Responses API client.
 
@@ -116,31 +90,20 @@ class ResponseAPIExecutor:
         Returns:
             Dict with keys 'role','content','agent' and optionally 'stream'
         """
-        model = self.agent.model or "gpt-4o"
-        temperature = self.agent.temperature
-
         # Build input messages including file messages
         input_messages = []
         if file_messages:
             input_messages.extend(file_messages)
         input_messages.append({"role": "user", "content": prompt})
 
-        # Handle container creation and management for code_interpreter
-        if self.agent.allow_code_interpreter:
-            self._create_container_if_needed(llm_client)
-            self._check_container_status(llm_client)
-
         # Build tools configuration based on agent capabilities
         tools = []
         # Note: file_search requires vector_store_ids, so we skip it if none are configured
         # This will be handled by the FileHandler's dynamic vector store creation
         if self.agent.allow_code_interpreter:
-            container_id_value = getattr(self.agent, 'container_id', None)            
-            if container_id_value:
-                tools.append({
-                    "type": "code_interpreter",
-                    "container": container_id_value
-                })
+            container = llm_client.containers.create(name=f"streamlit-{self.agent.name}")
+            self.agent.container_id = container.id
+            tools.append({"type": "code_interpreter", "container": self.agent.container_id})
         if self.agent.allow_web_search:
             tools.append({"type": "web_search"})
         if self.agent.allow_image_generation:
@@ -149,24 +112,20 @@ class ResponseAPIExecutor:
         try:
             # Prepare API call parameters
             api_params = {
-                "model": model,
+                "model": self.agent.model,
                 "input": input_messages,
-                "temperature": temperature,
+                "temperature": self.agent.temperature,
                 "stream": stream,
             }
-            
-            # Add tools if any are enabled
             if tools:
                 api_params["tools"] = tools
 
-            if stream:
+            if stream: # Streaming
                 stream_iter = llm_client.responses.create(**api_params)
                 return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
             else:
                 response = llm_client.responses.create(**api_params)
-
                 response_content = ""
-                # Responses API shape can vary; try a few extraction strategies
                 if hasattr(response, 'output') and isinstance(response.output, list):
                     for message in response.output:
                         if hasattr(message, 'content') and isinstance(message.content, list):
