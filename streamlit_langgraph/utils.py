@@ -262,11 +262,16 @@ class CustomTool:
         )
         cls._registry[name] = tool
         return tool
-
+    
     @classmethod
     def tool(cls, name: str, description: str, **kwargs):
         """
         Decorator for registering functions as tools.
+        
+        Example:
+            @CustomTool.tool("calculator", "Performs basic arithmetic")
+            def calculate(expression: str) -> float:
+                return eval(expression)
         """
         def decorator(func: Callable) -> Callable:
             cls.register_tool(name, description, func, **kwargs)
@@ -312,59 +317,3 @@ class CustomTool:
                 parameters["required"].append(param_name)
         
         return parameters
-    
-    def execute(self, **kwargs) -> Any:
-        """Execute the tool function with provided arguments."""
-        try:
-            return self.function(**kwargs)
-        except Exception as e:
-            return f"Error executing tool '{self.name}': {str(e)}"
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert tool to dictionary representation."""
-        return {
-            "type": "function",
-            "name": self.name,
-            "description": self.description,
-            "parameters": self.parameters,
-            "return_direct": self.return_direct
-        }
-
-class ToolRegistry:
-    """
-    Registry for managing custom tools and built-in capabilities.
-    """
-    
-    def __init__(self):
-        self.tools: Dict[str, CustomTool] = {}
-    
-    def register(self, tool: CustomTool) -> None:
-        """Register a custom tool."""
-        self.tools[tool.name] = tool
-    
-    def unregister(self, name: str) -> None:
-        """Unregister a tool by name."""
-        if name in self.tools:
-            del self.tools[name]
-    
-    def get(self, name: str) -> Optional[CustomTool]:
-        """Get a tool by name."""
-        return self.tools.get(name)
-    
-    def list_tools(self) -> List[str]:
-        """List all registered tool names."""
-        return list(self.tools.keys())
-    
-    def execute_tool(self, name: str, **kwargs) -> Any:
-        """Execute a tool by name."""
-        tool = self.get(name)
-        if tool:
-            return tool.execute(**kwargs)
-        else:
-            raise ValueError(f"Tool '{name}' not found")
-    
-    def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Get schemas for all registered tools."""
-        return [tool.to_dict() for tool in self.tools.values()]
-
-

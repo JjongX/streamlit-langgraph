@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from dataclasses import dataclass, field
 
 from langchain.agents import create_agent
@@ -50,8 +50,8 @@ class Agent:
         if "image_generation" in self.tools:
             self.allow_image_generation = True
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert agent configuration to dictionary."""
+    def to_dict(self) -> Dict:
+        """Convert agent configuration to dictionary for serialization."""
         return {
             "name": self.name,
             "role": self.role,
@@ -68,20 +68,9 @@ class Agent:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Agent":
+    def from_dict(cls, data: Dict) -> "Agent":
+        """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
-    
-    def add_tool(self, tool: str) -> None:
-        if tool not in self.tools:
-            self.tools.append(tool)
-    
-    def remove_tool(self, tool: str) -> None:
-        if tool in self.tools:
-            self.tools.remove(tool)
-    
-    def update_instructions(self, instructions: str) -> None:
-        self.instructions = instructions
-        self.system_message = f"You are a {self.role}. {self.instructions}"
 
 class ResponseAPIExecutor:
     """Executor that uses the OpenAI Responses API (or compatible) for generation.
@@ -319,28 +308,3 @@ class AgentManager:
     def list_agents(self) -> List[str]:
         """List all agent names."""
         return list(self.agents.keys())
-    
-    def set_active_agent(self, name: str) -> None:
-        """Set the active agent."""
-        if name in self.agents:
-            self.active_agent = name
-        else:
-            raise ValueError(f"Agent '{name}' not found")
-    
-    def get_active_agent(self) -> Optional[Agent]:
-        """Get the currently active agent."""
-        if self.active_agent:
-            return self.agents[self.active_agent]
-        return None
-    
-    def validate_agents(self) -> List[str]:
-        """Validate all agents and return list of issues."""
-        issues = []
-        for name, agent in self.agents.items():
-            if not agent.name:
-                issues.append(f"Agent {name}: Missing name")
-            if not agent.role:
-                issues.append(f"Agent {name}: Missing role")
-            if not agent.instructions:
-                issues.append(f"Agent {name}: Missing instructions")
-        return issues

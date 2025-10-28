@@ -17,7 +17,6 @@ __all__ = [
     "WorkflowVisualizer",
     "InteractiveWorkflowBuilder",
     "CustomTool",
-    "tool_registry",
     "FileHandler",
     "__version__",
 ]

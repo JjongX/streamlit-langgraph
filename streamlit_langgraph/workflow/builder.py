@@ -60,14 +60,4 @@ class WorkflowBuilder:
         """
         return SupervisorPattern.create_supervisor_workflow(
             supervisor, workers, execution_mode)
-    
-    # Convenience methods for supervisor workflows
-    def create_supervisor_with_sequential_workers(self, supervisor: Agent, workers: List[Agent], 
-                                                max_iterations: int = 5) -> StateGraph:
-        """Create a supervisor workflow with sequential worker execution."""
-        return self.create_supervisor_workflow(supervisor, workers, "sequential", max_iterations)
-    
-    def create_supervisor_with_parallel_workers(self, supervisor: Agent, workers: List[Agent], 
-                                              max_iterations: int = 5) -> StateGraph:
-        """Create a supervisor workflow with parallel worker execution."""
-        return self.create_supervisor_workflow(supervisor, workers, "parallel", max_iterations)
+

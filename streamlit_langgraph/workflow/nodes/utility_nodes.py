@@ -80,24 +80,4 @@ The following team members completed their tasks simultaneously:
             return {"metadata": {**state["metadata"], "parallel_execution_completed": True}}
         
         return result_aggregator_node
-    
-    @staticmethod
-    def create_task_completion_node() -> Callable:
-        """Create a task completion checker node."""
-        def task_completion_node(state: WorkflowState) -> Dict[str, Any]:
-            recent_messages = state["messages"][-10:]
-            
-            task_complete = False
-            for msg in reversed(recent_messages):
-                if msg["role"] == "assistant" and "DELEGATE: COMPLETE" in msg["content"]:
-                    task_complete = True
-                    break
-            
-            if not task_complete:
-                task_complete = True
-            
-            return {"metadata": {**state["metadata"], "task_complete": task_complete}}
-        
-        return task_completion_node
-    
 

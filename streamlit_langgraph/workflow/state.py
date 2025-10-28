@@ -42,7 +42,7 @@ def add_message(state: WorkflowState, role: str, content: str, agent: Optional[s
         "role": role,
         "content": content,
         "agent": agent,
-        "timestamp": None  # Can add timestamp if needed
+        "timestamp": None
     }
     return {"messages": state["messages"] + [new_message]}
 
@@ -78,8 +78,8 @@ def is_workflow_complete(state: WorkflowState) -> bool:
     """Check if workflow is marked as complete."""
     metadata = state["metadata"]
     return (metadata.get("delegated_agent") == "COMPLETE" or
-            metadata.get("task_complete") == True or
-            metadata.get("workflow_complete") == True)
+            metadata.get("task_complete") or
+            metadata.get("workflow_complete"))
 
 def mark_workflow_complete(state: WorkflowState) -> Dict[str, Any]:
     """Return state update to mark workflow as complete."""
@@ -87,24 +87,3 @@ def mark_workflow_complete(state: WorkflowState) -> Dict[str, Any]:
     updated_metadata["workflow_complete"] = True
     updated_metadata["delegated_agent"] = "COMPLETE"
     return {"metadata": updated_metadata}
-
-def get_workflow_iteration_count(state: WorkflowState) -> int:
-    """Get current workflow iteration count."""
-    return get_metadata(state, "iteration_count", 0)
-
-def increment_iteration_count(state: WorkflowState) -> Dict[str, Any]:
-    """Return state update to increment iteration count."""
-    count = get_workflow_iteration_count(state) + 1
-    return set_metadata(state, "iteration_count", count)
-
-def set_max_iterations(state: WorkflowState, max_iter: int) -> Dict[str, Any]:
-    """Return state update to set maximum iterations."""
-    return set_metadata(state, "max_iterations", max_iter)
-
-def get_max_iterations(state: WorkflowState) -> int:
-    """Get maximum allowed iterations."""
-    return get_metadata(state, "max_iterations", 5)
-
-def is_max_iterations_reached(state: WorkflowState) -> bool:
-    """Check if maximum iterations have been reached."""
-    return get_workflow_iteration_count(state) >= get_max_iterations(state)

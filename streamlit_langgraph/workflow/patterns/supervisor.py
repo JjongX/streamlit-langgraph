@@ -112,13 +112,4 @@ class SupervisorPattern:
             graph.add_conditional_edges(worker.name, worker_sequential_route, worker_routes)
         
         return graph.compile()
-    
-    @staticmethod
-    def create_supervisor_with_sequential_execution(supervisor_agent: Agent, worker_agents: List[Agent]) -> StateGraph:
-        """Create a supervisor workflow with sequential execution of workers."""
-        return SupervisorPattern.create_supervisor_workflow(supervisor_agent, worker_agents, "sequential")
-    
-    @staticmethod
-    def create_supervisor_with_parallel_execution(supervisor_agent: Agent, worker_agents: List[Agent]) -> StateGraph:
-        """Create a supervisor workflow with parallel execution of workers."""
-        return SupervisorPattern.create_supervisor_workflow(supervisor_agent, worker_agents, "parallel")
+

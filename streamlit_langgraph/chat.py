@@ -69,7 +69,6 @@ class LangGraphChat:
         self._init_session_state()
         # Initialize sections for streaming
         self._sections = []
-        self._current_section = None
         self._download_button_key = 0
     
     class Block:
@@ -289,7 +288,6 @@ class LangGraphChat:
             with st.chat_message("assistant", avatar=self.config.assistant_avatar):
                 st.markdown(self.config.welcome_message)
 
-        last_agent_idx = None
         for i, message in enumerate(st.session_state.messages):
             if message.get("role") == "assistant" and (message.get("agent") == "END" or message.get("agent") is None):
                 continue
@@ -299,8 +297,6 @@ class LangGraphChat:
                 # Display agent info for assistant messages
                 if message["role"] == "assistant" and "agent" in message:
                     st.caption(f"Agent: {message['agent']}")
-            if message.get("role") == "assistant" and message.get("agent") not in [None, "END"]:
-                last_agent_idx = i
 
         # Chat input with file upload support
         if prompt := st.chat_input(
@@ -652,60 +648,3 @@ Assistant:"""
         """Set or update the workflow."""
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor() if workflow else None
-    
-    # Display methods for workflow results
-    def display_agent_conversation(self, final_state):
-        """Display the complete agent conversation in a structured format."""
-        st.subheader("🔄 Agent Conversation Flow")
-        
-        messages = final_state["messages"]
-        for i, message in enumerate(messages):
-            role = message.get("role", "unknown")
-            content = message.get("content", "")
-            agent = message.get("agent", "System")
-            
-            if role == "user":
-                with st.chat_message("user"):
-                    st.write(f"**User:** {content}")
-            
-            elif role == "assistant":
-                with st.chat_message("assistant"):
-                    st.write(f"**{agent}:** {content}")
-            
-            elif role == "system":
-                with st.expander(f"System Message {i+1}", expanded=False):
-                    st.write(content)
-    
-    def display_agent_outputs(self, final_state):
-        """Display individual agent outputs in an organized manner."""
-        agent_outputs = final_state.get("agent_outputs", {})
-        filtered_outputs = {k: v for k, v in agent_outputs.items() if k not in ["END", "__end__"]}
-
-        if not filtered_outputs:
-            st.info("No individual agent outputs to display.")
-            return
-
-        st.subheader("🤖 Individual Agent Contributions")
-
-        if len(filtered_outputs) > 1:
-            agent_names = list(filtered_outputs.keys())
-            tabs = st.tabs(agent_names)
-
-            for i, agent_name in enumerate(agent_names):
-                with tabs[i]:
-                    output = filtered_outputs[agent_name]
-                    st.write(output)
-        else:
-            for agent_name, output in filtered_outputs.items():
-                st.write(f"**{agent_name}:**")
-                st.write(output)
-    
-    def display_workflow_metadata(self, final_state):
-        """Display workflow execution metadata and statistics."""
-        metadata = final_state.get("metadata", {})
-        
-        if not metadata:
-            return
-        
-        with st.expander("⚙️ Workflow Execution Details", expanded=False):
-            st.json(metadata)
