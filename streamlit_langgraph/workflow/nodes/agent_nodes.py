@@ -3,8 +3,9 @@ import openai
 import os
 import streamlit as st
 
-from ...agent import Agent
+from ...agent import Agent, ResponseAPIExecutor, CreateAgentExecutor
 from ..state import WorkflowState
+from langchain.chat_models import init_chat_model
 
 class AgentNodeFactory:
     """Simplified factory for creating core agent nodes."""
@@ -49,7 +50,7 @@ class AgentNodeFactory:
     
     @staticmethod
     def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent]) -> Callable:
-        """Create a supervisor agent node that delegates tasks to workers."""
+        """Create a supervisor agent node that delegates tasks to workers using structured routing."""
         def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
             worker_names = [w.name for w in workers]
             workers_used = set()
@@ -83,11 +84,11 @@ class AgentNodeFactory:
                 "\n\nYOUR DECISION:"
                 "\n- Analyze what work still needs to be done"
                 "\n- Determine which specialist can best handle it"
-                "\n- Choose the appropriate action"
+                "\n- Use the 'delegate_task' function to assign work to a specialist"
                 "\n\nYOUR OPTIONS:"
-                "\n1. **Delegate to Worker**: End your response with \"HANDOFF to [worker_name]\" to assign tasks"
+                "\n1. **Delegate to Worker**: Use the delegate_task function to assign tasks to a specialist"
                 f"\n   - Available workers: {', '.join(unused_workers) if unused_workers else 'All workers used'}"
-                "\n2. **Complete Workflow**: When all required work is complete, provide the final output. The workflow will automatically finish when the supervisor stops delegating."
+                "\n2. **Complete Workflow**: When all required work is complete, provide the final output without calling delegate_task."
                 "\n\n💡 Think carefully about which worker to delegate to based on their specializations."
             )
 
@@ -102,21 +103,13 @@ Worker Outputs So Far:
 
 {action_guidance}
 
-DELEGATION FORMAT (when needed):
-• To delegate: End your response with "HANDOFF to [worker_name]"
-• To complete: When you have provided the final output and no further delegation is needed, the workflow will finish automatically.
-
+DELEGATION:
+• To delegate: Call the 'delegate_task' function with the worker name and task details
+• To complete: Provide your final response without calling any function
 """
-            response = AgentNodeFactory._execute_agent(supervisor, state, supervisor_instructions, [], 0)
-
-            handoff_command = ""
-            if "HANDOFF to " in response:
-                handoff_start = response.rfind("HANDOFF to ")
-                handoff_command = response[handoff_start:].strip()
-                handoff_command = handoff_command.split('\n')[0].strip().rstrip('.')
-                target_worker = handoff_command.replace("HANDOFF to ", "").strip()
-                if target_worker in workers_used:
-                    handoff_command = ""
+            response, routing_decision = AgentNodeFactory._execute_supervisor_with_routing(
+                supervisor, state, supervisor_instructions, workers, workers_used
+            )
             
             updated_agent_outputs = state["agent_outputs"].copy()
             updated_agent_outputs[supervisor.name] = response
@@ -130,7 +123,7 @@ DELEGATION FORMAT (when needed):
                     "timestamp": None
                 }],
                 "agent_outputs": updated_agent_outputs,
-                "metadata": {**state["metadata"], "handoff_command": handoff_command} # Handoff command is used to determine which worker to delegate to
+                "metadata": {**state["metadata"], "routing_decision": routing_decision}
             }
         
         return supervisor_agent_node
@@ -178,47 +171,126 @@ Please complete the task assigned by your supervisor."""
                       context_messages: List[str], agent_responses_count: int) -> str:
         """Execute an agent with the given input and return the response."""
         
-        try:
-            # Get API key
-            api_key = os.getenv('OPENAI_API_KEY')
-            if not api_key:
-                error_msg = "OpenAI API key not found in environment variables"
-                return f"❌ {error_msg}"
-            
-            client = openai.OpenAI(api_key=api_key)
-            
-            enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
+        enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
 
 {f"Recent conversation context: {chr(10).join(context_messages[-3:])}" if context_messages else ""}
+
+Current task: {input_message}"""
+        
+        # Use appropriate executor based on agent type and provider
+        if agent.provider.lower() == "openai" and agent.type == "response":
+            client = openai.OpenAI()
+            executor = ResponseAPIExecutor(agent)
+            result = executor.execute(client, enhanced_instructions, stream=False)
+        else:
+            # Use LangChain agent (supports multiple providers)
+            llm = init_chat_model(model=agent.model)
+            executor = CreateAgentExecutor(agent, tools=[])
+            result = executor.execute(llm, input_message, stream=False)
+        
+        return result.get("content", "")
+                
+    
+    @staticmethod
+    def _execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
+                                        input_message: str, workers: List[Agent],
+                                        workers_used: set) -> tuple[str, Dict[str, Any]]:
+        """Execute supervisor agent with structured routing via function calling.
+        
+        Note: Function calling routing only supported for OpenAI. Other providers
+        will fallback to text-based routing.
+        """
+        
+        try:
+            # Only OpenAI supports function calling for routing currently
+            if agent.provider.lower() != "openai":
+                content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
+                return content, {"action": "finish"}
+            
+            client = openai.OpenAI()
+            
+            # Define delegation function for structured routing
+            available_workers = [w for w in workers if w.name not in workers_used]
+            
+            tools = [{
+                "type": "function",
+                "function": {
+                    "name": "delegate_task",
+                    "description": "Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "worker_name": {
+                                "type": "string",
+                                "enum": [w.name for w in available_workers] if available_workers else ["none"],
+                                "description": f"The name of the worker to delegate to. Available: {', '.join([f'{w.name} ({w.role})' for w in available_workers])}"
+                            },
+                            "task_description": {
+                                "type": "string",
+                                "description": "Clear description of what the worker should do"
+                            },
+                            "priority": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"],
+                                "description": "Priority level of this task"
+                            }
+                        },
+                        "required": ["worker_name", "task_description"]
+                    }
+                }
+            }] if available_workers else []
+            
+            enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
 
 Current task: {input_message}"""
             
             messages = [{"role": "user", "content": enhanced_instructions}]
             
             with st.spinner(f"🤖 {agent.name} is working..."):
-                response = client.responses.create(
-                    model=agent.model,
-                    input=messages,
-                    temperature=agent.temperature,
-                    stream=False
-                )
+                if tools:
+                    response = client.chat.completions.create(
+                        model=agent.model,
+                        messages=messages,
+                        temperature=agent.temperature,
+                        tools=tools,
+                        tool_choice="auto"
+                    )
+                else:
+                    # No workers available, just get response
+                    response = client.chat.completions.create(
+                        model=agent.model,
+                        messages=messages,
+                        temperature=agent.temperature
+                    )
             
-            content = ""
-            if hasattr(response, 'output') and isinstance(response.output, list):
-                for message in response.output:
-                    if hasattr(message, 'content') and isinstance(message.content, list):
-                        for content_item in message.content:
-                            if hasattr(content_item, 'text'):
-                                content += content_item.text
-            else:
-                if hasattr(response, 'content'):
-                    content = str(response.content)
-                elif hasattr(response, 'message') and hasattr(response.message, 'content'):
-                    content = str(response.message.content)
+            message = response.choices[0].message
+            content = message.content or ""
             
-            return content
+            # Check for function call (structured routing decision)
+            routing_decision = {"action": "finish"}
+            
+            if message.tool_calls:
+                tool_call = message.tool_calls[0]
+                if tool_call.function.name == "delegate_task":
+                    import json
+                    args = json.loads(tool_call.function.arguments)
+                    
+                    routing_decision = {
+                        "action": "delegate",
+                        "target_worker": args.get("worker_name"),
+                        "task_description": args.get("task_description"),
+                        "priority": args.get("priority", "medium")
+                    }
+                    
+                    # Append delegation info to content for user visibility
+                    if content:
+                        content += f"\n\n**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
+                    else:
+                        content = f"**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
+            
+            return content, routing_decision
                 
         except Exception as e:
-            error_message = f"Error executing agent {agent.name}: {str(e)}"
+            error_message = f"Error executing supervisor {agent.name}: {str(e)}"
             st.error(error_message)
-            return error_message
+            return error_message, {"action": "finish"}

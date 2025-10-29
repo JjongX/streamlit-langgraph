@@ -51,18 +51,22 @@ class SupervisorPattern:
 
         # Routes
         def supervisor_sequential_route(state: WorkflowState) -> str:
-            """Parse structured supervisor output to determine routing."""
-            handoff_command = state["metadata"].get("handoff_command", "")
+            """Route based on structured routing decision from supervisor."""
+            routing_decision = state["metadata"].get("routing_decision", {})
             worker_names = [worker.name for worker in worker_agents]
             
-            if handoff_command.startswith("HANDOFF to "):
-                target_agent = handoff_command.replace("HANDOFF to ", "").strip()
-                if target_agent in worker_names:
-                    return target_agent
+            action = routing_decision.get("action", "finish")
+            
+            if action == "delegate":
+                target_worker = routing_decision.get("target_worker", "")
+                if target_worker in worker_names:
+                    return target_worker
                 else:
                     return "__end__"
             else:
+                # action == "finish" or any other value
                 return "__end__"
+                
         def worker_sequential_route(state: WorkflowState) -> str:
             """Workers always route back to supervisor."""
             return supervisor_agent.name
