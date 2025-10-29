@@ -219,10 +219,3 @@ class AgentManager:
             if self.active_agent == name:
                 self.active_agent = next(iter(self.agents.keys())) if self.agents else None
     
-    def get_agent(self, name: str) -> Optional[Agent]:
-        """Get an agent by name."""
-        return self.agents.get(name)
-    
-    def list_agents(self) -> List[str]:
-        """List all agent names."""
-        return list(self.agents.keys())

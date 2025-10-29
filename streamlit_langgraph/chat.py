@@ -1,5 +1,6 @@
 import base64
 import os
+import traceback
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 
@@ -169,11 +170,6 @@ class LangGraphChat:
         section = self.Section(self, role, blocks=blocks)
         self._sections.append(section)
         return section
-
-    @property
-    def last_section(self) -> Optional["Section"]:
-        """Returns the last section of the chat."""
-        return self._sections[-1] if self._sections else None
     
     def _initialize_llm(self):
         """Initialize an LLM client based on the first agent's provider/model/type."""
@@ -228,25 +224,24 @@ class LangGraphChat:
     def _render_sidebar(self):
         """Render the sidebar with controls and information."""
         with st.sidebar:
-            st.title("🤖 Agent Configuration")
-            
+            # Agent information
+            st.header("Agent Configuration")
             agents = list(self.agent_manager.agents.values())
             if agents:
-                st.subheader("Active Agents")
                 for agent in agents:
-                    with st.expander(f"🤖 {agent.name}", expanded=False):
+                    with st.expander(f"{agent.name}", expanded=False):
                         st.write(f"**Role:** {agent.role}")
                         st.write(f"**Instructions:** {agent.instructions[:100]}...")
-                        
                         # Display capabilities
                         capabilities = []
+                        if hasattr(agent, 'allow_file_search') and agent.allow_file_search:
+                            capabilities.append("📁 File Search")
                         if hasattr(agent, 'allow_web_search') and agent.allow_web_search:
                             capabilities.append("🌐 Web Search")
                         if hasattr(agent, 'allow_code_interpreter') and agent.allow_code_interpreter:
                             capabilities.append("💻 Code Interpreter")
                         if hasattr(agent, 'tools') and agent.tools:
                             capabilities.append(f"🛠️ {len(agent.tools)} Custom Tools")
-                        
                         if capabilities:
                             st.write("**Capabilities:**")
                             for cap in capabilities:
@@ -254,7 +249,6 @@ class LangGraphChat:
     
             # Add chat-specific controls
             st.header("Controls")
-            
             if st.button("Reset All", type="secondary"):
                 st.session_state.clear()
                 st.rerun()
@@ -266,6 +260,7 @@ class LangGraphChat:
             with st.chat_message("assistant", avatar=self.config.assistant_avatar):
                 st.markdown(self.config.welcome_message)
 
+        # Display chat messages
         for i, message in enumerate(st.session_state.messages):
             if message.get("role") == "assistant" and (message.get("agent") == "END" or message.get("agent") is None):
                 continue
@@ -326,110 +321,68 @@ class LangGraphChat:
         user_message = {"role": "user", "content": prompt, "agent": None, "timestamp": None}
         st.session_state.workflow_state["messages"].append(user_message)
         
-        # Generate response
         with st.spinner("Thinking..."):
             response = self._generate_response(prompt)
 
         # Display response based on type
         if response.get("agent") == "workflow-completed":
-            # Workflow execution completed - responses were already displayed sequentially
-            pass  # No additional display needed
+            pass  # Workflow execution completed - No additional display needed
+        # Streaming single agent response using Section and Block
         elif response and "stream" in response:
-            # Streaming single agent response using Section
             section = self.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
 
             full_response = ""
-            try:
-                for event in response["stream"]:
-                    # Handle OpenAI Responses API events properly
-                    if hasattr(event, 'type'):
-                        # Handle text output delta events
-                        if event.type == "response.output_text.delta":
-                            content_delta = event.delta
-                            full_response += content_delta
-                            section.update_and_stream("text", content_delta)
-                        # Handle code interpreter code output events
-                        elif event.type == "response.code_interpreter_call_code.delta":
-                            code_delta = event.delta
-                            section.update_and_stream("code", code_delta)
-                        # Handle image generation or plot output events
-                        elif event.type == "response.image_generation_call.partial_image":
-                            image_bytes = base64.b64decode(event.partial_image_b64)
-                            section.update_and_stream("image", image_bytes, filename=f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}", file_id=getattr(event, 'item_id', None))
-                        # Handle file download or container file citation events
-                        elif event.type == "response.output_text.annotation.added":
-                            annotation = event.annotation
-                            if annotation["type"] == "container_file_citation":
-                                file_id = annotation["file_id"]
-                                filename = annotation["filename"]
-                                file_bytes = None
-                                if hasattr(self, '_client') and hasattr(self, '_container_id') and self._client and self._container_id:
-                                    file_content = self._client.containers.files.content.retrieve(
-                                        file_id=file_id,
-                                        container_id=self._container_id
-                                    )
-                                    file_bytes = file_content.read()
-                                if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                                    # Show both image and download button for image files
-                                    section.update_and_stream("image", file_bytes, filename=filename, file_id=file_id)
-                                    section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
-                                else:
-                                    section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
-                        # Handle other event types as needed
-                        elif event.type == "response.completed":
-                            pass  # Response completed
-                    # Fallback: Handle ResponseTextDeltaEvent objects directly
-                    elif hasattr(event, 'delta') and event.delta:
-                        content_delta = str(event.delta)
+            for event in response["stream"]:
+                # Handle OpenAI Responses API events properly
+                if hasattr(event, 'type'):
+                    # Handle text output delta events
+                    if event.type == "response.output_text.delta":
+                        content_delta = event.delta
                         full_response += content_delta
                         section.update_and_stream("text", content_delta)
-                    # Handle ResponseTextDoneEvent - text contains the complete text
-                    elif hasattr(event, 'text') and event.text:
-                        content_delta = str(event.text)
-                        full_response += content_delta
-                        section.update_and_stream("text", content_delta)
-                    # Legacy format for chat completions - delta.content structure
-                    elif hasattr(event, 'delta') and hasattr(event.delta, 'content'):
-                        if event.delta.content:
-                            content_delta = event.delta.content
-                            full_response += content_delta
-                            section.update_and_stream("text", content_delta)
-                    # Fallback for backwards compatibility with chat completions
-                    elif hasattr(event, 'choices') and len(event.choices) > 0:
-                        if hasattr(event.choices[0], 'delta') and hasattr(event.choices[0].delta, 'content'):
-                            if event.choices[0].delta.content:
-                                content_delta = event.choices[0].delta.content
-                                full_response += content_delta
-                                section.update_and_stream("text", content_delta)
-
-                response["content"] = full_response  # Update response for session state
-
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                section.update_and_stream("text", f"Streaming error: {str(e)}")
-                response["content"] = f"Streaming error: {str(e)}"
-        elif response and "content" in response and response["content"]:
-            # Single agent response or non-workflow response using Section
+                    # Handle code interpreter code output events
+                    elif event.type == "response.code_interpreter_call_code.delta":
+                        code_delta = event.delta
+                        section.update_and_stream("code", code_delta)
+                    # Handle image generation or plot output events
+                    elif event.type == "response.image_generation_call.partial_image":
+                        image_bytes = base64.b64decode(event.partial_image_b64)
+                        section.update_and_stream("image", image_bytes, filename=f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}", file_id=getattr(event, 'item_id', None))
+                    # Handle file download or container file citation events
+                    elif event.type == "response.output_text.annotation.added":
+                        annotation = event.annotation
+                        if annotation["type"] == "container_file_citation":
+                            file_id = annotation["file_id"]
+                            filename = annotation["filename"]
+                            file_bytes = None
+                            if hasattr(self, '_client') and hasattr(self, '_container_id') and self._client and self._container_id:
+                                file_content = self._client.containers.files.content.retrieve(
+                                    file_id=file_id,
+                                    container_id=self._container_id
+                                )
+                                file_bytes = file_content.read()
+                            if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                                # Show both image and download button for image files
+                                section.update_and_stream("image", file_bytes, filename=filename, file_id=file_id)
+                                section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
+                            else:
+                                section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
+                    # Handle other event types as needed
+                    elif event.type == "response.completed":
+                        pass  # Response completed
+            response["content"] = full_response  # Update response for session state
+        # Single agent response or non-workflow response using Section
+        else:
             section = self.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             section.update_and_stream("text", response["content"])
-        else:
-            # Error case
-            with st.chat_message("assistant", avatar=self.config.assistant_avatar):
-                st.error("No response content was generated.")
 
-        # Add assistant response to chat only if it has content and isn't a workflow completion indicator
+        # Save single agent's response to chat history for display
+        # Context building is currently not fully implemented
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
-            # Clean response before adding to session state (remove stream object)
-            clean_response = {
-                "role": response["role"],
-                "content": response["content"],
-                "agent": response["agent"]
-            }
-            st.session_state.messages.append(clean_response)
+            st.session_state.messages.append(response)
     
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
         """Generate response using the configured workflow or dynamically selected agents."""
@@ -442,7 +395,6 @@ class LangGraphChat:
                 agent = next(iter(self.agent_manager.agents.values()))
                 return self._execute_agent(prompt, agent)
         except Exception as e:
-            import traceback
             traceback.print_exc()
             return {
                 "role": "assistant",
@@ -453,9 +405,7 @@ class LangGraphChat:
     def _execute_workflow(self, prompt: str) -> Dict[str, Any]:
         """Execute the LangGraph workflow with sequential agent display."""
         
-        # Reset displayed count for this new workflow execution
-        st.session_state.workflow_displayed_count = 0
-        
+        st.session_state.workflow_displayed_count = 0 # Track to what it is alredy shown
         # Execute workflow with streaming display callback
         def display_agent_response(state):
             """Callback to display agent responses as they complete."""
@@ -470,22 +420,18 @@ class LangGraphChat:
                 if len(assistant_messages) > st.session_state.workflow_displayed_count:
                     # Get the new messages that haven't been displayed yet
                     new_messages = assistant_messages[st.session_state.workflow_displayed_count:]
-                    
                     for new_msg in new_messages:
                         agent_name = new_msg.get("agent", "Assistant")
-                        
                         # Display the agent response sequentially using Section
                         section = self.add_section("assistant")
                         section._agent_info = {"agent": agent_name}
                         section.update_and_stream("text", new_msg['content'])
-                        
                         # Add to session state
                         st.session_state.messages.append({
                             "role": "assistant",
                             "content": new_msg['content'],
                             "agent": agent_name
                         })
-                        
                         # Update the displayed count
                         st.session_state.workflow_displayed_count += 1
         
@@ -502,34 +448,26 @@ class LangGraphChat:
                 "content": f"❌ **Error executing workflow: {str(e)}**",
                 "agent": "workflow"
             }
-        
         st.session_state.workflow_state = result_state
         
-        agent_messages = [
-            msg for msg in result_state["messages"]
-            if (
-                msg["role"] == "assistant"
-                and msg.get("agent")
-                and msg.get("agent") not in ["workflow", "END", "__end__"]
-            )
-        ]
+        # # Check if workflow produced any agent responses
+        # has_agent_responses = any(
+        #     msg["role"] == "assistant"
+        #     and msg.get("agent")
+        #     and msg.get("agent") not in ["workflow", "END", "__end__"]
+        #     for msg in result_state["messages"]
+        # )
+        # if not has_agent_responses:
+        #     return {
+        #         "role": "assistant",
+        #         "content": "❌ **No agent responses generated from workflow**",
+        #         "agent": "workflow"
+        #     }
         
-        if not agent_messages:
-            return {
-                "role": "assistant",
-                "content": "❌ **No agent responses generated from workflow**",
-                "agent": "workflow"
-            }
-        
-        last_agent = result_state["messages"][-1].get("agent") if result_state["messages"] else None
-        if last_agent in ["END", "__end__"]:
-            completion_message = "✅ **Workflow completed successfully**"
-        else:
-            completion_message = ""
-        
+        # Return a single to indicate workflow completion
         return {
             "role": "assistant",
-            "content": completion_message,
+            "content": "",
             "agent": "workflow-completed"
         }
 
@@ -586,7 +524,6 @@ Current conversation context:
 
 User: {prompt}
 Assistant:"""
-        # agent_provider = agent.provider.lower()
         file_messages = self.file_handler.get_openai_input_messages()
         if agent.type == "response":
             executor = ResponseAPIExecutor(agent)
