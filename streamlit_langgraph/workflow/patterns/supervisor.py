@@ -3,8 +3,8 @@ from typing import List
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
-from ..state import WorkflowState
 from ..nodes import AgentNodeFactory, UtilityNodeFactory
+from ..state import WorkflowState
 
 class SupervisorPattern:
     """Supervisor workflow pattern implementations."""

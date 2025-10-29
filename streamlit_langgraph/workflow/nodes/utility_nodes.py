@@ -1,4 +1,5 @@
-from typing import Callable, List, Dict, Any
+from typing import Any, Callable, Dict, List
+
 from ...agent import Agent
 from ..state import WorkflowState, get_metadata
 
