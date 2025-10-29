@@ -3,7 +3,7 @@ from .builder import WorkflowBuilder
 from .executor import WorkflowExecutor, SequentialExecution, ParallelExecution
 from .visualization import WorkflowVisualizer, InteractiveWorkflowBuilder
 from .nodes import AgentNodeFactory, UtilityNodeFactory
-from .patterns import SupervisorPattern
+from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 
 __all__ = [
     # Core workflow components
@@ -25,7 +25,9 @@ __all__ = [
     'ParallelExecution',
     
     # Orchestration patterns
-    'SupervisorPattern'
+    'SupervisorPattern',
+    'HierarchicalPattern',
+    'SupervisorTeam'
 ]
 
 # Version information
