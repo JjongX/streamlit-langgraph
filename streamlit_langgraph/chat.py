@@ -1,10 +1,11 @@
-import streamlit as st
-import os
-import openai
-from langchain.chat_models import init_chat_model
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
 import base64
+import os
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
+
+import openai
+import streamlit as st
+from langchain.chat_models import init_chat_model
 
 from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor
 from .workflow import WorkflowExecutor, create_initial_state
@@ -176,44 +177,22 @@ class LangGraphChat:
     
     def _initialize_llm(self):
         """Initialize an LLM client based on the first agent's provider/model/type."""
-        if not self.agent_manager.agents:
-            st.error("No agents defined. Please define at least one agent with provider, model, and type.")
-            st.stop()
+
+        # Currently only support the provider, model, agent_type for the first agent for entire chat
         first_agent = next(iter(self.agent_manager.agents.values()))
         provider = first_agent.provider.lower()
         model_name = first_agent.model
         agent_type = first_agent.type
-        if not provider or not model_name or not agent_type:
-            st.error("Each agent must specify provider, model, and type ('response' or 'agent').")
-            st.stop()
+
         if provider == "openai" and agent_type == "response":
-            api_key = None
-            if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
-                api_key = st.secrets["OPENAI_API_KEY"]
-            else:
-                api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                st.error("OpenAI API key not found. Please add OPENAI_API_KEY to .streamlit/secrets.toml or set the environment variable.")
-                st.info("Create .streamlit/secrets.toml and add: OPENAI_API_KEY = \"your-api-key\"")
-                st.stop()
-            try:
-                client = openai.OpenAI(api_key=api_key)
-                client._provider = "openai"
-                return client
-            except Exception:
-                raise
-        # For agent_type == 'agent' or non-OpenAI providers, use LangChain
-        try:
-            if model_name:
-                chat_model = init_chat_model(model=model_name)
-            else:
-                chat_model = init_chat_model()
+            client = openai.OpenAI()
+            client._provider = "openai"
+            return client
+        else:
+            chat_model = init_chat_model(model=model_name)
             setattr(chat_model, "_provider", provider)
             return chat_model
-        except Exception as e:
-            st.error(f"Failed to initialize LLM for provider '{provider}': {str(e)}")
-            st.stop()
-    
+
     def _init_session_state(self):
         """Initialize Streamlit session state."""
         if "messages" not in st.session_state:
@@ -555,7 +534,10 @@ class LangGraphChat:
         }
 
     def _build_context(self) -> str:
-        """Build context string from conversation history."""
+        """
+        This is a helper function for a single agent response.
+        Build context string from conversation history.
+        """
         context_parts = []
         
         # Recent messages
@@ -573,32 +555,28 @@ class LangGraphChat:
         return "\n".join(context_parts) if context_parts else "No previous context"
     
     def _execute_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
-        """Execute prompt with a specific agent, using explicit type for routing."""
-        if not self.llm:
-            return {
-                "role": "assistant",
-                "content": f"As a {agent.role}, I would help you, but I need an OpenAI API key to function properly. Please add OPENAI_API_KEY to .streamlit/secrets.toml",
-                "agent": agent.name
-            }
-        try:
-            context = self._build_context()
-            tool_descriptions = []
-            if agent.allow_web_search:
-                tool_descriptions.append("🌐 **Web Search**: Search the internet for current information")
-            if agent.allow_code_interpreter:
-                tool_descriptions.append("🐍 **Code Interpreter**: Execute Python code and create visualizations")
-            if agent.allow_file_search:
-                tool_descriptions.append("📁 **File Search**: Search through uploaded documents")
-            for tool in agent.tools:
-                if tool in CustomTool._registry:
-                    tool_obj = CustomTool._registry[tool]
-                    tool_descriptions.append(f"🔧 **{tool_obj.name}**: {tool_obj.description}")
-            file_context_note = ""
-            if st.session_state.uploaded_files:
-                file_context_note = f"""
+        """
+        This is a helper function for a single agent response.
+        Execute prompt with a specific agent, using explicit type for routing.
+        """
+        context = self._build_context()
+        tool_descriptions = []
+        if agent.allow_web_search:
+            tool_descriptions.append("🌐 **Web Search**: Search the internet for current information")
+        if agent.allow_code_interpreter:
+            tool_descriptions.append("🐍 **Code Interpreter**: Execute Python code and create visualizations")
+        if agent.allow_file_search:
+            tool_descriptions.append("📁 **File Search**: Search through uploaded documents")
+        for tool in agent.tools:
+            if tool in CustomTool._registry:
+                tool_obj = CustomTool._registry[tool]
+                tool_descriptions.append(f"🔧 **{tool_obj.name}**: {tool_obj.description}")
+        file_context_note = ""
+        if st.session_state.uploaded_files:
+            file_context_note = f"""
 
 IMPORTANT: The user has uploaded {len(st.session_state.uploaded_files)} file(s). The file contents are included in the conversation context below. You can read, analyze, and discuss these files directly. When referring to file contents, be specific and helpful."""
-            enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
+        enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
 
 Available tools:
 {chr(10).join(tool_descriptions) if tool_descriptions else "No special tools available"}{file_context_note}
@@ -608,18 +586,13 @@ Current conversation context:
 
 User: {prompt}
 Assistant:"""
-            # agent_provider = agent.provider.lower()
-            file_messages = self.file_handler.get_openai_input_messages()
-            if agent.type == "response":
-                executor = ResponseAPIExecutor(agent)
-                return executor.execute(self.llm, enhanced_instructions, stream=self.config.stream, file_messages=file_messages)
-            else:
-                executor = CreateAgentExecutor(agent, tools=[])
-                return executor.execute(self.llm, prompt, stream=False)
-        except Exception as e:
-            return {
-                "role": "assistant",
-                "content": f"I encountered an error while processing your request: {str(e)}",
-                "agent": agent.name
-            }
+        # agent_provider = agent.provider.lower()
+        file_messages = self.file_handler.get_openai_input_messages()
+        if agent.type == "response":
+            executor = ResponseAPIExecutor(agent)
+            return executor.execute(self.llm, enhanced_instructions, stream=self.config.stream, file_messages=file_messages)
+        else:
+            executor = CreateAgentExecutor(agent, tools=[])
+            return executor.execute(self.llm, prompt, stream=False)
+
     
