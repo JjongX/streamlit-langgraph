@@ -1,5 +1,5 @@
 from .builder import WorkflowBuilder  
-from .executor import WorkflowExecutor, SequentialExecution, ParallelExecution
+from .executor import WorkflowExecutor
 from .state import WorkflowState, create_initial_state
 from .visualization import WorkflowVisualizer, InteractiveWorkflowBuilder
 from .nodes import AgentNodeFactory
@@ -11,9 +11,6 @@ __all__ = [
     'WorkflowExecutor',
     'WorkflowState',
     'create_initial_state',
-    # Execution modes
-    'SequentialExecution',
-    'ParallelExecution',
     # Node factories
     'AgentNodeFactory',
     # Orchestration patterns

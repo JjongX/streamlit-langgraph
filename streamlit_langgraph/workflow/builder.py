@@ -3,46 +3,18 @@ from typing import List
 from langgraph.graph import StateGraph
 
 from ..agent import Agent
-from .executor import SequentialExecution, ParallelExecution
 from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 
 class WorkflowBuilder:
     """
-    Simplified workflow builder that delegates to specialized pattern classes.
+    Workflow builder that delegates to specialized pattern classes.
     
-    This replaces the monolithic WorkflowBuilder with a cleaner interface
-    that delegates to pattern-specific implementations.
+    Provides a clean interface for creating supervised and hierarchical workflows.
     """
     
-    def create_sequential_workflow(self, agents: List[Agent]) -> StateGraph:
-        """
-        Create a sequential workflow where agents execute one after another.
-        
-        Args:
-            agents (List[Agent]): List of agents to execute sequentially
-            
-        Returns:
-            StateGraph: Compiled workflow graph
-        """
-        return SequentialExecution.create_sequential_workflow(agents)
-    
-    def create_parallel_workflow(self, agents: List[Agent], 
-                               aggregation_strategy: str = "concatenate") -> StateGraph:
-        """
-        Create a parallel workflow where agents execute simultaneously.
-        
-        Args:
-            agents (List[Agent]): List of agents to execute in parallel
-            aggregation_strategy (str): How to combine results ("concatenate", "summarize", "vote")
-            
-        Returns:
-            StateGraph: Compiled workflow graph
-        """
-        return ParallelExecution.create_parallel_workflow(agents, aggregation_strategy)
-    
     def create_supervisor_workflow(self, supervisor: Agent, workers: List[Agent], 
-                                 execution_mode: str = "sequential", 
-                                 max_iterations: int = 5) -> StateGraph:
+                                execution_mode: str = "sequential", 
+                                max_iterations: int = 5) -> StateGraph:
         """
         Create a supervisor workflow with a coordinating supervisor and worker agents.
         
