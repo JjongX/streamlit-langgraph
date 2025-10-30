@@ -1,3 +1,6 @@
+import os
+import yaml
+
 from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool
 from streamlit_langgraph.workflow import WorkflowBuilder
 
@@ -31,93 +34,32 @@ def create_parallel_supervisor_workflow():
         function=analyze_sentiment
     )
     
-    # Create supervisor agent
-    supervisor = Agent(
-        name="Analysis_Supervisor",
-        role="Product Analysis Coordinator",
-        instructions="""You coordinate a team of specialized analysts who work in PARALLEL.
-
-Your team consists of:
-- Market_Analyst: Analyzes market trends and competition
-- Technical_Analyst: Reviews technical specifications and features
-- Customer_Analyst: Examines customer feedback and sentiment
-
-DELEGATION STRATEGY:
-1. When user requests a comprehensive product analysis, delegate to ALL analysts simultaneously
-   by using delegate_task with worker_name="PARALLEL"
-2. After receiving all parallel results, synthesize them into a final comprehensive report
-3. You can delegate to PARALLEL multiple times if needed for different aspects
-
-IMPORTANT: To trigger parallel execution, set target_worker to "PARALLEL" in your delegation.""",
-        type="response",
-        provider="openai",
-        model="gpt-4.1",
-        temperature=0.0,
-        allow_web_search=True
-    )
+    # Load agent configurations from YAML
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
+    with open(config_path, "r", encoding="utf-8") as f:
+        agent_configs = yaml.safe_load(f)
     
-    # Create worker agents
-    market_analyst = Agent(
-        name="Market_Analyst",
-        role="Market Research Specialist",
-        instructions="""You analyze market trends, competitive landscape, and market positioning.
-Focus on:
-- Market size and growth potential
-- Competitor analysis
-- Market positioning strategies
-- Pricing analysis
-- Market opportunities and threats
-
-Provide structured, data-driven insights.""",
-        type="response",
-        provider="openai",
-        model="gpt-4.1",
-        temperature=0.2,
-        allow_web_search=True
-    )
+    # Set optional arguments for each agent
+    # Order: [supervisor, market_analyst, technical_analyst, customer_analyst]
+    optional_args = [
+        # Analysis_Supervisor
+        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
+        # Market_Analyst
+        dict(allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
+        # Technical_Analyst
+        dict(allow_code_interpreter=True, temperature=0.2, provider="openai", model="gpt-4.1"),
+        # Customer_Analyst
+        dict(tools=["analyze_sentiment"], allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
+    ]
     
-    technical_analyst = Agent(
-        name="Technical_Analyst",
-        role="Technical Specifications Expert",
-        instructions="""You analyze technical aspects, features, and specifications.
-Focus on:
-- Technical specifications
-- Feature analysis
-- Technology stack
-- Performance metrics
-- Innovation assessment
-- Technical advantages/disadvantages
-
-Provide detailed technical insights.""",
-        type="response",
-        provider="openai",
-        model="gpt-4.1",
-        temperature=0.2,
-        allow_code_interpreter=True
-    )
+    # Create agents from config
+    agents = []
+    for cfg, opts in zip(agent_configs, optional_args):
+        agent = Agent(**cfg, **opts)
+        agents.append(agent)
     
-    customer_analyst = Agent(
-        name="Customer_Analyst",
-        role="Customer Insights Specialist",
-        instructions="""You analyze customer perspectives, reviews, and sentiment.
-Focus on:
-- Customer satisfaction
-- User experience feedback
-- Common praise and complaints
-- Customer sentiment analysis
-- User demographics
-- Customer needs and pain points
-
-Provide customer-centric insights.""",
-        type="response",
-        provider="openai",
-        model="gpt-4.1",
-        temperature=0.2,
-        tools=["analyze_sentiment"],
-        allow_web_search=True
-    )
-    
-    workers = [market_analyst, technical_analyst, customer_analyst]
+    supervisor = agents[0]
+    workers = agents[1:]
     
     return supervisor, workers
 
