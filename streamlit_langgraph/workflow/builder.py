@@ -1,51 +1,20 @@
 from typing import List
+
 from langgraph.graph import StateGraph
 
 from ..agent import Agent
-from .executor import SequentialExecution, ParallelExecution
-from .patterns import SupervisorPattern
+from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 
 class WorkflowBuilder:
     """
-    Simplified workflow builder that delegates to specialized pattern classes.
+    Workflow builder that delegates to specialized pattern classes.
     
-    This replaces the monolithic WorkflowBuilder with a cleaner interface
-    that delegates to pattern-specific implementations.
+    Provides a clean interface for creating supervised and hierarchical workflows.
     """
     
-    def __init__(self):
-        """Initialize the workflow builder."""
-        pass
-    
-    def create_sequential_workflow(self, agents: List[Agent]) -> StateGraph:
-        """
-        Create a sequential workflow where agents execute one after another.
-        
-        Args:
-            agents (List[Agent]): List of agents to execute sequentially
-            
-        Returns:
-            StateGraph: Compiled workflow graph
-        """
-        return SequentialExecution.create_sequential_workflow(agents)
-    
-    def create_parallel_workflow(self, agents: List[Agent], 
-                               aggregation_strategy: str = "concatenate") -> StateGraph:
-        """
-        Create a parallel workflow where agents execute simultaneously.
-        
-        Args:
-            agents (List[Agent]): List of agents to execute in parallel
-            aggregation_strategy (str): How to combine results ("concatenate", "summarize", "vote")
-            
-        Returns:
-            StateGraph: Compiled workflow graph
-        """
-        return ParallelExecution.create_parallel_workflow(agents, aggregation_strategy)
-    
     def create_supervisor_workflow(self, supervisor: Agent, workers: List[Agent], 
-                                 execution_mode: str = "sequential", 
-                                 max_iterations: int = 5) -> StateGraph:
+                                execution_mode: str = "sequential", 
+                                max_iterations: int = 5) -> StateGraph:
         """
         Create a supervisor workflow with a coordinating supervisor and worker agents.
         
@@ -61,13 +30,22 @@ class WorkflowBuilder:
         return SupervisorPattern.create_supervisor_workflow(
             supervisor, workers, execution_mode)
     
-    # Convenience methods for supervisor workflows
-    def create_supervisor_with_sequential_workers(self, supervisor: Agent, workers: List[Agent], 
-                                                max_iterations: int = 5) -> StateGraph:
-        """Create a supervisor workflow with sequential worker execution."""
-        return self.create_supervisor_workflow(supervisor, workers, "sequential", max_iterations)
-    
-    def create_supervisor_with_parallel_workers(self, supervisor: Agent, workers: List[Agent], 
-                                              max_iterations: int = 5) -> StateGraph:
-        """Create a supervisor workflow with parallel worker execution."""
-        return self.create_supervisor_workflow(supervisor, workers, "parallel", max_iterations)
+    def create_hierarchical_workflow(self, top_supervisor: Agent, 
+                                   supervisor_teams: List[SupervisorTeam],
+                                   execution_mode: str = "sequential") -> StateGraph:
+        """
+        Create a hierarchical workflow with a top supervisor coordinating multiple
+        supervisor teams (sub-supervisors with their workers).
+        
+        Args:
+            top_supervisor (Agent): Top-level supervisor that coordinates sub-supervisors
+            supervisor_teams (List[SupervisorTeam]): List of supervisor teams, each containing
+                                                     a supervisor and their workers
+            execution_mode (str): "sequential" execution (default and only supported mode)
+            
+        Returns:
+            StateGraph: Compiled hierarchical workflow graph
+        """
+        return HierarchicalPattern.create_hierarchical_workflow(
+            top_supervisor, supervisor_teams, execution_mode)
+

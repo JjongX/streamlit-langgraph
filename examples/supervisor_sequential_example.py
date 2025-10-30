@@ -1,6 +1,7 @@
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool
-import json
 import os
+import yaml
+
+from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool
 from streamlit_langgraph.workflow import WorkflowBuilder
 
 def format_proposal(content: str, proposal_type: str = "academic") -> str:
@@ -33,9 +34,9 @@ def create_supervisor_workflow_example():
         function=format_proposal
     )
     
-    config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor.json")
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_sequential.yaml")
     with open(config_path, "r", encoding="utf-8") as f:
-        agent_configs = json.load(f)
+        agent_configs = yaml.safe_load(f)
 
     # Set optional arguments for each agent in code
     # Order: [supervisor, information_gatherer, proposal_writer, general_assistant]
@@ -71,7 +72,6 @@ def main():
         supervisor=supervisor,
         workers=workers,
         execution_mode="sequential",
-        max_iterations=5
     )
     
     config = UIConfig(

@@ -88,7 +88,7 @@ class WorkflowVisualizer:
                 # Fallback: Display graph structure as text
                 self._display_graph_structure_text(workflow, title)
                 
-        except Exception as e:
+        except Exception:
             st.warning(f"Could not generate visual graph for {title}. Showing text representation instead.")
             self._display_graph_structure_text(workflow, title)
     
@@ -192,37 +192,6 @@ class WorkflowVisualizer:
                 self.visualize_supervisor_workflow(supervisor_agent, agents)
             else:
                 st.warning("Supervisor agent not provided for supervisor pattern.")
-    
-    def display_workflow_metrics(self, workflow: StateGraph, title: str = "Workflow Metrics") -> None:
-        """
-        Display metrics and information about a workflow.
-        
-        Args:
-            workflow (StateGraph): Compiled workflow graph
-            title (str): Title for the metrics display
-        """
-        st.subheader(title)
-        
-        try:
-            graph = workflow.get_graph()
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                node_count = len(graph.nodes) if hasattr(graph, 'nodes') else 0
-                st.metric("Total Nodes", node_count)
-            
-            with col2:
-                edge_count = len(graph.edges) if hasattr(graph, 'edges') else 0
-                st.metric("Total Edges", edge_count)
-            
-            with col3:
-                # Calculate complexity (simple heuristic)
-                complexity = "Low" if node_count <= 3 else "Medium" if node_count <= 6 else "High"
-                st.metric("Complexity", complexity)
-                
-        except Exception as e:
-            st.error(f"Could not calculate workflow metrics: {e}")
 
 
 class InteractiveWorkflowBuilder(WorkflowBuilder):
@@ -261,7 +230,7 @@ class InteractiveWorkflowBuilder(WorkflowBuilder):
         for i in range(num_agents):
             with st.expander(f"Agent {i+1}"):
                 name = st.text_input(f"Agent {i+1} Name", value=f"Agent_{i+1}")
-                role = st.text_input(f"Agent {i+1} Role", value=f"Worker Agent")
+                role = st.text_input(f"Agent {i+1} Role", value="Worker Agent")
                 instructions = st.text_area(f"Agent {i+1} Instructions", 
                                           value=f"Perform specialized tasks as a {role}")
                 tools = st.multiselect(f"Agent {i+1} Tools", 
