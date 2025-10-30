@@ -36,13 +36,14 @@ class AgentNodeFactory:
             
             if input_message:
                 response = AgentNodeFactory._execute_agent(agent, state, input_message, context_messages, agent_responses_count)
-                new_messages = state["messages"] + [{
+                # Return only the delta (new message), not the full state
+                # Reducers will merge with existing state
+                state_updates["messages"] = [{
                     "role": "assistant",
                     "content": response,
                     "agent": agent.name,
                     "timestamp": None
                 }]
-                state_updates["messages"] = new_messages
                 
             return state_updates
         
@@ -112,19 +113,18 @@ DELEGATION:
                 supervisor, state, supervisor_instructions, workers, workers_used, allow_parallel
             )
             
-            updated_agent_outputs = state["agent_outputs"].copy()
-            updated_agent_outputs[supervisor.name] = response
-
+            # Return only the delta (new values), not the full state
+            # Reducers will merge with existing state
             return {
                 "current_agent": supervisor.name,
-                "messages": state["messages"] + [{
+                "messages": [{
                     "role": "assistant",
                     "content": response,
                     "agent": supervisor.name,
                     "timestamp": None
                 }],
-                "agent_outputs": updated_agent_outputs,
-                "metadata": {**state["metadata"], "routing_decision": routing_decision}
+                "agent_outputs": {supervisor.name: response},
+                "metadata": {"routing_decision": routing_decision}
             }
         
         return supervisor_agent_node
@@ -151,18 +151,17 @@ Please complete the task assigned by your supervisor."""
             
             response = AgentNodeFactory._execute_agent(worker, state, worker_instructions, [], 0)
             
-            updated_agent_outputs = state["agent_outputs"].copy()
-            updated_agent_outputs[worker.name] = response
-            
+            # Return only the delta (new values), not the full state
+            # Reducers will merge these with existing state
             return {
                 "current_agent": worker.name,
-                "messages": state["messages"] + [{
+                "messages": [{
                     "role": "assistant",
                     "content": response,
                     "agent": worker.name,
                     "timestamp": None
                 }],
-                "agent_outputs": updated_agent_outputs
+                "agent_outputs": {worker.name: response}
             }
         
         return worker_agent_node

@@ -59,14 +59,16 @@ class WorkflowExecutor:
         for node_output in workflow.stream(initial_state):
             for node_name, state_update in node_output.items():
                 if isinstance(state_update, dict):
+                    # Apply reducers manually when accumulating state for display
                     if "messages" in state_update:
-                        accumulated_state["messages"] = state_update["messages"]
+                        accumulated_state["messages"] = accumulated_state.get("messages", []) + state_update["messages"]
                     if "metadata" in state_update:
-                        accumulated_state["metadata"].update(state_update["metadata"])
+                        accumulated_state["metadata"] = {**accumulated_state.get("metadata", {}), **state_update["metadata"]}
                     if "agent_outputs" in state_update:
-                        accumulated_state["agent_outputs"].update(state_update["agent_outputs"])
+                        accumulated_state["agent_outputs"] = {**accumulated_state.get("agent_outputs", {}), **state_update["agent_outputs"]}
                     if "current_agent" in state_update:
-                        accumulated_state["current_agent"] = state_update["current_agent"]
+                        if state_update["current_agent"] is not None:
+                            accumulated_state["current_agent"] = state_update["current_agent"]
                 if display_callback:
                     display_callback(accumulated_state)
 

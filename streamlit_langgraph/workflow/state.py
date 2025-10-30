@@ -1,4 +1,6 @@
 from typing import Any, Dict, List, Optional, TypedDict
+from typing_extensions import Annotated
+import operator
 
 class WorkflowState(TypedDict):
     """
@@ -6,12 +8,19 @@ class WorkflowState(TypedDict):
     
     This state maintains conversation history and workflow execution metadata
     while being compatible with LangGraph's state management requirements.
+    
+    Reducer functions handle concurrent updates during parallel execution:
+    - messages: operator.add concatenates lists
+    - current_agent: lambda takes latest non-None value
+    - agent_outputs: operator.or_ merges dictionaries (Python 3.9+)
+    - files: operator.add concatenates lists
+    - metadata: operator.or_ merges dictionaries
     """
-    messages: List[Dict[str, Any]]
-    current_agent: Optional[str]
-    agent_outputs: Dict[str, Any]
-    files: List[Dict[str, Any]]
-    metadata: Dict[str, Any]
+    messages: Annotated[List[Dict[str, Any]], operator.add]
+    current_agent: Annotated[Optional[str], lambda x, y: y if y is not None else x]
+    agent_outputs: Annotated[Dict[str, Any], operator.or_]
+    files: Annotated[List[Dict[str, Any]], operator.add]
+    metadata: Annotated[Dict[str, Any], operator.or_]
 
 # Helper functions to work with WorkflowState
 
