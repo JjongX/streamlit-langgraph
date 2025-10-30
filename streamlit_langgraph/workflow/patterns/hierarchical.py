@@ -143,20 +143,9 @@ class HierarchicalPattern:
                 sub_routes
             )
             
-            # Workers route back to their sub-supervisor (same as standard supervisor pattern)
+            # Workers route back to their sub-supervisor
             for worker in team.workers:
-                def make_worker_route(subsup_name):
-                    def worker_route(state: WorkflowState) -> str:
-                        """Worker always routes back to their sub-supervisor."""
-                        return subsup_name
-                    return worker_route
-                
-                worker_routes = {team.supervisor.name: team.supervisor.name}
-                graph.add_conditional_edges(
-                    worker.name,
-                    make_worker_route(team.supervisor.name),
-                    worker_routes
-                )
+                graph.add_edge(worker.name, team.supervisor.name)
         
         return graph
 

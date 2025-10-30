@@ -1,10 +1,9 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import streamlit as st
 from langgraph.graph import END, START, StateGraph
 
 from ..agent import Agent
-from .nodes import AgentNodeFactory, UtilityNodeFactory
+from .nodes import AgentNodeFactory
 from .state import WorkflowState, create_initial_state
 
 class WorkflowExecutor:
@@ -89,6 +88,7 @@ class SequentialExecution:
     def create_sequential_workflow(agents: List[Agent]) -> StateGraph:
         """
         Create a sequential workflow where agents execute one after another.
+        Uses LangGraph's add_sequence for cleaner sequential execution.
         
         Args:
             agents (List[Agent]): List of agents in execution order
@@ -96,16 +96,14 @@ class SequentialExecution:
             StateGraph: Compiled workflow graph
         """
         graph = StateGraph(WorkflowState)
+        
         # Add nodes for each agent
         for agent in agents:
             graph.add_node(agent.name, AgentNodeFactory.create_basic_agent_node(agent))
-        # Add sequential edges
-        for i in range(len(agents) - 1):
-            graph.add_edge(agents[i].name, agents[i + 1].name)
-        # Always start with START and end with END
-        graph.add_edge(START, agents[0].name)
-        graph.add_edge(agents[-1].name, END)
-        graph.set_entry_point(START)
+        
+        # Use add_sequence for sequential execution
+        graph.add_sequence([START] + [agent.name for agent in agents] + [END])
+        
         return graph.compile()
 
 class ParallelExecution:
@@ -116,6 +114,9 @@ class ParallelExecution:
                                aggregation_strategy: Union[str, Agent] = "concatenate") -> StateGraph:
         """
         Create a parallel workflow where agents execute simultaneously.
+        LangGraph automatically waits for all parallel nodes (multiple start nodes)
+        to complete before executing the aggregator.
+        No dispatcher node needed - LangGraph handles fan-out/fan-in natively.
         
         Args:
             agents (List[Agent]): List of agents to execute in parallel
@@ -124,31 +125,34 @@ class ParallelExecution:
             StateGraph: Compiled workflow graph
         """
         graph = StateGraph(WorkflowState)
-        # Add a dispatcher node to start parallel execution
-        graph.add_node("dispatcher", UtilityNodeFactory.create_dispatcher_node())
+        
         # Add nodes for each agent
         for agent in agents:
             graph.add_node(agent.name, AgentNodeFactory.create_basic_agent_node(agent))
-            graph.add_edge("dispatcher", agent.name)
+        
         # Handle aggregation
         if isinstance(aggregation_strategy, Agent):
             aggregator_agent = aggregation_strategy
-            graph.add_node(aggregator_agent.name, AgentNodeFactory.create_basic_agent_node(aggregator_agent))
-            for agent in agents:
-                graph.add_edge(agent.name, aggregator_agent.name)
-            graph.add_edge(aggregator_agent.name, END)
         elif isinstance(aggregation_strategy, str):
             aggregator_agent = ParallelExecution._create_aggregator_agent(aggregation_strategy)
+        else:
+            aggregator_agent = None
+        
+        if aggregator_agent:
             graph.add_node(aggregator_agent.name, AgentNodeFactory.create_basic_agent_node(aggregator_agent))
+            # Fan-out from START to all parallel agents
+            for agent in agents:
+                graph.add_edge(START, agent.name)
+            # Fan-in from all agents to aggregator
             for agent in agents:
                 graph.add_edge(agent.name, aggregator_agent.name)
             graph.add_edge(aggregator_agent.name, END)
         else:
+            # No aggregation
             for agent in agents:
+                graph.add_edge(START, agent.name)
                 graph.add_edge(agent.name, END)
-        # Always start with START (from langgraph.graph)
-        graph.add_edge(START, "dispatcher")
-        graph.set_entry_point(START)
+        
         return graph.compile()
     
     @staticmethod

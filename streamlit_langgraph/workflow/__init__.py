@@ -2,7 +2,7 @@ from .builder import WorkflowBuilder
 from .executor import WorkflowExecutor, SequentialExecution, ParallelExecution
 from .state import WorkflowState, create_initial_state
 from .visualization import WorkflowVisualizer, InteractiveWorkflowBuilder
-from .nodes import AgentNodeFactory, UtilityNodeFactory
+from .nodes import AgentNodeFactory
 from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 
 __all__ = [
@@ -16,7 +16,6 @@ __all__ = [
     'ParallelExecution',
     # Node factories
     'AgentNodeFactory',
-    'UtilityNodeFactory',
     # Orchestration patterns
     'SupervisorPattern',
     'HierarchicalPattern',
