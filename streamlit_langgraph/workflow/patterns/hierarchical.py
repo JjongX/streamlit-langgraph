@@ -57,16 +57,18 @@ class HierarchicalPattern:
         sub_supervisors = [team.supervisor for team in supervisor_teams]
         
         # Top supervisor treats sub-supervisors as its "workers"
+        # Hierarchical pattern doesn't support parallel at this level
         top_supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
-            top_supervisor, sub_supervisors
+            top_supervisor, sub_supervisors, allow_parallel=False
         )
         graph.add_node(top_supervisor.name, top_supervisor_node)
         graph.add_edge(START, top_supervisor.name)
         
         for team in supervisor_teams:
             # Sub-supervisor is just a supervisor for their team
+            # Hierarchical pattern doesn't support parallel at team level
             sub_supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
-                team.supervisor, team.workers
+                team.supervisor, team.workers, allow_parallel=False
             )
             graph.add_node(team.supervisor.name, sub_supervisor_node)
             # Add worker nodes using standard worker node factory

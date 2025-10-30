@@ -49,7 +49,8 @@ class AgentNodeFactory:
         return agent_node
     
     @staticmethod
-    def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent]) -> Callable:
+    def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent], 
+                                     allow_parallel: bool = False) -> Callable:
         """Create a supervisor agent node that delegates tasks to workers using structured routing."""
         def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
             worker_names = [w.name for w in workers]
@@ -108,7 +109,7 @@ DELEGATION:
 • To complete: Provide your final response without calling any function
 """
             response, routing_decision = AgentNodeFactory._execute_supervisor_with_routing(
-                supervisor, state, supervisor_instructions, workers, workers_used
+                supervisor, state, supervisor_instructions, workers, workers_used, allow_parallel
             )
             
             updated_agent_outputs = state["agent_outputs"].copy()
@@ -194,11 +195,14 @@ Current task: {input_message}"""
     @staticmethod
     def _execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
                                         input_message: str, workers: List[Agent],
-                                        workers_used: set) -> tuple[str, Dict[str, Any]]:
+                                        workers_used: set, allow_parallel: bool = False) -> tuple[str, Dict[str, Any]]:
         """Execute supervisor agent with structured routing via function calling.
         
         Note: Function calling routing only supported for OpenAI. Other providers
         will fallback to text-based routing.
+        
+        Args:
+            allow_parallel: If True, adds "PARALLEL" as an option to delegate to all workers simultaneously
         """
         
         try:
@@ -212,6 +216,20 @@ Current task: {input_message}"""
             # Define delegation function for structured routing
             available_workers = [w for w in workers if w.name not in workers_used]
             
+            # Build worker name enum - include PARALLEL option if allowed
+            worker_name_options = [w.name for w in available_workers] if available_workers else []
+            if allow_parallel and len(workers) > 1:
+                worker_name_options.append("PARALLEL")
+            
+            if not worker_name_options:
+                worker_name_options = ["none"]
+            
+            # Build description
+            worker_desc_parts = [f'{w.name} ({w.role})' for w in available_workers]
+            if allow_parallel and len(workers) > 1:
+                worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
+            worker_description = f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}"
+            
             tools = [{
                 "type": "function",
                 "function": {
@@ -222,8 +240,8 @@ Current task: {input_message}"""
                         "properties": {
                             "worker_name": {
                                 "type": "string",
-                                "enum": [w.name for w in available_workers] if available_workers else ["none"],
-                                "description": f"The name of the worker to delegate to. Available: {', '.join([f'{w.name} ({w.role})' for w in available_workers])}"
+                                "enum": worker_name_options,
+                                "description": worker_description
                             },
                             "task_description": {
                                 "type": "string",

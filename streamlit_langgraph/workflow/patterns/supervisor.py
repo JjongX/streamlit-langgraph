@@ -28,8 +28,12 @@ class SupervisorPattern:
             raise ValueError("At least one supervisor agent and one worker agent are required")
 
         graph = StateGraph(WorkflowState)
-        # Initial node and edge for supervisor
-        supervisor_node = AgentNodeFactory.create_supervisor_agent_node(supervisor_agent, worker_agents)
+        
+        # Create supervisor node with parallel support if needed
+        allow_parallel = (execution_mode == "parallel")
+        supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
+            supervisor_agent, worker_agents, allow_parallel=allow_parallel
+        )
         graph.add_node(supervisor_agent.name, supervisor_node)
         graph.add_edge(START, supervisor_agent.name)
 
