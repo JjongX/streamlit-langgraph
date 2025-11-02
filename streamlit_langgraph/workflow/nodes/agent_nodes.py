@@ -311,3 +311,177 @@ Current task: {input_message}"""
             error_message = f"Error executing supervisor {agent.name}: {str(e)}"
             st.error(error_message)
             return error_message, {"action": "finish"}
+            
+    @staticmethod
+    def create_tool_calling_agent_node(calling_agent: Agent, tool_agents: List[Agent]) -> Callable:
+        """
+        Create a tool calling agent node where the agent can call other agents as tools.
+        
+        This implements the "agent-as-tools" pattern where:
+        - The calling agent stays in control (single node)
+        - Tool agents are invoked synchronously and return results
+        - Simple task descriptions are passed (not full context)
+        - Results are returned directly to the calling agent
+        """
+        # Create a mapping of agent names to agent objects for quick lookup
+        tool_agents_map = {agent.name: agent for agent in tool_agents}
+        
+        def tool_calling_agent_node(state: WorkflowState) -> Dict[str, Any]:
+            # Get user input
+            user_query = ""
+            for msg in reversed(state["messages"]):
+                if msg["role"] == "user":
+                    user_query = msg["content"]
+                    break
+            
+            # Create agent tools - wrap each tool agent as a function tool
+            agent_tools = AgentNodeFactory._create_agent_tools(tool_agents, state)
+            
+            # Execute the calling agent with agent tools available
+            response = AgentNodeFactory._execute_agent_with_tools(
+                calling_agent, state, user_query, agent_tools, tool_agents_map
+            )
+            
+            return {
+                "current_agent": calling_agent.name,
+                "messages": [{
+                    "role": "assistant",
+                    "content": response,
+                    "agent": calling_agent.name,
+                    "timestamp": None
+                }],
+                "agent_outputs": {calling_agent.name: response}
+            }
+        
+        return tool_calling_agent_node
+    
+    @staticmethod
+    def _create_agent_tools(tool_agents: List[Agent], state: WorkflowState) -> List[Dict[str, Any]]:
+        """
+        Create OpenAI function tool definitions for each agent.
+        
+        Each agent becomes a callable tool that the calling agent can invoke.
+        """
+        tools = []
+        
+        for agent in tool_agents:
+            tool_description = f"{agent.role}. {agent.instructions}"
+            
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": agent.name,
+                    "description": tool_description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": f"Clear description of the task for {agent.name} to perform. Be specific about what you need."
+                            }
+                        },
+                        "required": ["task"]
+                    }
+                }
+            })
+        
+        return tools
+    
+    @staticmethod
+    def _execute_agent_with_tools(agent: Agent, state: WorkflowState, 
+                                  input_message: str, tools: List[Dict[str, Any]],
+                                  tool_agents_map: Dict[str, Agent]) -> str:
+        """
+        Execute an agent with access to tools (other agents wrapped as tools).
+        
+        When the agent calls a tool, we execute the corresponding agent synchronously
+        and return the result back to the calling agent.
+        """
+        # Only OpenAI supports function calling currently
+        if agent.provider.lower() != "openai":
+            # Fallback to basic execution without tools
+            return AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
+        
+        client = openai.OpenAI()
+        
+        enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
+
+You have access to specialized agents that can help you. When you need their expertise, call them as tools.
+After they complete their task, they will return results to you, and you should synthesize the final response."""
+
+        messages = [{"role": "user", "content": f"{enhanced_instructions}\n\nUser request: {input_message}"}]
+        
+        max_iterations = 10
+        iteration = 0        
+        while iteration < max_iterations:
+            with st.spinner(f"🤖 {agent.name} is working..."):
+                response = client.chat.completions.create(
+                    model=agent.model,
+                    messages=messages,
+                    temperature=agent.temperature,
+                    tools=tools if tools else None,
+                    tool_choice="auto" if tools else None
+                )
+            
+            message = response.choices[0].message
+            messages.append(message)
+            
+            # If no tool calls, return the content
+            if not message.tool_calls:
+                return message.content or ""
+            
+            # Execute tool calls (agent invocations)
+            for tool_call in message.tool_calls:
+                tool_name = tool_call.function.name
+                import json
+                try:
+                    args = json.loads(tool_call.function.arguments)
+                    task = args.get("task", "")
+                    
+                    # Find the corresponding agent from the map
+                    tool_agent = tool_agents_map.get(tool_name)
+                    
+                    if not tool_agent:
+                        tool_result = f"Error: Agent {tool_name} not found"
+                    else:
+                        # Execute the tool agent synchronously with simple task description
+                        tool_result = AgentNodeFactory._execute_tool_agent(
+                            tool_agent, task, state
+                        )
+                    
+                    # Add tool result to messages
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_name,
+                        "content": tool_result
+                    })
+                    
+                except Exception as e:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_name,
+                        "content": f"Error executing {tool_name}: {str(e)}"
+                    })
+            iteration += 1
+        
+        return message.content or "Maximum iterations reached"
+    
+    @staticmethod
+    def _execute_tool_agent(agent: Agent, task: str, state: WorkflowState) -> str:
+        """
+        Execute a tool agent with a simple task description.
+        
+        Tool agents receive only the task description, not full context.
+        They execute and return results synchronously.
+        """
+        # Simple instructions - just the task, not full context (tool calling characteristic)
+        tool_instructions = f"""Task: {task}
+
+Your role: {agent.role}
+Your instructions: {agent.instructions}
+
+Complete this task and return the result. Be concise and focused on the specific task."""
+        
+        return AgentNodeFactory._execute_agent(agent, state, tool_instructions, [], 0)
