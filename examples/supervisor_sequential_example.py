@@ -72,6 +72,7 @@ def main():
         supervisor=supervisor,
         workers=workers,
         execution_mode="sequential",
+        delegation_mode="handoff"
     )
     
     config = UIConfig(

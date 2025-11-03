@@ -138,7 +138,6 @@ class FileHandler:
             }
         )
         
-        # Process for OpenAI integration if client is available
         if self.openai_client:
             self._process_file_for_openai(file_info)
         
@@ -168,73 +167,49 @@ class FileHandler:
         return "\n".join(file_info.get_summary() for file_info in self.files.values())
 
     def _process_file_for_openai(self, file_info: FileInfo) -> None:
-        """Process a file for OpenAI integration and update its input_messages."""
+        """
+        Process a file for OpenAI integration and update its input_messages.
+        
+        Handles different file types: PDFs, images (vision), and text files.
+        Creates appropriate OpenAI file objects and adds them to input_messages.
+        """
         if not self.openai_client:
             return
         
         file_ext = file_info.extension
         file_path = Path(file_info.path)
         
-        # Add local file path message
         file_info.input_messages.append({
             "role": "user", 
             "content": f"File locally available at: {file_path}"
         })
         
-        try:
-            # Handle PDF files with special processing
-            if file_ext == ".pdf":
-                with open(file_path, "rb") as f:
-                    openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-                    file_info.openai_file_id = openai_file.id
-                
-                # Try to add as input file for direct PDF processing
-                try:
-                    file_info.input_messages.append({
-                        "role": "user",
-                        "content": [{"type": "input_file", "file_id": openai_file.id}]
-                    })
-                except Exception:
-                    pass
-            
-            # Handle vision files (images)
-            elif file_ext in VISION_EXTENSIONS:
-                with open(file_path, "rb") as f:
-                    vision_file = self.openai_client.files.create(file=f, purpose="vision")
-                    file_info.vision_file_id = vision_file.id
-                
-                file_info.input_messages.append({
-                    "role": "user",
-                    "content": [{"type": "input_image", "file_id": vision_file.id}]
-                })
-            
-            # Handle other file types that can be processed as text
-            elif file_ext in [".txt", ".md", ".json", ".csv", ".py", ".js", ".html", ".xml"]:
-                with open(file_path, "rb") as f:
-                    openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-                    file_info.openai_file_id = openai_file.id
-                
-                # Add file content as text in the message
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        file_info.input_messages.append({
-                            "role": "user",
-                            "content": f"Content of {file_path.name}:\n```\n{content[:2000]}{'...' if len(content) > 2000 else ''}\n```"
-                        })
-                except Exception:
-                    # Fallback to file reference
-                    file_info.input_messages.append({
-                        "role": "user",
-                        "content": [{"type": "input_file", "file_id": openai_file.id}]
-                    })
-            
-        except Exception as e:
-            # Fallback: at least provide file information
+        if file_ext == ".pdf":
+            with open(file_path, "rb") as f:
+                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+                file_info.openai_file_id = openai_file.id
             file_info.input_messages.append({
                 "role": "user",
-                "content": f"File {file_path.name} is available but could not be processed: {str(e)}"
+                "content": [{"type": "input_file", "file_id": openai_file.id}]
             })
+        elif file_ext in VISION_EXTENSIONS:
+            with open(file_path, "rb") as f:
+                vision_file = self.openai_client.files.create(file=f, purpose="vision")
+                file_info.vision_file_id = vision_file.id
+            file_info.input_messages.append({
+                "role": "user",
+                "content": [{"type": "input_image", "file_id": vision_file.id}]
+            })
+        elif file_ext in [".txt", ".md", ".json", ".csv", ".py", ".js", ".html", ".xml"]:
+            with open(file_path, "rb") as f:
+                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+                file_info.openai_file_id = openai_file.id
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                file_info.input_messages.append({
+                    "role": "user",
+                    "content": f"Content of {file_path.name}:\n```\n{content[:2000]}{'...' if len(content) > 2000 else ''}\n```"
+                })
 
 @dataclass
 class CustomTool:

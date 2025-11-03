@@ -1,14 +1,16 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
+import openai
 from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
 
 @dataclass
 class Agent:
     """
     Configuration class for defining individual agents in a multiagent system.
     Required fields: name, role, instructions, type ('response' or 'agent').
-    provider and model default to 'openai' and 'gpt-4o' if not specified.
+    provider and model default to 'openai' and 'gpt-4.1' if not specified.
     """
     name: str
     role: str
@@ -29,10 +31,9 @@ class Agent:
         """Post-initialization processing and validation."""
         if self.type not in ("response", "agent"):
             raise ValueError("Agent 'type' must be either 'response' or 'agent'.")
-        # Compose system_message if not provided
         if self.system_message is None:
             self.system_message = f"You are a {self.role}. {self.instructions}"
-        # Auto-enable native tools based on tools list
+        # Auto-enable OpenAI's native tools based on tools list configuration
         if "file_search" in self.tools:
             self.allow_file_search = True
         if "code_interpreter" in self.tools:
@@ -66,40 +67,66 @@ class Agent:
         """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
 
-class ResponseAPIExecutor:
-    """Executor that uses the OpenAI Responses API (or compatible) for generation.
+def get_llm_client(agent: Agent) -> Union[openai.OpenAI, Any]:
+    """Get the appropriate LLM client for an agent based on its configuration."""
+    if agent.type == "response" and agent.provider.lower() == "openai":
+        return openai.OpenAI()
+    else:
+        chat_model = init_chat_model(model=agent.model)
+        setattr(chat_model, "_provider", agent.provider.lower())
+        return chat_model
 
-    This executor expects an LLM client instance exposing a `responses.create`
-    method (for example `openai.OpenAI`). It returns a dict compatible with
-    the rest of the codebase: {'role','content','agent'} and optionally
-    a 'stream' generator under streaming mode.
-    """
+class ResponseAPIExecutor:
+    """Executor for OpenAI Responses API generation."""
 
     def __init__(self, agent: Agent):
         self.agent = agent
 
     def execute(self, llm_client, prompt: str, stream: bool = True, file_messages: Optional[List] = None):
-        """Execute prompt using the Responses API client.
+        """
+        Execute prompt using the Responses API client.
+        
+        Supports file messages, code interpreter, web search, and image generation tools.
+        Note: file_search requires vector_store_ids and is handled by FileHandler.
 
         Args:
-            llm_client: Client exposing `responses.create`
+            llm_client: Client exposing `responses.create` method
             prompt: Full prompt or input to send
             stream: Whether to request a streaming response
             file_messages: Optional list of file-related input messages
 
         Returns:
-            Dict with keys 'role','content','agent' and optionally 'stream'
+            Dict with keys 'role', 'content', 'agent' and optionally 'stream'
         """
-        # Build input messages including file messages
         input_messages = []
         if file_messages:
             input_messages.extend(file_messages)
         input_messages.append({"role": "user", "content": prompt})
 
-        # Build tools configuration based on agent capabilities
+        tools = self._build_tools_config(llm_client)
+        api_params = {
+            "model": self.agent.model,
+            "input": input_messages,
+            "temperature": self.agent.temperature,
+            "stream": stream,
+        }
+        if tools:
+            api_params["tools"] = tools
+
+        try:
+            if stream:
+                stream_iter = llm_client.responses.create(**api_params)
+                return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
+            else:
+                response = llm_client.responses.create(**api_params)
+                response_content = self._extract_response_content(response)
+                return {"role": "assistant", "content": response_content, "agent": self.agent.name}
+        except Exception as e:
+            return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
+
+    def _build_tools_config(self, llm_client) -> List[Dict[str, Any]]:
+        """Build tools configuration based on agent capabilities."""
         tools = []
-        # Note: file_search requires vector_store_ids, so we skip it if none are configured
-        # This will be handled by the FileHandler's dynamic vector store creation
         if self.agent.allow_code_interpreter:
             container = llm_client.containers.create(name=f"streamlit-{self.agent.name}")
             self.agent.container_id = container.id
@@ -108,45 +135,30 @@ class ResponseAPIExecutor:
             tools.append({"type": "web_search"})
         if self.agent.allow_image_generation:
             tools.append({"type": "image_generation", "partial_images": 3})
+        return tools
 
-        try:
-            # Prepare API call parameters
-            api_params = {
-                "model": self.agent.model,
-                "input": input_messages,
-                "temperature": self.agent.temperature,
-                "stream": stream,
-            }
-            if tools:
-                api_params["tools"] = tools
-
-            if stream: # Streaming
-                stream_iter = llm_client.responses.create(**api_params)
-                return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
-            else:
-                response = llm_client.responses.create(**api_params)
-                response_content = ""
-                if hasattr(response, 'output') and isinstance(response.output, list):
-                    for message in response.output:
-                        if hasattr(message, 'content') and isinstance(message.content, list):
-                            for content_item in message.content:
-                                if hasattr(content_item, 'text'):
-                                    response_content += content_item.text
-                elif hasattr(response, 'content'):
-                    response_content = str(response.content)
-                elif hasattr(response, 'message') and hasattr(response.message, 'content'):
-                    response_content = str(response.message.content)
-
-                return {"role": "assistant", "content": response_content, "agent": self.agent.name}
-
-        except Exception as e:
-            return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
+    def _extract_response_content(self, response) -> str:
+        """Extract text content from API response object."""
+        if hasattr(response, 'output') and isinstance(response.output, list):
+            content_parts = []
+            for message in response.output:
+                if hasattr(message, 'content') and isinstance(message.content, list):
+                    for content_item in message.content:
+                        if hasattr(content_item, 'text'):
+                            content_parts.append(content_item.text)
+            return "".join(content_parts)
+        elif hasattr(response, 'content'):
+            return str(response.content)
+        elif hasattr(response, 'message') and hasattr(response.message, 'content'):
+            return str(response.message.content)
+        return ""
 
 class CreateAgentExecutor:
-    """Executor that builds a LangChain using `create_agent`.
-
-    Uses LangChain's standard `create_agent` function which works with any provider
-    (OpenAI, Anthropic, Google, etc.).
+    """
+    Executor that builds LangChain agents using `create_agent`.
+    
+    Uses LangChain's standard `create_agent` function which supports multiple providers
+    (OpenAI, Anthropic, Google, etc.) through LangChain's chat model interface.
     """
 
     def __init__(self, agent: Agent, tools: Optional[List] = None):
@@ -154,7 +166,8 @@ class CreateAgentExecutor:
         self.tools = tools or []
 
     def execute(self, llm_chat_model, prompt: str, stream: bool = False):
-        """Execute prompt through a LangChain v1 agent.
+        """
+        Execute prompt through a LangChain agent.
 
         Args:
             llm_chat_model: A LangChain chat model instance
@@ -165,37 +178,32 @@ class CreateAgentExecutor:
             Dict with keys 'role', 'content', 'agent'
         """
         try:
-            # Create agent using LangChain's create_agent
             agent_obj = create_agent(
                 model=llm_chat_model,
                 tools=self.tools,
                 system_prompt=self.agent.system_message
             )
-
-            # Invoke agent with proper message format
             out = agent_obj.invoke({
                 "messages": [{"role": "user", "content": prompt}]
             })
-            
-            # Extract response text
-            result_text = ""
-            if isinstance(out, dict):
-                if 'output' in out:
-                    result_text = str(out['output'])
-                elif 'messages' in out and out['messages']:
-                    last_message = out['messages'][-1]
-                    result_text = last_message.content if hasattr(last_message, 'content') else str(last_message)
-            elif isinstance(out, str):
-                result_text = out
-            elif hasattr(out, 'content'):
-                result_text = out.content
-            else:
-                result_text = str(out)
-
+            result_text = self._extract_response_text(out)
             return {"role": "assistant", "content": result_text, "agent": self.agent.name}
-
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
+
+    def _extract_response_text(self, out: Any) -> str:
+        """Extract text content from LangChain agent output."""
+        if isinstance(out, dict):
+            if 'output' in out:
+                return str(out['output'])
+            elif 'messages' in out and out['messages']:
+                last_message = out['messages'][-1]
+                return last_message.content if hasattr(last_message, 'content') else str(last_message)
+        elif isinstance(out, str):
+            return out
+        elif hasattr(out, 'content'):
+            return out.content
+        return str(out)
 
 class AgentManager:
     """
