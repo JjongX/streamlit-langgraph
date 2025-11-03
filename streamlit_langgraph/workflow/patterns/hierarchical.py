@@ -5,7 +5,7 @@ from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
 from ..state import WorkflowState
-from ..nodes import AgentNodeFactory
+from ..agent_nodes import AgentNodeFactory
 
 
 @dataclass

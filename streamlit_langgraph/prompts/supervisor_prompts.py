@@ -2,8 +2,7 @@ from typing import List, Optional
 
 def get_supervisor_instructions(
     role: str, instructions: str, user_query: str,
-    worker_list: str, worker_outputs: List[str]
-) -> str:
+    worker_list: str, worker_outputs: List[str]) -> str:
     """
     Get full supervisor instructions template.
     
@@ -40,19 +39,15 @@ YOUR OPTIONS:
 
 
 def get_worker_agent_instructions(
-    role: str, 
-    instructions: str, 
-    user_query: str, 
-    supervisor_output: Optional[str] = None,
-    previous_worker_outputs: Optional[List[str]] = None
-) -> str:
+    role: str, instructions: str, user_query: str, 
+    supervisor_output: Optional[str] = None, previous_worker_outputs: Optional[List[str]] = None) -> str:
     """
     Get instructions for worker agents in supervisor workflows.
     
     Args:
         role: Worker's role
         instructions: Worker's specific instructions
-        user_query: Original user request (always included)
+        user_query: Original user request
         supervisor_output: Supervisor's instructions/output (optional based on context mode)
         previous_worker_outputs: Previous worker outputs (optional, only for "full" context mode)
         
