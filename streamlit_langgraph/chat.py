@@ -11,6 +11,7 @@ from langchain.chat_models import init_chat_model
 from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor
 from .utils import FileHandler, CustomTool, MIME_TYPES
 from .workflow import WorkflowExecutor, create_initial_state
+from .prompts import get_enhanced_agent_instructions
 
 @dataclass
 class UIConfig:
@@ -514,16 +515,16 @@ class LangGraphChat:
             file_context_note = f"""
 
 IMPORTANT: The user has uploaded {len(st.session_state.uploaded_files)} file(s). The file contents are included in the conversation context below. You can read, analyze, and discuss these files directly. When referring to file contents, be specific and helpful."""
-        enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
-
-Available tools:
-{chr(10).join(tool_descriptions) if tool_descriptions else "No special tools available"}{file_context_note}
-
-Current conversation context:
-{context}
-
-User: {prompt}
-Assistant:"""
+        
+        # Get enhanced agent instructions from prompts module
+        enhanced_instructions = get_enhanced_agent_instructions(
+            role=agent.role,
+            instructions=agent.instructions,
+            user_query=prompt,
+            context=context,
+            tool_descriptions=tool_descriptions,
+            file_context_note=file_context_note
+        )
         file_messages = self.file_handler.get_openai_input_messages()
         if agent.type == "response":
             executor = ResponseAPIExecutor(agent)

@@ -5,6 +5,14 @@ import streamlit as st
 from langchain.chat_models import init_chat_model
 
 from ...agent import Agent, ResponseAPIExecutor, CreateAgentExecutor
+from ...prompts import (
+    get_basic_agent_instructions,
+    get_worker_agent_instructions,
+    get_supervisor_action_guidance,
+    get_supervisor_instructions,
+    get_tool_calling_agent_instructions,
+    get_tool_agent_instructions,
+)
 from ..state import WorkflowState
 
 class AgentNodeFactory:
@@ -79,36 +87,17 @@ class AgentNodeFactory:
             workers_used_list = ", ".join(workers_used) if workers_used else "None"
             unused_workers = [w.name for w in workers if w.name not in workers_used]
             
-            action_guidance = (
-                "\n\n📋 WORKFLOW PROGRESS:"
-                f"\n✅ Workers used: {workers_used_list}"
-                f"\n⏳ Workers not yet used: {', '.join(unused_workers) if unused_workers else 'None'}"
-                "\n\nYOUR DECISION:"
-                "\n- Analyze what work still needs to be done"
-                "\n- Determine which specialist can best handle it"
-                "\n- Use the 'delegate_task' function to assign work to a specialist"
-                "\n\nYOUR OPTIONS:"
-                "\n1. **Delegate to Worker**: Use the delegate_task function to assign tasks to a specialist"
-                f"\n   - Available workers: {', '.join(unused_workers) if unused_workers else 'All workers used'}"
-                "\n2. **Complete Workflow**: When all required work is complete, provide the final output without calling delegate_task."
-                "\n\n💡 Think carefully about which worker to delegate to based on their specializations."
+            action_guidance = get_supervisor_action_guidance(workers_used, unused_workers)
+            supervisor_instructions = get_supervisor_instructions(
+                role=supervisor.role,
+                instructions=supervisor.instructions,
+                user_query=user_query,
+                worker_list=worker_list,
+                workers_used_list=workers_used_list,
+                worker_outputs=worker_outputs,
+                action_guidance=action_guidance
             )
 
-            supervisor_instructions = f"""You are supervising the following workers: {worker_list}
-
-User's Request: {user_query}
-
-Workers Used So Far: {workers_used_list}
-
-Worker Outputs So Far:
-{chr(10).join(worker_outputs) if worker_outputs else "No worker outputs yet"}
-
-{action_guidance}
-
-DELEGATION:
-• To delegate: Call the 'delegate_task' function with the worker name and task details
-• To complete: Provide your final response without calling any function
-"""
             response, routing_decision = AgentNodeFactory._execute_supervisor_with_routing(
                 supervisor, state, supervisor_instructions, workers, workers_used, allow_parallel
             )
@@ -141,14 +130,13 @@ DELEGATION:
                     user_query = msg["content"]
                     break
             
-            worker_instructions = f"""Original Request: {user_query}
-
-Supervisor Instructions: {supervisor_output}
-
-Your Role: {worker.role} - {worker.instructions}
-
-Please complete the task assigned by your supervisor."""
-            
+            worker_instructions = get_worker_agent_instructions(
+                role=worker.role,
+                instructions=worker.instructions,
+                user_query=user_query,
+                supervisor_output=supervisor_output
+            )
+        
             response = AgentNodeFactory._execute_agent(worker, state, worker_instructions, [], 0)
             
             # Return only the delta (new values), not the full state
@@ -171,11 +159,13 @@ Please complete the task assigned by your supervisor."""
                       context_messages: List[str], agent_responses_count: int) -> str:
         """Execute an agent with the given input and return the response."""
         
-        enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
-
-{f"Recent conversation context: {chr(10).join(context_messages[-3:])}" if context_messages else ""}
-
-Current task: {input_message}"""
+        # Get basic agent instructions from prompts module
+        enhanced_instructions = get_basic_agent_instructions(
+            role=agent.role,
+            instructions=agent.instructions,
+            user_query=input_message,
+            context_messages=context_messages
+        )
         
         # Use appropriate executor based on agent type and provider
         if agent.provider.lower() == "openai" and agent.type == "response":
@@ -257,9 +247,12 @@ Current task: {input_message}"""
                 }
             }] if available_workers else []
             
-            enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
-
-Current task: {input_message}"""
+            enhanced_instructions = get_basic_agent_instructions(
+                role=agent.role,
+                instructions=agent.instructions,
+                user_query=input_message,
+                context_messages=None
+            )
             
             messages = [{"role": "user", "content": enhanced_instructions}]
             
@@ -397,17 +390,16 @@ Current task: {input_message}"""
         When the agent calls a tool, we execute the corresponding agent synchronously
         and return the result back to the calling agent.
         """
-        # Only OpenAI supports function calling currently
         if agent.provider.lower() != "openai":
             # Fallback to basic execution without tools
             return AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
         
         client = openai.OpenAI()
         
-        enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
-
-You have access to specialized agents that can help you. When you need their expertise, call them as tools.
-After they complete their task, they will return results to you, and you should synthesize the final response."""
+        enhanced_instructions = get_tool_calling_agent_instructions(
+            role=agent.role,
+            instructions=agent.instructions
+        )
 
         messages = [{"role": "user", "content": f"{enhanced_instructions}\n\nUser request: {input_message}"}]
         
@@ -476,12 +468,10 @@ After they complete their task, they will return results to you, and you should 
         Tool agents receive only the task description, not full context.
         They execute and return results synchronously.
         """
-        # Simple instructions - just the task, not full context (tool calling characteristic)
-        tool_instructions = f"""Task: {task}
-
-Your role: {agent.role}
-Your instructions: {agent.instructions}
-
-Complete this task and return the result. Be concise and focused on the specific task."""
+        tool_instructions = get_tool_agent_instructions(
+            role=agent.role,
+            instructions=agent.instructions,
+            task=task
+        )
         
         return AgentNodeFactory._execute_agent(agent, state, tool_instructions, [], 0)
