@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 def get_supervisor_instructions(
     role: str, instructions: str, user_query: str,
@@ -38,6 +38,43 @@ YOUR OPTIONS:
 💡 Think carefully about which worker to delegate to based on their specializations.
 """
 
+
+def get_worker_agent_instructions(
+    role: str, 
+    instructions: str, 
+    user_query: str, 
+    supervisor_output: Optional[str] = None,
+    previous_worker_outputs: Optional[List[str]] = None
+) -> str:
+    """
+    Get instructions for worker agents in supervisor workflows.
+    
+    Args:
+        role: Worker's role
+        instructions: Worker's specific instructions
+        user_query: Original user request (always included)
+        supervisor_output: Supervisor's instructions/output (optional based on context mode)
+        previous_worker_outputs: Previous worker outputs (optional, only for "full" context mode)
+        
+    Returns:
+        Worker instruction template
+    """
+    instruction_parts = [
+        f"Original Request: {user_query}",
+        f"Your Role: {role} - {instructions}"
+    ]
+    
+    if supervisor_output:
+        instruction_parts.append(f"\nSupervisor Instructions: {supervisor_output}")
+    
+    if previous_worker_outputs:
+        instruction_parts.append(
+            f"\nPrevious Worker Results:\n{chr(10).join(previous_worker_outputs)}"
+        )
+    
+    instruction_parts.append("\nPlease complete the task assigned to you.")
+    
+    return chr(10).join(instruction_parts)
 
 def get_supervisor_sequential_route_guidance() -> str:
     """

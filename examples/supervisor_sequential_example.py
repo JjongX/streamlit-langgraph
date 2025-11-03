@@ -46,7 +46,7 @@ def create_supervisor_workflow_example():
         # Information_Gatherer
         dict(allow_web_search=True, allow_file_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
         # Proposal_Writer
-        dict(tools=["format_proposal"], allow_code_interpreter=True, temperature=0.4, provider="openai", model="gpt-4.1"),
+        dict(tools=["format_proposal"], allow_code_interpreter=True, temperature=0.4, provider="openai", model="gpt-4.1", context="full"),
         # General_Assistant
         dict(allow_web_search=True, temperature=0.7, provider="openai", model="gpt-4.1"),
     ]

@@ -1,13 +1,12 @@
 import json
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
 
 from ...agent import Agent, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
 from ...prompts import (
-    get_basic_agent_instructions,
-    get_worker_agent_instructions,
     get_supervisor_instructions,
+    get_worker_agent_instructions,
     get_tool_calling_agent_instructions,
     get_tool_agent_instructions,
 )
@@ -123,12 +122,7 @@ class AgentNodeFactory:
         
         tools = AgentNodeFactory._build_delegation_tool(workers, allow_parallel)
         
-        enhanced_instructions = get_basic_agent_instructions(
-            role=agent.role,
-            instructions=agent.instructions,
-            user_query=input_message,
-            context_messages=None
-        )
+        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
         
         messages = [{"role": "user", "content": enhanced_instructions}]
         
@@ -224,6 +218,35 @@ class AgentNodeFactory:
         return routing_decision, content
 
     @staticmethod
+    def _get_previous_worker_outputs(state: WorkflowState, supervisor_name: str, current_worker_name: str) -> Optional[List[str]]:
+        """Get formatted list of previous worker outputs."""
+        agent_outputs = state.get("agent_outputs", {})
+        worker_outputs = []
+        for name, output in agent_outputs.items():
+            if name not in (supervisor_name, current_worker_name):
+                worker_outputs.append(f"**{name}**: {output}")
+        return worker_outputs if worker_outputs else None
+    
+    @staticmethod
+    def _build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
+        """
+        Build context data for worker based on context mode.
+        
+        Returns:
+            tuple of (supervisor_output/context_data, previous_worker_outputs)
+        """
+        context_mode = getattr(worker, 'context', 'least') or 'least'
+        supervisor_output = state["agent_outputs"].get(supervisor.name, "")
+        
+        if context_mode == "full":
+            return supervisor_output, AgentNodeFactory._get_previous_worker_outputs(state, supervisor.name, worker.name)
+        elif context_mode == "summary":
+            routing_decision = state.get("metadata", {}).get("routing_decision", {})
+            return routing_decision.get("task_description", supervisor_output), None
+        else:  # "least"
+            return None, None
+    
+    @staticmethod
     def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
         """
         Create a worker agent node for supervisor workflows.
@@ -239,19 +262,21 @@ class AgentNodeFactory:
             LangGraph node function that executes worker and updates state
         """
         def worker_agent_node(state: WorkflowState) -> Dict[str, Any]:
-            supervisor_output = state["agent_outputs"].get(supervisor.name, "")
-            
+            # Get original user query
             user_query = ""
             for msg in reversed(state["messages"]):
                 if msg["role"] == "user":
                     user_query = msg["content"]
                     break
             
+            context_data, previous_worker_outputs = AgentNodeFactory._build_worker_context(state, worker, supervisor)
+            
             worker_instructions = get_worker_agent_instructions(
                 role=worker.role,
                 instructions=worker.instructions,
                 user_query=user_query,
-                supervisor_output=supervisor_output
+                supervisor_output=context_data,
+                previous_worker_outputs=previous_worker_outputs
             )
         
             response = AgentNodeFactory._execute_agent(worker, state, worker_instructions, [], 0)
@@ -274,13 +299,7 @@ class AgentNodeFactory:
                       context_messages: List[str], agent_responses_count: int) -> str:
         """Execute an agent with the given input and return the response."""
         
-        # Get basic agent instructions from prompts module
-        enhanced_instructions = get_basic_agent_instructions(
-            role=agent.role,
-            instructions=agent.instructions,
-            user_query=input_message,
-            context_messages=context_messages
-        )
+        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
         
         # Use appropriate executor based on agent type and provider
         llm_client = get_llm_client(agent)

@@ -26,6 +26,7 @@ class Agent:
     allow_web_search: bool = False
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
+    context: Optional[str] = "least"  # Context mode: "full", "summary", or "least"
 
     def __post_init__(self):
         """Post-initialization processing and validation."""
