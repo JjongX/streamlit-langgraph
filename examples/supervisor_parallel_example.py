@@ -1,7 +1,6 @@
 import os
-import yaml
 
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool
+from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool, load_agents_from_yaml
 from streamlit_langgraph.workflow import WorkflowBuilder
 
 def analyze_sentiment(text: str) -> str:
@@ -36,27 +35,7 @@ def create_parallel_supervisor_workflow():
     
     # Load agent configurations from YAML
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_configs = yaml.safe_load(f)
-    
-    # Set optional arguments for each agent
-    # Order: [supervisor, market_analyst, technical_analyst, customer_analyst]
-    optional_args = [
-        # Analysis_Supervisor
-        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Market_Analyst
-        dict(allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-        # Technical_Analyst
-        dict(allow_code_interpreter=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-        # Customer_Analyst
-        dict(tools=["analyze_sentiment"], allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-    ]
-    
-    # Create agents from config
-    agents = []
-    for cfg, opts in zip(agent_configs, optional_args):
-        agent = Agent(**cfg, **opts)
-        agents.append(agent)
+    agents = load_agents_from_yaml(config_path)
     
     supervisor = agents[0]
     workers = agents[1:]
@@ -74,7 +53,7 @@ def main():
     parallel_workflow = builder.create_supervisor_workflow(
         supervisor=supervisor,
         workers=workers,
-        execution_mode="parallel"  # Key difference: parallel execution!
+        execution_mode="parallel"
     )
     
     config = UIConfig(

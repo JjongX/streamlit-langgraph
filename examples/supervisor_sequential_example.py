@@ -1,7 +1,6 @@
 import os
-import yaml
 
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool
+from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, load_agents_from_yaml
 from streamlit_langgraph.workflow import WorkflowBuilder
 
 def format_proposal(content: str, proposal_type: str = "academic") -> str:
@@ -35,30 +34,12 @@ def create_supervisor_workflow_example():
     )
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_sequential.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_configs = yaml.safe_load(f)
+    agents = load_agents_from_yaml(config_path)
 
-    # Set optional arguments for each agent in code
-    # Order: [supervisor, information_gatherer, proposal_writer, general_assistant]
-    optional_args = [
-        # Supervisor
-        dict(allow_web_search=True, allow_file_search=True, allow_code_interpreter=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Information_Gatherer
-        dict(allow_web_search=True, allow_file_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Proposal_Writer
-        dict(tools=["format_proposal"], allow_code_interpreter=True, temperature=0.4, provider="openai", model="gpt-4.1"),
-        # General_Assistant
-        dict(allow_web_search=True, temperature=0.7, provider="openai", model="gpt-4.1"),
-    ]
-
-    agents = []
-    for cfg, opts in zip(agent_configs, optional_args):
-        agent = Agent(**cfg, **opts)
-        agents.append(agent)
-
-    research_supervisor = agents[0]
+    supervisor = agents[0]
     workers = agents[1:]
-    return research_supervisor, workers
+
+    return supervisor, workers
 
 def main():
     """Supervisor sequential example with clean workflow pattern."""
@@ -72,6 +53,7 @@ def main():
         supervisor=supervisor,
         workers=workers,
         execution_mode="sequential",
+        delegation_mode="handoff"
     )
     
     config = UIConfig(

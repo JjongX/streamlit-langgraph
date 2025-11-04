@@ -2,7 +2,7 @@ from .builder import WorkflowBuilder
 from .executor import WorkflowExecutor
 from .state import WorkflowState, create_initial_state
 from .visualization import WorkflowVisualizer, InteractiveWorkflowBuilder
-from .nodes import AgentNodeFactory
+from .agent_nodes import AgentNodeFactory
 from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 
 __all__ = [

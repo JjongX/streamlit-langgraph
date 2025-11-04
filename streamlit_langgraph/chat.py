@@ -4,11 +4,9 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import openai
 import streamlit as st
-from langchain.chat_models import init_chat_model
 
-from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor
+from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
 from .utils import FileHandler, CustomTool, MIME_TYPES
 from .workflow import WorkflowExecutor, create_initial_state
 
@@ -49,7 +47,6 @@ class LangGraphChat:
         """
         self.config = config or UIConfig()
         self.agent_manager = AgentManager()
-        # Initialize workflow
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor() if workflow else None
         # Initialize agents
@@ -59,16 +56,14 @@ class LangGraphChat:
         # Register custom tools
         if custom_tools:
             for tool in custom_tools:
-                CustomTool.register_tool(tool.name, tool.description, tool.function, parameters=tool.parameters, return_direct=tool.return_direct)
-
-        # Initialize LLM (provider-flexible)
+                CustomTool.register_tool(
+                    tool.name, tool.description, tool.function, 
+                    parameters=tool.parameters, return_direct=tool.return_direct
+                )
         self.llm = self._initialize_llm()
-        # Initialize FileHandler with OpenAI client if available
         openai_client = self.llm if hasattr(self.llm, 'files') else None
         self.file_handler = FileHandler(openai_client=openai_client)
-        # Initialize Streamlit session state
         self._init_session_state()
-        # Initialize sections for streaming
         self._sections = []
         self._download_button_key = 0
     
@@ -172,22 +167,13 @@ class LangGraphChat:
         return section
     
     def _initialize_llm(self):
-        """Initialize an LLM client based on the first agent's provider/model/type."""
-
-        # Currently only support the provider, model, agent_type for the first agent for entire chat
+        """
+        Initialize an LLM client based on the first agent's configuration.
+        
+        Note: Currently uses the first agent's provider/model/type for the entire chat session.
+        """
         first_agent = next(iter(self.agent_manager.agents.values()))
-        provider = first_agent.provider.lower()
-        model_name = first_agent.model
-        agent_type = first_agent.type
-
-        if provider == "openai" and agent_type == "response":
-            client = openai.OpenAI()
-            client._provider = "openai"
-            return client
-        else:
-            chat_model = init_chat_model(model=model_name)
-            setattr(chat_model, "_provider", provider)
-            return chat_model
+        return get_llm_client(first_agent)
 
     def _init_session_state(self):
         """Initialize Streamlit session state."""
@@ -260,18 +246,15 @@ class LangGraphChat:
             with st.chat_message("assistant", avatar=self.config.assistant_avatar):
                 st.markdown(self.config.welcome_message)
 
-        # Display chat messages
-        for i, message in enumerate(st.session_state.messages):
+        for message in st.session_state.messages:
             if message.get("role") == "assistant" and (message.get("agent") == "END" or message.get("agent") is None):
                 continue
             avatar = self.config.user_avatar if message["role"] == "user" else self.config.assistant_avatar
             with st.chat_message(message["role"], avatar=avatar):
                 st.markdown(message["content"])
-                # Display agent info for assistant messages
                 if message["role"] == "assistant" and "agent" in message:
                     st.caption(f"Agent: {message['agent']}")
 
-        # Chat input with file upload support
         if prompt := st.chat_input(
             self.config.placeholder, 
             accept_file=self.config.enable_file_upload
@@ -280,109 +263,104 @@ class LangGraphChat:
     
     def _handle_user_input(self, chat_input):
         """Handle user input and generate responses."""
-        # Extract text and files from chat input
         if hasattr(chat_input, 'text'):
-            # New format with text and files
             prompt = chat_input.text
             files = getattr(chat_input, 'files', [])
         else:
-            # Backward compatibility - just text
             prompt = str(chat_input)
             files = []
         
-        # Handle file uploads if any
         if files:
-            for uploaded_file in files:
-                if uploaded_file not in st.session_state.uploaded_files:
-                    file_info = self.file_handler.save_uploaded_file(uploaded_file)
-                    st.session_state.uploaded_files.append(uploaded_file)
-                    # Optionally, add file info to workflow state if needed
-                    if "files" in st.session_state.workflow_state:
-                        st.session_state.workflow_state["files"].append({
-                            k: v for k, v in file_info.__dict__.items() if k != "content"
-                        })
+            self._process_file_uploads(files)
         
-        # Add user message to chat
         st.session_state.messages.append({
             "role": "user",
             "content": prompt
         })
         
-        # Display user message
+        # Display user message and attached files in the chat
         with st.chat_message("user", avatar=self.config.user_avatar):
             st.markdown(prompt)
-            
-            # Display uploaded files if any
             if files:
                 for uploaded_file in files:
                     st.markdown(f":material/attach_file: `{uploaded_file.name}`")
         
-        # Update workflow state
         user_message = {"role": "user", "content": prompt, "agent": None, "timestamp": None}
         st.session_state.workflow_state["messages"].append(user_message)
         
         with st.spinner("Thinking..."):
             response = self._generate_response(prompt)
 
-        # Display response based on type
         if response.get("agent") == "workflow-completed":
-            pass  # Workflow execution completed - No additional display needed
-        # Streaming single agent response using Section and Block
-        elif response and "stream" in response:
+            return
+        
+        if response and "stream" in response:
+            # Handle streaming response from OpenAI Responses API
             section = self.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
-
+            
             full_response = ""
             for event in response["stream"]:
-                # Handle OpenAI Responses API events properly
                 if hasattr(event, 'type'):
-                    # Handle text output delta events
-                    if event.type == "response.output_text.delta":
-                        content_delta = event.delta
-                        full_response += content_delta
-                        section.update_and_stream("text", content_delta)
-                    # Handle code interpreter code output events
-                    elif event.type == "response.code_interpreter_call_code.delta":
-                        code_delta = event.delta
-                        section.update_and_stream("code", code_delta)
-                    # Handle image generation or plot output events
-                    elif event.type == "response.image_generation_call.partial_image":
-                        image_bytes = base64.b64decode(event.partial_image_b64)
-                        section.update_and_stream("image", image_bytes, filename=f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}", file_id=getattr(event, 'item_id', None))
-                    # Handle file download or container file citation events
-                    elif event.type == "response.output_text.annotation.added":
-                        annotation = event.annotation
-                        if annotation["type"] == "container_file_citation":
-                            file_id = annotation["file_id"]
-                            filename = annotation["filename"]
-                            file_bytes = None
-                            if hasattr(self, '_client') and hasattr(self, '_container_id') and self._client and self._container_id:
-                                file_content = self._client.containers.files.content.retrieve(
-                                    file_id=file_id,
-                                    container_id=self._container_id
-                                )
-                                file_bytes = file_content.read()
-                            if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                                # Show both image and download button for image files
-                                section.update_and_stream("image", file_bytes, filename=filename, file_id=file_id)
-                                section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
-                            else:
-                                section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
-                    # Handle other event types as needed
-                    elif event.type == "response.completed":
-                        pass  # Response completed
-            response["content"] = full_response  # Update response for session state
-        # Single agent response or non-workflow response using Section
+                    full_response += self._process_stream_event(event, section)
+            
+            response["content"] = full_response
         else:
+            # Handle non-streaming response from agent
             section = self.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             section.update_and_stream("text", response["content"])
 
-        # Save single agent's response to chat history for display
-        # Context building is currently not fully implemented
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
             st.session_state.messages.append(response)
+    
+    def _process_file_uploads(self, files):
+        """Process uploaded files and update workflow state."""
+        for uploaded_file in files:
+            if uploaded_file not in st.session_state.uploaded_files:
+                file_info = self.file_handler.save_uploaded_file(uploaded_file)
+                st.session_state.uploaded_files.append(uploaded_file)
+                if "files" in st.session_state.workflow_state:
+                    st.session_state.workflow_state["files"].append({
+                        k: v for k, v in file_info.__dict__.items() if k != "content"
+                    })
+    
+    def _process_stream_event(self, event, section) -> str:
+        """
+        Process a single streaming event from OpenAI Responses API.
+        
+        Handles various event types: text deltas, code interpreter output,
+        image generation, and file citations.
+        """
+        if event.type == "response.output_text.delta":
+            section.update_and_stream("text", event.delta)
+            return event.delta
+        elif event.type == "response.code_interpreter_call_code.delta":
+            section.update_and_stream("code", event.delta)
+        elif event.type == "response.image_generation_call.partial_image":
+            image_bytes = base64.b64decode(event.partial_image_b64)
+            filename = f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}"
+            section.update_and_stream("image", image_bytes, filename=filename, file_id=getattr(event, 'item_id', None))
+        elif event.type == "response.output_text.annotation.added":
+            annotation = event.annotation
+            if annotation["type"] == "container_file_citation":
+                file_id = annotation["file_id"]
+                filename = annotation["filename"]
+                file_bytes = None
+                
+                if hasattr(self, '_client') and hasattr(self, '_container_id') and self._client and self._container_id:
+                    file_content = self._client.containers.files.content.retrieve(
+                        file_id=file_id, container_id=self._container_id
+                    )
+                    file_bytes = file_content.read()
+                    
+                if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                    section.update_and_stream("image", file_bytes, filename=filename, file_id=file_id)
+                    section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
+                else:
+                    section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
+        return ""
     
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
         """Generate response using the configured workflow or dynamically selected agents."""
@@ -403,44 +381,39 @@ class LangGraphChat:
             }
     
     def _execute_workflow(self, prompt: str) -> Dict[str, Any]:
-        """Execute the LangGraph workflow with sequential agent display."""
+        """
+        Execute the LangGraph workflow with sequential agent display.
         
-        st.session_state.workflow_displayed_count = 0 # Track to what it is alredy shown
-        # Execute workflow with streaming display callback
+        Uses a display callback to show agent responses as they complete during
+        workflow execution. This provides real-time feedback in the Streamlit UI.
+        """
+        st.session_state.workflow_displayed_count = 0
+        
         def display_agent_response(state):
-            """Callback to display agent responses as they complete."""
+            """Callback to display agent responses as they complete during workflow execution."""
             if state and "messages" in state:
-                # Get assistant messages from the workflow state
                 assistant_messages = [
                     msg for msg in state["messages"] 
                     if msg["role"] == "assistant" and msg.get("agent") and msg.get("agent") != "system"
                 ]
                 
-                # Check if there are new assistant messages to display
                 if len(assistant_messages) > st.session_state.workflow_displayed_count:
-                    # Get the new messages that haven't been displayed yet
                     new_messages = assistant_messages[st.session_state.workflow_displayed_count:]
                     for new_msg in new_messages:
                         agent_name = new_msg.get("agent", "Assistant")
-                        # Display the agent response sequentially using Section
                         section = self.add_section("assistant")
                         section._agent_info = {"agent": agent_name}
                         section.update_and_stream("text", new_msg['content'])
-                        # Add to session state
                         st.session_state.messages.append({
                             "role": "assistant",
                             "content": new_msg['content'],
                             "agent": agent_name
                         })
-                        # Update the displayed count
                         st.session_state.workflow_displayed_count += 1
         
         try:
-            # Execute workflow with display callback for sequential updates
             result_state = self.workflow_executor.execute_workflow(
-                self.workflow, 
-                prompt, 
-                display_callback=display_agent_response
+                self.workflow, prompt, display_callback=display_agent_response
             )
         except Exception as e:
             return {
@@ -448,23 +421,8 @@ class LangGraphChat:
                 "content": f"❌ **Error executing workflow: {str(e)}**",
                 "agent": "workflow"
             }
+        
         st.session_state.workflow_state = result_state
-        
-        # # Check if workflow produced any agent responses
-        # has_agent_responses = any(
-        #     msg["role"] == "assistant"
-        #     and msg.get("agent")
-        #     and msg.get("agent") not in ["workflow", "END", "__end__"]
-        #     for msg in result_state["messages"]
-        # )
-        # if not has_agent_responses:
-        #     return {
-        #         "role": "assistant",
-        #         "content": "❌ **No agent responses generated from workflow**",
-        #         "agent": "workflow"
-        #     }
-        
-        # Return a single to indicate workflow completion
         return {
             "role": "assistant",
             "content": "",
@@ -472,20 +430,15 @@ class LangGraphChat:
         }
 
     def _build_context(self) -> str:
-        """
-        This is a helper function for a single agent response.
-        Build context string from conversation history.
-        """
+        """Build context string from recent conversation history and uploaded files."""
         context_parts = []
-        
-        # Recent messages
         recent_messages = st.session_state.messages[-5:] if st.session_state.messages else []
+        
         for msg in recent_messages:
             role = msg["role"].title()
             content = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
             context_parts.append(f"{role}: {content}")
         
-        # Uploaded files summary
         if st.session_state.uploaded_files:
             file_context = self.file_handler.get_file_context_summary()
             context_parts.append(f"\n--- Uploaded Files ---\n{file_context}")
@@ -493,41 +446,12 @@ class LangGraphChat:
         return "\n".join(context_parts) if context_parts else "No previous context"
     
     def _execute_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
-        """
-        This is a helper function for a single agent response.
-        Execute prompt with a specific agent, using explicit type for routing.
-        """
-        context = self._build_context()
-        tool_descriptions = []
-        if agent.allow_web_search:
-            tool_descriptions.append("🌐 **Web Search**: Search the internet for current information")
-        if agent.allow_code_interpreter:
-            tool_descriptions.append("🐍 **Code Interpreter**: Execute Python code and create visualizations")
-        if agent.allow_file_search:
-            tool_descriptions.append("📁 **File Search**: Search through uploaded documents")
-        for tool in agent.tools:
-            if tool in CustomTool._registry:
-                tool_obj = CustomTool._registry[tool]
-                tool_descriptions.append(f"🔧 **{tool_obj.name}**: {tool_obj.description}")
-        file_context_note = ""
-        if st.session_state.uploaded_files:
-            file_context_note = f"""
-
-IMPORTANT: The user has uploaded {len(st.session_state.uploaded_files)} file(s). The file contents are included in the conversation context below. You can read, analyze, and discuss these files directly. When referring to file contents, be specific and helpful."""
-        enhanced_instructions = f"""You are {agent.role}. {agent.instructions}
-
-Available tools:
-{chr(10).join(tool_descriptions) if tool_descriptions else "No special tools available"}{file_context_note}
-
-Current conversation context:
-{context}
-
-User: {prompt}
-Assistant:"""
+        """Execute prompt with a specific agent for single-agent responses."""
         file_messages = self.file_handler.get_openai_input_messages()
+        
         if agent.type == "response":
             executor = ResponseAPIExecutor(agent)
-            return executor.execute(self.llm, enhanced_instructions, stream=self.config.stream, file_messages=file_messages)
+            return executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages)
         else:
             executor = CreateAgentExecutor(agent, tools=[])
             return executor.execute(self.llm, prompt, stream=False)
