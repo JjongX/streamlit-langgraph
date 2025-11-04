@@ -38,22 +38,10 @@ def create_supervisor_workflow_example():
     with open(config_path, "r", encoding="utf-8") as f:
         agent_configs = yaml.safe_load(f)
 
-    # Set optional arguments for each agent in code
-    # Order: [supervisor, information_gatherer, proposal_writer, general_assistant]
-    optional_args = [
-        # Supervisor
-        dict(allow_web_search=True, allow_file_search=True, allow_code_interpreter=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Information_Gatherer
-        dict(allow_web_search=True, allow_file_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Proposal_Writer
-        dict(tools=["format_proposal"], allow_code_interpreter=True, temperature=0.4, provider="openai", model="gpt-4.1", context="full"),
-        # General_Assistant
-        dict(allow_web_search=True, temperature=0.7, provider="openai", model="gpt-4.1"),
-    ]
-
+    # Create agents from config (all optional arguments are now in the YAML config)
     agents = []
-    for cfg, opts in zip(agent_configs, optional_args):
-        agent = Agent(**cfg, **opts)
+    for cfg in agent_configs:
+        agent = Agent(**cfg)
         agents.append(agent)
 
     research_supervisor = agents[0]

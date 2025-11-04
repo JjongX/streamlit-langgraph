@@ -11,27 +11,9 @@ def create_hierarchical_workflow_example():
     config_path = os.path.join(os.path.dirname(__file__), "./configs/hierarchical.yaml")
     with open(config_path, "r", encoding="utf-8") as f:
         agent_configs = yaml.safe_load(f)
-
-    optional_args = [
-        # Project_Manager (Top Supervisor)
-        dict(allow_web_search=True, allow_file_search=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Research_Team_Lead (Sub-Supervisor 1)
-        dict(allow_web_search=True, allow_file_search=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Data_Researcher (Worker for Research Team)
-        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Literature_Researcher (Worker for Research Team)
-        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Content_Team_Lead (Sub-Supervisor 2)
-        dict(allow_file_search=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Draft_Writer (Worker for Content Team)
-        dict(allow_code_interpreter=True, temperature=0.4, provider="openai", model="gpt-4.1"),
-        # Content_Editor (Worker for Content Team)
-        dict(allow_code_interpreter=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-    ]
-
     agents = []
-    for cfg, opts in zip(agent_configs, optional_args):
-        agent = Agent(**cfg, **opts)
+    for cfg in agent_configs:
+        agent = Agent(**cfg)
         agents.append(agent)
 
     # Unpack agents

@@ -39,23 +39,10 @@ def create_parallel_supervisor_workflow():
     with open(config_path, "r", encoding="utf-8") as f:
         agent_configs = yaml.safe_load(f)
     
-    # Set optional arguments for each agent
-    # Order: [supervisor, market_analyst, technical_analyst, customer_analyst]
-    optional_args = [
-        # Analysis_Supervisor
-        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Market_Analyst
-        dict(allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-        # Technical_Analyst
-        dict(allow_code_interpreter=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-        # Customer_Analyst
-        dict(tools=["analyze_sentiment"], allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-    ]
-    
-    # Create agents from config
+    # Create agents from config (all optional arguments are now in the YAML config)
     agents = []
-    for cfg, opts in zip(agent_configs, optional_args):
-        agent = Agent(**cfg, **opts)
+    for cfg in agent_configs:
+        agent = Agent(**cfg)
         agents.append(agent)
     
     supervisor = agents[0]

@@ -24,6 +24,12 @@
     You have access to all research tools and can synthesize worker outputs into polished final deliverables. 
     You do not need to use every worker for every request, and the workflow will finish automatically when all 
     required steps are complete according to the orchestration logic.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.3
+  allow_web_search: true
+  allow_file_search: true
+  allow_code_interpreter: true
 
 - name: Information_Gatherer
   role: Information Research Specialist
@@ -47,6 +53,11 @@
     - Report findings clearly and completely to supervisor
     
     Always work within your supervisor's guidance and report back with detailed, well-sourced research results.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.0
+  allow_web_search: true
+  allow_file_search: true
 
 - name: Proposal_Writer
   role: Academic Research & Proposal Writing Specialist
@@ -71,6 +82,13 @@
     - Report completion and deliverables to supervisor
     
     Always work within your supervisor's guidance and deliver professionally formatted, comprehensive proposals.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.4
+  allow_code_interpreter: true
+  context: full
+  tools:
+    - format_proposal
 
 - name: General_Assistant
   role: General Purpose AI Assistant
@@ -101,4 +119,8 @@
     - Non-research-specific inquiries
     
     Always be helpful, friendly, and concise in your responses.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.7
+  allow_web_search: true
 
