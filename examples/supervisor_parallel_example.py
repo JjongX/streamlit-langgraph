@@ -1,7 +1,6 @@
 import os
-import yaml
 
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool
+from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool, load_agents_from_yaml
 from streamlit_langgraph.workflow import WorkflowBuilder
 
 def analyze_sentiment(text: str) -> str:
@@ -36,14 +35,7 @@ def create_parallel_supervisor_workflow():
     
     # Load agent configurations from YAML
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_configs = yaml.safe_load(f)
-    
-    # Create agents from config (all optional arguments are now in the YAML config)
-    agents = []
-    for cfg in agent_configs:
-        agent = Agent(**cfg)
-        agents.append(agent)
+    agents = load_agents_from_yaml(config_path)
     
     supervisor = agents[0]
     workers = agents[1:]
@@ -61,7 +53,7 @@ def main():
     parallel_workflow = builder.create_supervisor_workflow(
         supervisor=supervisor,
         workers=workers,
-        execution_mode="parallel"  # Key difference: parallel execution!
+        execution_mode="parallel"
     )
     
     config = UIConfig(

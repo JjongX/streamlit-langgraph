@@ -1,7 +1,6 @@
 import os
-import yaml
 
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat
+from streamlit_langgraph import UIConfig, LangGraphChat, load_agents_from_yaml
 from streamlit_langgraph.workflow import WorkflowBuilder, SupervisorTeam
 
 
@@ -9,12 +8,7 @@ def create_hierarchical_workflow_example():
     """Create a hierarchical workflow with multiple supervisor teams."""
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/hierarchical.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_configs = yaml.safe_load(f)
-    agents = []
-    for cfg in agent_configs:
-        agent = Agent(**cfg)
-        agents.append(agent)
+    agents = load_agents_from_yaml(config_path)
 
     # Unpack agents
     project_manager = agents[0]
@@ -31,7 +25,6 @@ def create_hierarchical_workflow_example():
         workers=[data_researcher, literature_researcher],
         team_name="research_team"
     )
-    
     content_team = SupervisorTeam(
         supervisor=content_team_lead,
         workers=[draft_writer, content_editor],

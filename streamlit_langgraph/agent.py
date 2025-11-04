@@ -1,7 +1,9 @@
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 import openai
+import yaml
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
@@ -67,6 +69,49 @@ class Agent:
     def from_dict(cls, data: Dict) -> "Agent":
         """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
+
+def load_agents_from_yaml(yaml_path: str) -> List[Agent]:
+    """
+    Load multiple Agent instances from a YAML configuration file.
+    
+    This function is designed for multi-agent configurations. For single agents,
+    use the Agent class directly: Agent(name="...", role="...", ...)
+    
+    Args:
+        yaml_path: Path to the YAML file containing agent configurations.
+                  Can be absolute or relative path. If relative, it's resolved
+                  relative to the current working directory.
+    
+    Returns:
+        List of Agent instances loaded from the YAML file.
+    
+    Example:
+        # Load agents from a config file
+        agents = load_agents_from_yaml("./configs/supervisor_sequential.yaml")
+        supervisor = agents[0]
+        workers = agents[1:]
+        
+        # Or use relative to current file
+        config_path = os.path.join(os.path.dirname(__file__), "./configs/my_agents.yaml")
+        agents = load_agents_from_yaml(config_path)
+    """
+    # Resolve path - handle both absolute and relative paths
+    if not os.path.isabs(yaml_path):
+        yaml_path = os.path.abspath(yaml_path)
+    if not os.path.exists(yaml_path):
+        raise FileNotFoundError(f"YAML config file not found: {yaml_path}")
+    
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        agent_configs = yaml.safe_load(f)
+    if not isinstance(agent_configs, list):
+        raise ValueError(f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}")
+    agents = []
+    for cfg in agent_configs:
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Each agent configuration must be a dictionary. Got: {type(cfg)}")
+        agents.append(Agent(**cfg))
+    
+    return agents
 
 def get_llm_client(agent: Agent) -> Union[openai.OpenAI, Any]:
     """Get the appropriate LLM client for an agent based on its configuration."""

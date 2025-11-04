@@ -29,7 +29,7 @@
     You manage the overall project flow and ensure all teams work together effectively.
   provider: openai
   model: gpt-4.1
-  temperature: 0.3
+  temperature: 0.0
   allow_web_search: true
   allow_file_search: true
 
