@@ -6,9 +6,12 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
+from .utils import MIME_TYPES
+
 from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
-from .utils import FileHandler, CustomTool, MIME_TYPES
+from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils
 from .workflow import WorkflowExecutor, create_initial_state
+from .workflow.state import set_pending_interrupt
 
 @dataclass
 class UIConfig:
@@ -28,44 +31,6 @@ class LangGraphChat:
     """
     Main class for creating agent chat interfaces with Streamlit and LangGraph.
     """
-    
-    def __init__(
-        self,
-        workflow=None,
-        agents: Optional[List[Agent]] = None,
-        config: Optional[UIConfig] = None,
-        custom_tools: Optional[List[CustomTool]] = None,
-    ):
-        """
-        Initialize the LangGraph Chat interface.
-
-        Args:
-            workflow: LangGraph workflow (StateGraph)
-            agents: List of agents to use
-            config: Chat configuration
-            custom_tools: List of custom tools
-        """
-        self.config = config or UIConfig()
-        self.agent_manager = AgentManager()
-        self.workflow = workflow
-        self.workflow_executor = WorkflowExecutor() if workflow else None
-        # Initialize agents
-        if agents:
-            for agent in agents:
-                self.agent_manager.add_agent(agent)
-        # Register custom tools
-        if custom_tools:
-            for tool in custom_tools:
-                CustomTool.register_tool(
-                    tool.name, tool.description, tool.function, 
-                    parameters=tool.parameters, return_direct=tool.return_direct
-                )
-        self.llm = self._initialize_llm()
-        openai_client = self.llm if hasattr(self.llm, 'files') else None
-        self.file_handler = FileHandler(openai_client=openai_client)
-        self._init_session_state()
-        self._sections = []
-        self._download_button_key = 0
     
     class Block:
         """A block of content in the chat."""
@@ -120,7 +85,7 @@ class LangGraphChat:
             self.role = role
             self.blocks = blocks or []
             self.delta_generator = st.empty()
-            
+                
         @property
         def empty(self) -> bool:
             """Returns True if the section has no blocks."""
@@ -157,7 +122,48 @@ class LangGraphChat:
                         block.write()
                     if hasattr(self, '_agent_info') and "agent" in self._agent_info:
                         st.caption(f"Agent: {self._agent_info['agent']}")
+    
+    def __init__(
+        self,
+        workflow=None,
+        agents: Optional[List[Agent]] = None,
+        config: Optional[UIConfig] = None,
+        custom_tools: Optional[List[CustomTool]] = None,
+    ):
+        """
+        Initialize the LangGraph Chat interface.
 
+        Args:
+            workflow: LangGraph workflow (StateGraph)
+            agents: List of agents to use
+            config: Chat configuration
+            custom_tools: List of custom tools
+        """
+        self.config = config or UIConfig()
+        self.agent_manager = AgentManager()
+        self.workflow = workflow
+        self.workflow_executor = WorkflowExecutor() if workflow else None
+        # Initialize agents
+        if agents:
+            for agent in agents:
+                if agent.human_in_loop and not workflow: # Validate HITL
+                    raise ValueError("Human-in-the-loop is only available for multiagent workflows.")
+                self.agent_manager.add_agent(agent)
+        # Register custom tools
+        if custom_tools:
+            for tool in custom_tools:
+                CustomTool.register_tool(
+                    tool.name, tool.description, tool.function, 
+                    parameters=tool.parameters, return_direct=tool.return_direct
+                )
+        self.llm = self._initialize_llm()
+        openai_client = self.llm if hasattr(self.llm, 'files') else None
+        self.file_handler = FileHandler(openai_client=openai_client)
+        self.hitl_handler = HITLHandler(self.agent_manager, self.config)
+        self._init_session_state()
+        self._sections = []
+        self._download_button_key = 0
+    
     def create_block(self, category, content=None, filename=None, file_id=None) -> "Block":
         return self.Block(self, category, content=content, filename=filename, file_id=file_id)
 
@@ -189,8 +195,58 @@ class LangGraphChat:
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []
         
-        if "agent_outputs" not in st.session_state:
-            st.session_state.agent_outputs = {}
+        # Initialize HITL-related session state
+        if "workflow_displayed_count" not in st.session_state:
+            st.session_state.workflow_displayed_count = 0
+        if "agent_executors" not in st.session_state:
+            st.session_state.agent_executors = {}
+    
+    def _sync_session_state_from_workflow_state(self, workflow_state: Dict[str, Any]) -> None:
+        """
+        Sync session_state from workflow_state.
+        
+        WorkflowState is the single source of truth for all agent-processed information.
+        This method syncs session_state for UI rendering purposes.
+        
+        Args:
+            workflow_state: The WorkflowState to sync from
+        """
+        if not workflow_state:
+            return
+        
+        # Sync messages from workflow_state to session_state
+        # Only sync assistant messages that aren't already in session_state
+        workflow_messages = workflow_state.get("messages", [])
+        
+        # Find new messages from workflow_state that aren't in session_state
+        new_messages = []
+        for msg in workflow_messages:
+            # Skip system messages and messages already in session_state
+            if msg.get("role") == "system":
+                continue
+            
+            # Check for duplicate messages in session_state by comparing content and agent
+            is_duplicate = False
+            for existing_msg in st.session_state.messages:
+                if (existing_msg.get("content") == msg.get("content") and 
+                    existing_msg.get("role") == msg.get("role") and
+                    existing_msg.get("agent") == msg.get("agent")):
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                new_messages.append(msg)
+        
+        # Add new messages to session_state
+        for msg in new_messages:
+            # Convert workflow message format to session_state format
+            session_msg = {"role": msg.get("role"), "content": msg.get("content", "")}
+            if "agent" in msg:
+                session_msg["agent"] = msg["agent"]
+            st.session_state.messages.append(session_msg)
+        
+        # Sync current_agent
+        if "current_agent" in workflow_state:
+            st.session_state.current_agent = workflow_state["current_agent"]
     
     def run(self):
         """Run the main chat interface."""
@@ -232,7 +288,6 @@ class LangGraphChat:
                             st.write("**Capabilities:**")
                             for cap in capabilities:
                                 st.write(f"- {cap}")
-    
             # Add chat-specific controls
             st.header("Controls")
             if st.button("Reset All", type="secondary"):
@@ -241,11 +296,23 @@ class LangGraphChat:
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
+        # Sync session_state from workflow_state first
+        workflow_state = st.session_state.get("workflow_state")
+        if workflow_state:
+            self._sync_session_state_from_workflow_state(workflow_state)
+        
         # Display welcome message
         if self.config.welcome_message and not st.session_state.messages:
             with st.chat_message("assistant", avatar=self.config.assistant_avatar):
                 st.markdown(self.config.welcome_message)
 
+        # Check for pending interrupts FIRST - workflow_state is the single source of truth
+        if HITLUtils.has_pending_interrupts(workflow_state):
+            interrupt_handled = self.hitl_handler.handle_pending_interrupts(workflow_state)
+            if interrupt_handled:
+                return  # Don't process messages or show input while handling interrupts
+
+        # Render chat messages
         for message in st.session_state.messages:
             if message.get("role") == "assistant" and (message.get("agent") == "END" or message.get("agent") is None):
                 continue
@@ -273,26 +340,36 @@ class LangGraphChat:
         if files:
             self._process_file_uploads(files)
         
-        st.session_state.messages.append({
-            "role": "user",
-            "content": prompt
-        })
-        
+        # Update workflow_state first
+        user_message = {"role": "user", "content": prompt, "agent": None, "timestamp": None}
+        st.session_state.workflow_state["messages"].append(user_message)
+        # Sync to session_state for UI rendering
+        st.session_state.messages.append({"role": "user", "content": prompt})
         # Display user message and attached files in the chat
         with st.chat_message("user", avatar=self.config.user_avatar):
             st.markdown(prompt)
             if files:
                 for uploaded_file in files:
                     st.markdown(f":material/attach_file: `{uploaded_file.name}`")
-        
-        user_message = {"role": "user", "content": prompt, "agent": None, "timestamp": None}
-        st.session_state.workflow_state["messages"].append(user_message)
+
+        # Clear HITL-related session state 
+        if "metadata" in st.session_state.workflow_state:
+            if "pending_interrupts" in st.session_state.workflow_state["metadata"]:
+                st.session_state.workflow_state["metadata"]["pending_interrupts"] = {}
+            if "hitl_decisions" in st.session_state.workflow_state["metadata"]:
+                st.session_state.workflow_state["metadata"]["hitl_decisions"] = {}
+        # Clear agent executors to prevent reuse of old checkpointer data
+        st.session_state.agent_executors = {}
         
         with st.spinner("Thinking..."):
             response = self._generate_response(prompt)
 
         if response.get("agent") == "workflow-completed":
             return
+        
+        # Handle interrupts from human-in-the-loop
+        if response.get("__interrupt__"):
+            st.rerun()
         
         if response and "stream" in response:
             # Handle streaming response from OpenAI Responses API
@@ -311,9 +388,20 @@ class LangGraphChat:
             section._agent_info = {"agent": response["agent"]}
             section.update_and_stream("text", response["content"])
 
+        # This handles streaming responses that might not have been synced yet.
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
-            st.session_state.messages.append(response)
+            # Check if message already exists in session_state
+            message_exists = False
+            for msg in st.session_state.messages:
+                if (msg.get("content") == response.get("content") and 
+                    msg.get("role") == response.get("role") and
+                    msg.get("agent") == response.get("agent")):
+                    message_exists = True
+                    break
+            
+            if not message_exists:
+                st.session_state.messages.append(response)
     
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
@@ -386,11 +474,20 @@ class LangGraphChat:
         
         Uses a display callback to show agent responses as they complete during
         workflow execution. This provides real-time feedback in the Streamlit UI.
+        Also handles human-in-the-loop interrupts from workflow execution.
+        
+        All agent-processed information is stored in WorkflowState first,
+        then synced to session_state for UI rendering.
         """
         st.session_state.workflow_displayed_count = 0
         
         def display_agent_response(state):
-            """Callback to display agent responses as they complete during workflow execution."""
+            """
+            Callback to display agent responses as they complete during workflow execution.
+            
+            Note: Messages are already in WorkflowState. We just sync them to session_state
+            for UI display purposes. WorkflowState remains the source of truth.
+            """
             if state and "messages" in state:
                 assistant_messages = [
                     msg for msg in state["messages"] 
@@ -404,11 +501,10 @@ class LangGraphChat:
                         section = self.add_section("assistant")
                         section._agent_info = {"agent": agent_name}
                         section.update_and_stream("text", new_msg['content'])
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": new_msg['content'],
-                            "agent": agent_name
-                        })
+                        
+                        # Sync to session_state for UI (but workflow_state is source of truth)
+                        session_msg = {"role": "assistant", "content": new_msg.get("content", ""), "agent": agent_name}
+                        st.session_state.messages.append(session_msg)
                         st.session_state.workflow_displayed_count += 1
         
         try:
@@ -416,13 +512,48 @@ class LangGraphChat:
                 self.workflow, prompt, display_callback=display_agent_response
             )
         except Exception as e:
-            return {
+            # Update workflow_state with error message
+            error_message = {
                 "role": "assistant",
                 "content": f"❌ **Error executing workflow: {str(e)}**",
+                "agent": "workflow",
+                "timestamp": None
+            }
+            st.session_state.workflow_state["messages"].append(error_message)
+            st.session_state.workflow_state["agent_outputs"]["workflow"] = error_message["content"]
+            
+            # Sync to session_state
+            self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+
+            return {
+                "role": "assistant",
+                "content": error_message["content"],
                 "agent": "workflow"
             }
         
+        # Check for interrupts in final state - if found, trigger rerun to show UI
+        if HITLUtils.has_pending_interrupts(result_state):
+            # Store workflow state and trigger rerun
+            st.session_state.workflow_state = result_state
+            # Sync session_state from workflow_state before rerun
+            self._sync_session_state_from_workflow_state(result_state)
+            st.rerun()
+        
+        # Clear HITL state when workflow completes without pending interrupts
+        if result_state and not HITLUtils.has_pending_interrupts(result_state):
+            # Clear HITL state when workflow completes successfully
+            if "metadata" in result_state:
+                if "pending_interrupts" in result_state["metadata"]:
+                    result_state["metadata"]["pending_interrupts"] = {}
+                if "hitl_decisions" in result_state["metadata"]:
+                    result_state["metadata"]["hitl_decisions"] = {}
+            st.session_state.agent_executors = {}
+        
+        # Update workflow_state 
         st.session_state.workflow_state = result_state
+        # Sync session_state from workflow_state after workflow completion
+        self._sync_session_state_from_workflow_state(result_state)
+        
         return {
             "role": "assistant",
             "content": "",
@@ -446,14 +577,118 @@ class LangGraphChat:
         return "\n".join(context_parts) if context_parts else "No previous context"
     
     def _execute_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
-        """Execute prompt with a specific agent for single-agent responses."""
+        """
+        Execute prompt with a specific agent for single-agent responses.
+        
+        All agent outputs are stored in WorkflowState first, then synced to session_state.
+        """
         file_messages = self.file_handler.get_openai_input_messages()
         
         if agent.type == "response":
-            executor = ResponseAPIExecutor(agent)
-            return executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages)
+            # For HITL, persist executor in session_state
+            if agent.human_in_loop and agent.interrupt_on:
+                executor_key = "single_agent_executor"
+                if "agent_executors" not in st.session_state:
+                    st.session_state.agent_executors = {}
+                
+                if executor_key not in st.session_state.agent_executors:
+                    executor = ResponseAPIExecutor(agent)
+                    st.session_state.agent_executors[executor_key] = executor
+                else:
+                    executor = st.session_state.agent_executors[executor_key]
+                
+                thread_id = executor.thread_id
+                config = {"configurable": {"thread_id": thread_id}}
+                response = executor.execute(self.llm, prompt, stream=False, file_messages=file_messages, config=config)
+            else:
+                executor = ResponseAPIExecutor(agent)
+                response = executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages)
+            
+            # Handle interrupts from ResponseAPIExecutor
+            if response.get("__interrupt__"):
+                # Store interrupt in workflow state for consistency
+                if "workflow_state" not in st.session_state:
+                    st.session_state.workflow_state = create_initial_state()
+                interrupt_data = {
+                    "__interrupt__": response["__interrupt__"],
+                    "thread_id": response.get("thread_id"),
+                    "config": response.get("config"),
+                    "agent": response.get("agent"),
+                    "executor_key": "single_agent_executor"
+                }
+                set_pending_interrupt(
+                    st.session_state.workflow_state,
+                    agent.name,
+                    interrupt_data,
+                    "single_agent_executor"
+                )
+                if "agent_executors" not in st.session_state:
+                    st.session_state.agent_executors = {}
+                st.session_state.agent_executors["single_agent_executor"] = executor
+                
+                # Sync to session_state
+                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+                return response
+            
+            # Update workflow_state with agent response (single source of truth)
+            if response.get("content"):
+                assistant_message = {
+                    "role": "assistant",
+                    "content": response.get("content", ""),
+                    "agent": response.get("agent", agent.name),
+                    "timestamp": None
+                }
+                st.session_state.workflow_state["messages"].append(assistant_message)
+                st.session_state.workflow_state["agent_outputs"][agent.name] = response.get("content", "")
+                st.session_state.workflow_state["current_agent"] = agent.name
+                
+                # Sync to session_state
+                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+            
+            return response
         else:
-            executor = CreateAgentExecutor(agent, tools=[])
-            return executor.execute(self.llm, prompt, stream=False)
+            # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
+            executor = CreateAgentExecutor(agent)
+            response = executor.execute(self.llm, prompt, stream=False)
+            
+            # Update workflow_state with agent response (single source of truth)
+            if response.get("content"):
+                assistant_message = {
+                    "role": "assistant",
+                    "content": response.get("content", ""),
+                    "agent": agent.name,
+                    "timestamp": None
+                }
+                st.session_state.workflow_state["messages"].append(assistant_message)
+                st.session_state.workflow_state["agent_outputs"][agent.name] = response.get("content", "")
+                st.session_state.workflow_state["current_agent"] = agent.name
+                
+                # Sync to session_state
+                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+            
+            if response.get("__interrupt__"):
+                # Store interrupt in workflow state for consistency
+                if "workflow_state" not in st.session_state:
+                    st.session_state.workflow_state = create_initial_state()
+                interrupt_data = {
+                    "__interrupt__": response["__interrupt__"],
+                    "thread_id": response.get("thread_id"),
+                    "config": response.get("config"),
+                    "agent": response.get("agent"),
+                    "executor_key": "single_agent_executor"
+                }
+                set_pending_interrupt(
+                    st.session_state.workflow_state,
+                    agent.name,
+                    interrupt_data,
+                    "single_agent_executor"
+                )
+                st.session_state.agent_executors["single_agent_executor"] = executor
+                
+                # Sync to session_state
+                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+            
+            return response
+    
 
     
