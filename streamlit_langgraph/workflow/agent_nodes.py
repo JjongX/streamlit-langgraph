@@ -332,15 +332,6 @@ class AgentNodeFactory:
                 from ..utils import CustomTool
                 executor.tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
             
-            # Validate interrupt_on keys match available tool names
-            if executor.tools and agent.interrupt_on:
-                tool_names = [t.name if hasattr(t, 'name') else str(t) for t in executor.tools]
-                interrupt_tools = set(agent.interrupt_on.keys())
-                available_tools = set(tool_names)
-                missing = interrupt_tools - available_tools
-                if missing:
-                    pass
-            
             # Also store metadata for reference (thread_id, etc.)
             if "executors" not in state.get("metadata", {}):
                 state["metadata"]["executors"] = {}
