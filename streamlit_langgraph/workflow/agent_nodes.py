@@ -2,6 +2,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
+from langchain_core.tools import StructuredTool
 
 from ..agent import Agent, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
 from ..prompts import (
@@ -39,15 +40,10 @@ class AgentNodeFactory:
             LangGraph node function that executes supervisor and returns routing decision
         """
         def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
-            # Check if there's a pending interrupt - if so, don't execute supervisor
-            # This prevents the supervisor from continuing to delegate when workers are waiting for approval
+            # Don't execute supervisor if there's a pending interrupt
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
             if pending_interrupts:
-                # Return minimal update to preserve state and pause workflow
-                return {
-                    "current_agent": supervisor.name,
-                    "metadata": state.get("metadata", {})
-                }
+                return {"current_agent": supervisor.name, "metadata": state.get("metadata", {})}
             
             worker_outputs = AgentNodeFactory._build_worker_outputs_summary(state, workers)
             
@@ -62,7 +58,6 @@ class AgentNodeFactory:
                 supervisor, state, supervisor_instructions, workers, allow_parallel
             )
             
-            # Preserve existing metadata (especially pending_interrupts) when updating routing_decision
             updated_metadata = merge_metadata(
                 state.get("metadata", {}),
                 {"routing_decision": routing_decision}
@@ -114,8 +109,9 @@ class AgentNodeFactory:
         Execute supervisor agent with structured routing via function calling.
         
         LangGraph workflows use conditional edges based on routing decisions. This method
-        uses OpenAI's function calling to get structured routing decisions. Other providers
-        fallback to text-based analysis.
+        uses OpenAI's function calling to get structured routing decisions for ResponseAPIExecutor.
+        For CreateAgentExecutor, it uses LangChain's tool calling mechanism to enable delegation.
+        Other providers fallback to text-based analysis.
         
         Args:
             agent: Supervisor agent
@@ -127,39 +123,47 @@ class AgentNodeFactory:
         Returns:
             Tuple of (response_content, routing_decision_dict)
         """
-        if agent.provider.lower() != "openai" or agent.type != "response":
-            content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
-            return content, {"action": "finish"}
+        # Handle OpenAI ResponseAPIExecutor with direct function calling
+        if agent.provider.lower() == "openai" and agent.type == "response":
+            client = get_llm_client(agent)
+            
+            tools = AgentNodeFactory._build_delegation_tool(workers, allow_parallel)
+            
+            enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
+            
+            messages = [{"role": "user", "content": enhanced_instructions}]
+            
+            with st.spinner(f"🤖 {agent.name} is working..."):
+                if tools:
+                    response = client.chat.completions.create(
+                        model=agent.model,
+                        messages=messages,
+                        temperature=agent.temperature,
+                        tools=tools,
+                        tool_choice="auto"
+                    )
+                else:
+                    response = client.chat.completions.create(
+                        model=agent.model,
+                        messages=messages,
+                        temperature=agent.temperature
+                    )
+            
+            message = response.choices[0].message
+            content = message.content or ""
+            routing_decision = AgentNodeFactory._extract_routing_decision(message, content)
+            return routing_decision[1], routing_decision[0]
         
-        client = get_llm_client(agent)
+        # Handle CreateAgentExecutor with LangChain tool calling for delegation
+        # Check if we have workers to delegate to
+        if workers:
+            return AgentNodeFactory._execute_supervisor_with_langchain_routing(
+                agent, state, input_message, workers, allow_parallel
+            )
         
-        tools = AgentNodeFactory._build_delegation_tool(workers, allow_parallel)
-        
-        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-        
-        messages = [{"role": "user", "content": enhanced_instructions}]
-        
-        with st.spinner(f"🤖 {agent.name} is working..."):
-            if tools:
-                response = client.chat.completions.create(
-                    model=agent.model,
-                    messages=messages,
-                    temperature=agent.temperature,
-                    tools=tools,
-                    tool_choice="auto"
-                )
-            else:
-                # No workers available, just get response
-                response = client.chat.completions.create(
-                    model=agent.model,
-                    messages=messages,
-                    temperature=agent.temperature
-                )
-        
-        message = response.choices[0].message
-        content = message.content or ""
-        routing_decision = AgentNodeFactory._extract_routing_decision(message, content)
-        return routing_decision[1], routing_decision[0]
+        # No workers available, fallback to text-based
+        content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
+        return content, {"action": "finish"}
     
     @staticmethod
     def _build_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
@@ -202,6 +206,261 @@ class AgentNodeFactory:
                 }
             }
         }]
+    
+    @staticmethod
+    def _execute_supervisor_with_langchain_routing(agent: Agent, state: WorkflowState,
+                                                   input_message: str, workers: List[Agent],
+                                                   allow_parallel: bool = False) -> tuple[str, Dict[str, Any]]:
+        """
+        Execute supervisor agent with LangChain tool calling for delegation.
+        
+        This method enables CreateAgentExecutor to delegate tasks using LangChain's
+        tool calling mechanism, similar to how ResponseAPIExecutor uses OpenAI function calling.
+        
+        Args:
+            agent: Supervisor agent (using CreateAgentExecutor)
+            state: Current workflow state
+            input_message: Supervisor instructions/prompt
+            workers: Available worker agents
+            allow_parallel: If True, allows "PARALLEL" delegation option
+            
+        Returns:
+            Tuple of (response_content, routing_decision_dict)
+        """
+        # Build delegation tool as LangChain StructuredTool
+        delegation_tool = AgentNodeFactory._build_delegation_langchain_tool(workers, allow_parallel)
+        
+        if not delegation_tool:
+            # No workers available, fallback to text-based
+            content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
+            return content, {"action": "finish"}
+        
+        # Get or create executor
+        llm_client = get_llm_client(agent)
+        executor_key = f"workflow_executor_{agent.name}"
+        
+        if "agent_executors" not in st.session_state:
+            st.session_state.agent_executors = {}
+        
+        # Create executor with delegation tool temporarily added
+        if executor_key not in st.session_state.agent_executors:
+            # Get existing tools from agent
+            from ..utils import CustomTool
+            existing_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+            # Add delegation tool
+            all_tools = existing_tools + [delegation_tool]
+            executor = CreateAgentExecutor(agent, tools=all_tools)
+            st.session_state.agent_executors[executor_key] = executor
+        else:
+            # Reuse existing executor but temporarily add delegation tool
+            executor = st.session_state.agent_executors[executor_key]
+            # Get existing tools
+            existing_tools = executor.tools.copy() if executor.tools else []
+            # Temporarily add delegation tool (if not already present)
+            tool_names = [tool.name for tool in existing_tools]
+            if "delegate_task" not in tool_names:
+                executor.tools = existing_tools + [delegation_tool]
+                # Rebuild agent with updated tools
+                executor.agent_obj = None  # Force rebuild
+        
+        # Store metadata
+        if "executors" not in state.get("metadata", {}):
+            state["metadata"]["executors"] = {}
+        state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
+        
+        # Execute with enhanced instructions
+        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
+        config = {"configurable": {"thread_id": executor.thread_id}}
+        
+        with st.spinner(f"🤖 {agent.name} is working..."):
+            # Invoke agent directly to get access to raw output with messages
+            if executor.agent_obj is None:
+                executor._build_agent(llm_client)
+            
+            # Check for interrupts first via streaming
+            interrupt_data = executor._detect_interrupt_in_stream(config, enhanced_instructions)
+            if interrupt_data:
+                result = executor._create_interrupt_response(interrupt_data, executor.thread_id, config)
+                interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                state["metadata"].update(interrupt_update["metadata"])
+                return "", {"action": "finish"}
+            
+            # Invoke agent and get raw output
+            out = executor.agent_obj.invoke(
+                {"messages": [{"role": "user", "content": enhanced_instructions}]},
+                config=config
+            )
+            
+            # Check for interrupt in output
+            if isinstance(out, dict) and "__interrupt__" in out:
+                result = executor._create_interrupt_response(out["__interrupt__"], executor.thread_id, config)
+                interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                state["metadata"].update(interrupt_update["metadata"])
+                return "", {"action": "finish"}
+        
+        # Extract routing decision from agent output messages
+        routing_decision = AgentNodeFactory._extract_routing_decision_from_langchain(
+            out, enhanced_instructions
+        )
+        
+        return routing_decision[1], routing_decision[0]
+    
+    @staticmethod
+    def _build_delegation_langchain_tool(workers: List[Agent], allow_parallel: bool) -> Optional[StructuredTool]:
+        """Build LangChain StructuredTool for delegation."""
+        if not workers:
+            return None
+        
+        worker_name_options = [w.name for w in workers]
+        if allow_parallel and len(workers) > 1:
+            worker_name_options.append("PARALLEL")
+        
+        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
+        if allow_parallel and len(workers) > 1:
+            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
+        
+        # Create a dummy function that will be called when tool is invoked
+        # The actual routing decision is extracted from the tool call itself
+        def delegate_task(worker_name: str, task_description: str, priority: str = "medium") -> str:
+            """
+            Delegate a task to a specialist worker agent.
+            
+            This function is called when the supervisor decides to delegate.
+            The actual routing happens in the workflow, not here.
+            """
+            return f"Task delegated to {worker_name}: {task_description}"
+        
+        # Create tool description
+        tool_description = (
+            f"Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work. "
+            f"Available workers: {', '.join(worker_desc_parts)}"
+        )
+        
+        # Create StructuredTool with proper schema
+        from pydantic import BaseModel, Field
+        
+        class DelegationParams(BaseModel):
+            worker_name: str = Field(
+                description=f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}",
+                enum=worker_name_options
+            )
+            task_description: str = Field(description="Clear description of what the worker should do")
+            priority: str = Field(
+                default="medium",
+                description="Priority level of this task",
+                enum=["high", "medium", "low"]
+            )
+        
+        tool = StructuredTool.from_function(
+            func=delegate_task,
+            name="delegate_task",
+            description=tool_description,
+            args_schema=DelegationParams
+        )
+        
+        return tool
+    
+    @staticmethod
+    def _extract_routing_decision_from_langchain(out: Any, prompt: str) -> tuple[Dict[str, Any], str]:
+        """
+        Extract routing decision from LangChain agent output.
+        
+        Checks the agent's output messages for tool calls to the delegation tool.
+        
+        Args:
+            out: The output from agent_obj.invoke() which may contain messages
+            prompt: The original prompt (for context)
+            
+        Returns tuple of (routing_decision_dict, updated_content)
+        """
+        routing_decision = {"action": "finish"}
+        content = ""
+        
+        # Extract content and check for tool calls in messages
+        try:
+            # The output can be a dict with 'messages' key or just messages
+            messages = None
+            if isinstance(out, dict):
+                if 'messages' in out:
+                    messages = out['messages']
+                elif 'output' in out:
+                    content = str(out['output'])
+            elif hasattr(out, 'messages'):
+                messages = out.messages
+            elif hasattr(out, 'content'):
+                content = out.content
+            
+            # Check messages for tool calls
+            if messages:
+                # Find the last AIMessage with tool_calls
+                from langchain_core.messages import AIMessage
+                
+                for msg in reversed(messages):
+                    # Check if it's an AIMessage with tool_calls
+                    if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                        # Look for delegate_task tool call
+                        for tool_call in msg.tool_calls:
+                            if tool_call.get("name") == "delegate_task" or (
+                                isinstance(tool_call, dict) and tool_call.get("name") == "delegate_task"
+                            ):
+                                # Extract arguments - tool_call can be dict or object
+                                if isinstance(tool_call, dict):
+                                    args = tool_call.get("args", {})
+                                else:
+                                    # Try to get args attribute
+                                    args = getattr(tool_call, "args", {})
+                                
+                                # If args is a string (JSON), parse it
+                                if isinstance(args, str):
+                                    args = json.loads(args)
+                                
+                                routing_decision = {
+                                    "action": "delegate",
+                                    "target_worker": args.get("worker_name"),
+                                    "task_description": args.get("task_description"),
+                                    "priority": args.get("priority", "medium")
+                                }
+                                
+                                delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
+                                # Get content from the message or use extracted content
+                                if hasattr(msg, 'content') and msg.content:
+                                    content = msg.content
+                                if content:
+                                    content = content + delegation_text
+                                else:
+                                    content = delegation_text[2:]  # Remove leading \n\n
+                                return routing_decision, content
+                    
+                    # Also check if message has content (for final response)
+                    if hasattr(msg, 'content') and msg.content and not content:
+                        content = msg.content
+            
+            # If no tool calls found, extract content normally
+            if not content:
+                if isinstance(out, dict):
+                    if 'output' in out:
+                        content = str(out['output'])
+                    elif 'messages' in out and out['messages']:
+                        last_msg = out['messages'][-1]
+                        if hasattr(last_msg, 'content'):
+                            content = last_msg.content
+                        else:
+                            content = str(last_msg)
+                elif hasattr(out, 'content'):
+                    content = out.content
+                else:
+                    content = str(out)
+        except Exception:
+            # Fallback: just extract text content
+            if not content:
+                if isinstance(out, dict) and 'output' in out:
+                    content = str(out['output'])
+                elif isinstance(out, str):
+                    content = out
+                else:
+                    content = str(out)
+        
+        return routing_decision, content or ""
     
     @staticmethod
     def _extract_routing_decision(message, content: str) -> tuple[Dict[str, Any], str]:
@@ -273,7 +532,6 @@ class AgentNodeFactory:
             LangGraph node function that executes worker and updates state
         """
         def worker_agent_node(state: WorkflowState) -> Dict[str, Any]:
-            # Get original user query
             user_query = ""
             for msg in reversed(state["messages"]):
                 if msg["role"] == "user":
@@ -292,24 +550,15 @@ class AgentNodeFactory:
         
             response = AgentNodeFactory._execute_agent(worker, state, worker_instructions, [], 0)
             
-            # Check if there's a pending interrupt after execution
-            # _execute_agent updates state["metadata"] with interrupt info if one occurs
             executor_key = f"workflow_executor_{worker.name}"
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
             
-            # If there's an interrupt, don't add empty message/agent_output
-            # This prevents the supervisor from seeing empty responses and looping
-            # IMPORTANT: Must include metadata to preserve the interrupt in accumulated_state
             if executor_key in pending_interrupts:
-                # Interrupt detected - return update with metadata to preserve interrupt
-                # The workflow executor will detect the interrupt and pause
                 return {
                     "current_agent": worker.name,
-                    "metadata": state.get("metadata", {}),  # CRITICAL: Include metadata to preserve interrupt
-                    # Don't add messages or agent_outputs - let workflow pause for approval
+                    "metadata": state.get("metadata", {}),
                 }
             
-            # No interrupt - return normal response (even if empty, it's a valid response)
             return {
                 "current_agent": worker.name,
                 "messages": [{
@@ -330,82 +579,61 @@ class AgentNodeFactory:
         
         enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
         
-        # Use appropriate executor based on agent type and provider
         llm_client = get_llm_client(agent)
         executor_key = f"workflow_executor_{agent.name}"
         
-        # Initialize agent_executors in session_state if needed
         if "agent_executors" not in st.session_state:
             st.session_state.agent_executors = {}
         
         if agent.provider.lower() == "openai" and agent.type == "response":
-            # For ResponseAPIExecutor, also persist if HITL is enabled
             if agent.human_in_loop and agent.interrupt_on:
-                # Get or create executor from session_state (preserves conversation history)
                 if executor_key not in st.session_state.agent_executors:
                     executor = ResponseAPIExecutor(agent)
                     st.session_state.agent_executors[executor_key] = executor
                 else:
                     executor = st.session_state.agent_executors[executor_key]
                 
-                # Also store metadata for reference (thread_id, etc.)
                 if "executors" not in state.get("metadata", {}):
                     state["metadata"]["executors"] = {}
                 state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
                 
-                # Use thread_id from state for consistent execution
                 thread_id = executor.thread_id
                 config = {"configurable": {"thread_id": thread_id}}
                 
                 result = executor.execute(llm_client, enhanced_instructions, stream=False, config=config)
                 
-                # If there's an interrupt, store it in workflow state using state functions
                 if result.get("__interrupt__"):
                     interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
-                    # Update state metadata
                     state["metadata"].update(interrupt_update["metadata"])
-                    # Return empty content - workflow will pause and wait for human decision
                     return ""
                 
                 content = result.get("content", "")
                 return content
             else:
-                # Normal ResponseAPIExecutor (no HITL)
                 executor = ResponseAPIExecutor(agent)
                 result = executor.execute(llm_client, enhanced_instructions, stream=False)
                 return result.get("content", "")
         else:
-            # For HITL, we need to persist executors across workflow steps
-            # Store executor in workflow state metadata to maintain state
-            # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
             if executor_key not in st.session_state.agent_executors:
-                # Create new executor (tools are loaded automatically from agent.tools)
                 executor = CreateAgentExecutor(agent)
                 st.session_state.agent_executors[executor_key] = executor
             else:
-                # Reuse existing executor (has the same checkpointer with checkpoint data)
                 executor = st.session_state.agent_executors[executor_key]
-                # Update tools if agent's tools have changed
                 from ..utils import CustomTool
                 executor.tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
             
-            # Also store metadata for reference (thread_id, etc.)
             if "executors" not in state.get("metadata", {}):
                 state["metadata"]["executors"] = {}
             state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id,}
             
-            # Use thread_id from state for consistent execution
             thread_id = executor.thread_id
             config = {"configurable": {"thread_id": thread_id}}
             
             result = executor.execute(llm_client, input_message, stream=False, config=config)
             
-            # If there's an interrupt, store it in workflow state using state functions
             if result.get("__interrupt__"):
                 interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
-                # Update state metadata
                 state["metadata"].update(interrupt_update["metadata"])
-                # Return empty content - workflow will pause and wait for human decision
                 return ""
             
             return result.get("content", "")
@@ -437,7 +665,6 @@ class AgentNodeFactory:
             
             agent_tools = AgentNodeFactory._create_agent_tools(tool_agents, state)
             
-            # Execute the calling agent with agent tools available
             response = AgentNodeFactory._execute_agent_with_tools(
                 calling_agent, state, user_query, agent_tools, tool_agents_map
             )
@@ -493,12 +720,8 @@ class AgentNodeFactory:
                                   tool_agents_map: Dict[str, Agent]) -> str:
         """
         Execute an agent with access to tools (other agents wrapped as tools).
-        
-        When the agent calls a tool, we execute the corresponding agent synchronously
-        and return the result back to the calling agent.
         """
         if agent.provider.lower() != "openai":
-            # Fallback to basic execution without tools
             return AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
 
         client = get_llm_client(agent)
