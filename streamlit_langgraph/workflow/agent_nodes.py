@@ -10,7 +10,7 @@ from ..prompts import (
     get_tool_calling_agent_instructions,
     get_tool_agent_instructions,
 )
-from .state import WorkflowState
+from .state import WorkflowState, set_pending_interrupt, merge_metadata
 
 class AgentNodeFactory:
     """
@@ -55,6 +55,12 @@ class AgentNodeFactory:
                 supervisor, state, supervisor_instructions, workers, allow_parallel
             )
             
+            # Preserve existing metadata (especially pending_interrupts) when updating routing_decision
+            updated_metadata = merge_metadata(
+                state.get("metadata", {}),
+                {"routing_decision": routing_decision}
+            )
+            
             return {
                 "current_agent": supervisor.name,
                 "messages": [{
@@ -64,7 +70,7 @@ class AgentNodeFactory:
                     "timestamp": None
                 }],
                 "agent_outputs": {supervisor.name: response},
-                "metadata": {"routing_decision": routing_decision}
+                "metadata": updated_metadata
             }
         
         return supervisor_agent_node
@@ -147,8 +153,6 @@ class AgentNodeFactory:
         content = message.content or ""
         routing_decision = AgentNodeFactory._extract_routing_decision(message, content)
         return routing_decision[1], routing_decision[0]
-                
- 
     
     @staticmethod
     def _build_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
@@ -307,8 +311,56 @@ class AgentNodeFactory:
             executor = ResponseAPIExecutor(agent)
             result = executor.execute(llm_client, enhanced_instructions, stream=False)
         else:
-            executor = CreateAgentExecutor(agent, tools=[])
-            result = executor.execute(llm_client, input_message, stream=False)
+            # For HITL, we need to persist executors across workflow steps
+            # Store executor in workflow state metadata to maintain state
+            executor_key = f"workflow_executor_{agent.name}"
+            
+            # Initialize agent_executors in session_state if needed
+            if "agent_executors" not in st.session_state:
+                st.session_state.agent_executors = {}
+            
+            # Get or create executor from session_state (this preserves the checkpointer instance)
+            # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
+            if executor_key not in st.session_state.agent_executors:
+                # Create new executor (tools are loaded automatically from agent.tools)
+                executor = CreateAgentExecutor(agent)
+                st.session_state.agent_executors[executor_key] = executor
+            else:
+                # Reuse existing executor (has the same checkpointer with checkpoint data)
+                executor = st.session_state.agent_executors[executor_key]
+                # Update tools if agent's tools have changed
+                from ..utils import CustomTool
+                executor.tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+            
+            # Validate interrupt_on keys match available tool names
+            if executor.tools and agent.interrupt_on:
+                tool_names = [t.name if hasattr(t, 'name') else str(t) for t in executor.tools]
+                interrupt_tools = set(agent.interrupt_on.keys())
+                available_tools = set(tool_names)
+                missing = interrupt_tools - available_tools
+                if missing:
+                    pass
+            
+            # Also store metadata for reference (thread_id, etc.)
+            if "executors" not in state.get("metadata", {}):
+                state["metadata"]["executors"] = {}
+            state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id,}
+            
+            # Use thread_id from state for consistent execution
+            thread_id = executor.thread_id
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            result = executor.execute(llm_client, input_message, stream=False, config=config)
+            
+            # If there's an interrupt, store it in workflow state using state functions
+            if result.get("__interrupt__"):
+                interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                # Update state metadata
+                state["metadata"].update(interrupt_update["metadata"])
+                # Return empty content - workflow will pause and wait for human decision
+                return ""
+            
+            return result.get("content", "")
         
         return result.get("content", "")
     

@@ -1,6 +1,6 @@
 import os
 
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool, load_agents_from_yaml
+from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, load_agents_from_yaml
 from streamlit_langgraph.workflow import WorkflowBuilder
 
 def analyze_sentiment(text: str) -> str:

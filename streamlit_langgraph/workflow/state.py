@@ -2,6 +2,23 @@ from typing import Any, Dict, List, Optional, TypedDict
 from typing_extensions import Annotated
 import operator
 
+# Define merge_metadata before WorkflowState since it's used as a reducer in the class definition
+def merge_metadata(x: Dict[str, Any], y: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge metadata dictionaries, preserving all keys from both.
+    This ensures that pending_interrupts and other HITL state is not lost.
+    """
+    result = x.copy() if x else {}
+    if y:
+        for key, value in y.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                # Deep merge for nested dicts (e.g., pending_interrupts, executors)
+                result[key] = {**result[key], **value}
+            else:
+                # Overwrite for non-dict values or new keys
+                result[key] = value
+    return result
+
 class WorkflowState(TypedDict):
     """
     LangGraph-compatible state dictionary for workflow execution.
@@ -14,15 +31,13 @@ class WorkflowState(TypedDict):
     - current_agent: lambda takes latest non-None value
     - agent_outputs: operator.or_ merges dictionaries (Python 3.9+)
     - files: operator.add concatenates lists
-    - metadata: operator.or_ merges dictionaries
+    - metadata: merge_metadata merges dictionaries while preserving all keys
     """
     messages: Annotated[List[Dict[str, Any]], operator.add]
     current_agent: Annotated[Optional[str], lambda x, y: y if y is not None else x]
     agent_outputs: Annotated[Dict[str, Any], operator.or_]
     files: Annotated[List[Dict[str, Any]], operator.add]
-    metadata: Annotated[Dict[str, Any], operator.or_]
-
-# Helper functions to work with WorkflowState
+    metadata: Annotated[Dict[str, Any], merge_metadata]
 
 def create_initial_state(messages: Optional[List[Dict[str, Any]]] = None, current_agent: Optional[str] = None) -> WorkflowState:
     """Create an initial WorkflowState with default values."""
@@ -34,48 +49,54 @@ def create_initial_state(messages: Optional[List[Dict[str, Any]]] = None, curren
         metadata={}
     )
 
-def get_current_agent(state: WorkflowState) -> Optional[str]:
-    """Get the current agent from state."""
-    return state.get("current_agent")
 
-def set_current_agent(state: WorkflowState, agent_name: str) -> Dict[str, Any]:
-    """Return state update to set current agent."""
-    return {"current_agent": agent_name}
-
-def add_message(state: WorkflowState, role: str, content: str, agent: Optional[str] = None) -> Dict[str, Any]:
-    """Return state update to add a message."""
-    new_message = {
-        "role": role,
-        "content": content,
-        "agent": agent,
-        "timestamp": None
+# Human-in-the-loop state management functions
+def set_pending_interrupt(state: WorkflowState, agent_name: str, interrupt_data: Dict[str, Any], executor_key: str) -> Dict[str, Any]:
+    """Store a pending interrupt in workflow state metadata."""
+    if "pending_interrupts" not in state.get("metadata", {}):
+        updated_metadata = state.get("metadata", {}).copy()
+        updated_metadata["pending_interrupts"] = {}
+    else:
+        updated_metadata = state["metadata"].copy()
+        updated_metadata["pending_interrupts"] = updated_metadata["pending_interrupts"].copy()
+    
+    updated_metadata["pending_interrupts"][executor_key] = {
+        "agent": agent_name,
+        "__interrupt__": interrupt_data.get("__interrupt__"),
+        "thread_id": interrupt_data.get("thread_id"),
+        "config": interrupt_data.get("config"),
+        "executor_key": executor_key
     }
-    return {"messages": state["messages"] + [new_message]}
-
-def set_agent_output(state: WorkflowState, agent_name: str, output: Any) -> Dict[str, Any]:
-    """Return state update to set agent output."""
-    updated_outputs = state["agent_outputs"].copy()
-    updated_outputs[agent_name] = output
-    return {"agent_outputs": updated_outputs}
-
-def get_agent_output(state: WorkflowState, agent_name: str) -> Any:
-    """Get agent output from state."""
-    return state["agent_outputs"].get(agent_name)
-
-def set_metadata(state: WorkflowState, key: str, value: Any) -> Dict[str, Any]:
-    """Return state update to set metadata."""
-    updated_metadata = state["metadata"].copy()
-    updated_metadata[key] = value
     return {"metadata": updated_metadata}
 
-def get_metadata(state: WorkflowState, key: str, default: Any = None) -> Any:
-    """Get metadata value from state."""
-    return state["metadata"].get(key, default)
+def get_pending_interrupts(state: WorkflowState) -> Dict[str, Dict[str, Any]]:
+    """Get all pending interrupts from workflow state."""
+    return state.get("metadata", {}).get("pending_interrupts", {})
 
-def set_delegated_agent(state: WorkflowState, agent_name: str) -> Dict[str, Any]:
-    """Return state update to set delegated agent for supervisor workflows."""
-    return set_metadata(state, "delegated_agent", agent_name)
+def clear_pending_interrupt(state: WorkflowState, executor_key: str) -> Dict[str, Any]:
+    """Clear a specific pending interrupt from workflow state."""
+    if "pending_interrupts" not in state.get("metadata", {}):
+        return {"metadata": state.get("metadata", {})}
+    
+    updated_metadata = state["metadata"].copy()
+    updated_metadata["pending_interrupts"] = updated_metadata["pending_interrupts"].copy()
+    updated_metadata["pending_interrupts"].pop(executor_key, None)
+    return {"metadata": updated_metadata}
 
-def get_delegated_agent(state: WorkflowState) -> Optional[str]:
-    """Get the delegated agent from state."""
-    return get_metadata(state, "delegated_agent")
+def set_hitl_decision(state: WorkflowState, executor_key: str, decisions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Store HITL decisions for an interrupt."""
+    decisions_key = f"{executor_key}_decisions"
+    if "hitl_decisions" not in state.get("metadata", {}):
+        updated_metadata = state.get("metadata", {}).copy()
+        updated_metadata["hitl_decisions"] = {}
+    else:
+        updated_metadata = state["metadata"].copy()
+        updated_metadata["hitl_decisions"] = updated_metadata["hitl_decisions"].copy()
+    
+    updated_metadata["hitl_decisions"][decisions_key] = decisions
+    return {"metadata": updated_metadata}
+
+def get_hitl_decision(state: WorkflowState, executor_key: str) -> Optional[List[Dict[str, Any]]]:
+    """Get HITL decisions for an interrupt."""
+    decisions_key = f"{executor_key}_decisions"
+    return state.get("metadata", {}).get("hitl_decisions", {}).get(decisions_key)

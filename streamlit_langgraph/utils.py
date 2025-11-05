@@ -258,6 +258,49 @@ class CustomTool:
         if self.parameters is None:
             self.parameters = self._extract_parameters()
     
+    @classmethod
+    def get_langchain_tools(cls, tool_names: Optional[List[str]] = None) -> List[Any]:
+        """
+        Convert CustomTool registry items to LangChain tools.
+        
+        Args:
+            tool_names: Optional list of tool names to include. If None, includes all registered tools.
+        
+        Returns:
+            List of LangChain tool objects
+        """
+        
+        try:
+            from langchain_core.tools import StructuredTool
+        except ImportError:
+            try:
+                from langchain.tools import StructuredTool
+            except ImportError:
+                return []
+        
+        tools = []
+        registry = cls._registry
+        
+        if tool_names:
+            registry = {name: registry[name] for name in tool_names if name in registry}
+            missing = [name for name in tool_names if name not in registry]
+            if missing:
+                pass
+        
+        for tool_name, custom_tool in registry.items():
+            # Create a LangChain StructuredTool from the custom tool
+            try:
+                tool = StructuredTool.from_function(
+                    func=custom_tool.function,
+                    name=tool_name,
+                    description=custom_tool.description,
+                )
+                tools.append(tool)
+            except Exception:
+                pass
+        
+        return tools
+    
     def _extract_parameters(self) -> Dict[str, Any]:
         """Extract parameters from function signature."""
         sig = inspect.signature(self.function)
@@ -292,3 +335,133 @@ class CustomTool:
                 parameters["required"].append(param_name)
         
         return parameters
+
+
+class HITLUtils:
+    """
+    Utility class for Human-in-the-Loop (HITL) functionality.
+    
+    Provides static methods for handling interrupts, formatting decisions,
+    and checking permissions in HITL workflows.
+    """
+    
+    @staticmethod
+    def extract_action_requests_from_interrupt(interrupt_raw: Any) -> List[Dict[str, Any]]:
+        """
+        Extract action_requests from Interrupt objects.
+        
+        Args:
+            interrupt_raw: Can be a list of Interrupt objects, a dict, or other formats
+            
+        Returns:
+            List of action request dictionaries with keys like 'name', 'args', 'description', 'id'
+        """
+        interrupt_info = []
+        
+        if not interrupt_raw:
+            return interrupt_info
+        
+        # Handle list of Interrupt objects
+        if isinstance(interrupt_raw, list):
+            for interrupt_item in interrupt_raw:
+                if hasattr(interrupt_item, 'value'):
+                    # Extract action_requests from Interrupt.value
+                    interrupt_value = interrupt_item.value
+                    if isinstance(interrupt_value, dict) and 'action_requests' in interrupt_value:
+                        action_requests = interrupt_value['action_requests']
+                        interrupt_info.extend(action_requests)
+                    else:
+                        # If it's already a dict with action info, use it directly
+                        interrupt_info.append(interrupt_value)
+                elif isinstance(interrupt_item, dict):
+                    # If it's already a dict, check if it has action_requests
+                    if 'action_requests' in interrupt_item:
+                        interrupt_info.extend(interrupt_item['action_requests'])
+                    else:
+                        interrupt_info.append(interrupt_item)
+        elif isinstance(interrupt_raw, dict):
+            # Handle single dict
+            if 'action_requests' in interrupt_raw:
+                interrupt_info.extend(interrupt_raw['action_requests'])
+            else:
+                interrupt_info.append(interrupt_raw)
+        
+        return interrupt_info
+    
+    @staticmethod
+    def format_decisions(decisions: List[Optional[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """
+        Format decisions for HumanInTheLoopMiddleware.
+        
+        The middleware expects decisions in format:
+        [{"type": "approve|reject|edit", "edit": {...} if edit}]
+        
+        Args:
+            decisions: List of decision dicts or None values
+            
+        Returns:
+            List of formatted decision dictionaries
+        """
+        formatted_decisions = []
+        for decision in decisions:
+            if decision:
+                formatted_decisions.append(decision)
+            else:
+                # If no decision, default to approve
+                formatted_decisions.append({"type": "approve"})
+        return formatted_decisions
+    
+    @staticmethod
+    def check_edit_allowed(agent_interrupt_on: Optional[Dict[str, Any]], tool_name: str) -> bool:
+        """
+        Check if editing is allowed for a tool based on agent's interrupt_on configuration.
+        
+        Args:
+            agent_interrupt_on: The agent's interrupt_on configuration dict
+            tool_name: Name of the tool to check
+            
+        Returns:
+            True if editing is allowed, False otherwise
+        """
+        if not agent_interrupt_on:
+            return True  # Default to allowing edit if not configured
+        
+        tool_config = agent_interrupt_on.get(tool_name, {})
+        if isinstance(tool_config, dict):
+            allowed_decisions = tool_config.get("allowed_decisions", ["approve", "reject", "edit"])
+            return "edit" in allowed_decisions
+        
+        return True  # Default to allowing edit
+    
+    @staticmethod
+    def parse_edit_input(edit_text: str, default_input: Any) -> tuple:
+        """
+        Parse user edit input, attempting to parse as JSON if it looks like JSON.
+        
+        Args:
+            edit_text: The text input from the user
+            default_input: The default input value to use if parsing fails or text is empty
+            
+        Returns:
+            Tuple of (parsed_input, error_message). error_message is None if successful.
+        """
+        import json
+        
+        if not edit_text.strip():
+            return default_input, None
+        
+        # If it looks like JSON (starts with { or [), try to parse it
+        if edit_text.strip().startswith('{') or edit_text.strip().startswith('['):
+            try:
+                parsed = json.loads(edit_text)
+                return parsed, None
+            except (json.JSONDecodeError, ValueError):
+                return None, "Invalid JSON. Please fix the input format."
+        
+        # Try to parse as JSON anyway, but fallback to string if it fails
+        try:
+            parsed = json.loads(edit_text)
+            return parsed, None
+        except (json.JSONDecodeError, ValueError):
+            # If it's not valid JSON, treat it as a plain string
+            return edit_text, None

@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
+import json
 
 from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
-from .utils import FileHandler, CustomTool, MIME_TYPES
+from .utils import FileHandler, CustomTool, MIME_TYPES, HITLUtils
 from .workflow import WorkflowExecutor, create_initial_state
+from .workflow.state import get_pending_interrupts, clear_pending_interrupt, set_hitl_decision, get_hitl_decision, set_pending_interrupt
 
 @dataclass
 class UIConfig:
@@ -52,6 +54,8 @@ class LangGraphChat:
         # Initialize agents
         if agents:
             for agent in agents:
+                if agent.human_in_loop and not workflow: # Validate HITL
+                    raise ValueError("Human-in-the-loop is only available for multiagent workflows.")
                 self.agent_manager.add_agent(agent)
         # Register custom tools
         if custom_tools:
@@ -191,6 +195,12 @@ class LangGraphChat:
         
         if "agent_outputs" not in st.session_state:
             st.session_state.agent_outputs = {}
+        
+        # Initialize HITL-related session state
+        if "workflow_displayed_count" not in st.session_state:
+            st.session_state.workflow_displayed_count = 0
+        if "agent_executors" not in st.session_state:
+            st.session_state.agent_executors = {}
     
     def run(self):
         """Run the main chat interface."""
@@ -232,7 +242,6 @@ class LangGraphChat:
                             st.write("**Capabilities:**")
                             for cap in capabilities:
                                 st.write(f"- {cap}")
-    
             # Add chat-specific controls
             st.header("Controls")
             if st.button("Reset All", type="secondary"):
@@ -245,6 +254,24 @@ class LangGraphChat:
         if self.config.welcome_message and not st.session_state.messages:
             with st.chat_message("assistant", avatar=self.config.assistant_avatar):
                 st.markdown(self.config.welcome_message)
+
+        # Check for pending interrupts FIRST - workflow_state is the single source of truth
+        workflow_state = st.session_state.get("workflow_state")
+        has_pending_interrupts = False
+        
+        if workflow_state:
+            pending_interrupts = get_pending_interrupts(workflow_state)
+            # Filter to only valid interrupts with __interrupt__ data
+            for key, value in pending_interrupts.items():
+                if isinstance(value, dict) and value.get("__interrupt__"):
+                    has_pending_interrupts = True
+                    break
+        
+        # Handle pending interrupts - this blocks further execution if interrupts exist
+        if has_pending_interrupts:
+            interrupt_handled = self._handle_pending_interrupts()
+            if interrupt_handled:
+                return  # Don't process messages or show input while handling interrupts
 
         for message in st.session_state.messages:
             if message.get("role") == "assistant" and (message.get("agent") == "END" or message.get("agent") is None):
@@ -287,11 +314,26 @@ class LangGraphChat:
         
         user_message = {"role": "user", "content": prompt, "agent": None, "timestamp": None}
         st.session_state.workflow_state["messages"].append(user_message)
+
+        # Clear HITL-related session state when starting a new workflow execution
+        # This ensures previous workflow's HITL decisions don't interfere with new workflow
+        if "metadata" in st.session_state.workflow_state:
+            if "pending_interrupts" in st.session_state.workflow_state["metadata"]:
+                st.session_state.workflow_state["metadata"]["pending_interrupts"] = {}
+            if "hitl_decisions" in st.session_state.workflow_state["metadata"]:
+                st.session_state.workflow_state["metadata"]["hitl_decisions"] = {}
+        # Clear agent executors to prevent reuse of old checkpointer data
+        st.session_state.agent_executors = {}
         
         with st.spinner("Thinking..."):
             response = self._generate_response(prompt)
 
         if response.get("agent") == "workflow-completed":
+            return
+        
+        # Handle interrupts from human-in-the-loop
+        if response.get("__interrupt__"):
+            st.rerun()
             return
         
         if response and "stream" in response:
@@ -386,6 +428,7 @@ class LangGraphChat:
         
         Uses a display callback to show agent responses as they complete during
         workflow execution. This provides real-time feedback in the Streamlit UI.
+        Also handles human-in-the-loop interrupts from workflow execution.
         """
         st.session_state.workflow_displayed_count = 0
         
@@ -422,6 +465,40 @@ class LangGraphChat:
                 "agent": "workflow"
             }
         
+        # Check for interrupts in final state - if found, trigger rerun to show UI
+        if result_state and "metadata" in result_state:
+            if "pending_interrupts" in result_state["metadata"]:
+                pending = result_state["metadata"]["pending_interrupts"]
+                # Check if there are any valid interrupts
+                for executor_key, interrupt_data in pending.items():
+                    if isinstance(interrupt_data, dict) and interrupt_data.get("__interrupt__"):
+                        # Store workflow state and trigger rerun
+                        st.session_state.workflow_state = result_state
+                        st.rerun()
+                        return {
+                            "role": "assistant",
+                            "content": "",
+                            "agent": "workflow-completed"
+                        }
+        
+        # Clear HITL state when workflow completes without pending interrupts
+        if result_state and "metadata" in result_state:
+            # Check if there are any actual pending interrupts
+            has_pending_interrupts = False
+            if "pending_interrupts" in result_state["metadata"]:
+                for executor_key, interrupt_data in result_state["metadata"]["pending_interrupts"].items():
+                    if isinstance(interrupt_data, dict) and interrupt_data.get("__interrupt__"):
+                        has_pending_interrupts = True
+                        break
+            
+            if not has_pending_interrupts:
+                # Clear HITL state when workflow completes successfully
+                if "pending_interrupts" in result_state["metadata"]:
+                    result_state["metadata"]["pending_interrupts"] = {}
+                if "hitl_decisions" in result_state["metadata"]:
+                    result_state["metadata"]["hitl_decisions"] = {}
+                st.session_state.agent_executors = {}
+        
         st.session_state.workflow_state = result_state
         return {
             "role": "assistant",
@@ -453,7 +530,227 @@ class LangGraphChat:
             executor = ResponseAPIExecutor(agent)
             return executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages)
         else:
-            executor = CreateAgentExecutor(agent, tools=[])
-            return executor.execute(self.llm, prompt, stream=False)
+            # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
+            executor = CreateAgentExecutor(agent)
+            response = executor.execute(self.llm, prompt, stream=False)
+            
+            if response.get("__interrupt__"):
+                # Store interrupt in workflow state for consistency
+                if "workflow_state" not in st.session_state:
+                    st.session_state.workflow_state = create_initial_state()
+                interrupt_data = {
+                    "__interrupt__": response["__interrupt__"],
+                    "thread_id": response.get("thread_id"),
+                    "config": response.get("config"),
+                    "agent": response.get("agent"),
+                    "executor_key": "single_agent_executor"
+                }
+                set_pending_interrupt(
+                    st.session_state.workflow_state,
+                    agent.name,
+                    interrupt_data,
+                    "single_agent_executor"
+                )
+                st.session_state.agent_executors["single_agent_executor"] = executor
+            
+            return response
+    
+    def _handle_pending_interrupts(self):
+        """Display UI for pending human-in-the-loop interrupts and handle user decisions.
+        
+        Returns:
+            True if interrupts were found and handled (should block further processing)
+            False if no interrupts (should continue normal processing)
+        """
+        workflow_state = st.session_state.get("workflow_state")
+        if not workflow_state:
+            return False
+        
+        pending_interrupts = get_pending_interrupts(workflow_state)
+        
+        # Filter to only valid interrupts
+        valid_interrupts = {}
+        for key, value in pending_interrupts.items():
+            if isinstance(value, dict) and value.get("__interrupt__"):
+                valid_interrupts[key] = value
+        
+        if not valid_interrupts:
+            return False
+        
+        # Display interrupt UI
+        st.markdown("---")
+        st.markdown("### ⚠️ **Human Approval Required**")
+        st.info("The workflow has paused and is waiting for your approval.")
+        
+        # Process the first valid interrupt
+        for executor_key, interrupt_data in valid_interrupts.items():
+            agent_name = interrupt_data.get("agent", "Unknown")
+            interrupt_raw = interrupt_data.get("__interrupt__", [])
+            original_config = interrupt_data.get("config", {})
+            thread_id = interrupt_data.get("thread_id")
+            
+            # Extract action_requests from Interrupt objects
+            interrupt_info = HITLUtils.extract_action_requests_from_interrupt(interrupt_raw)
+            
+            if not interrupt_info:
+                st.error("⚠️ Error: Could not extract action details from interrupt.")
+                continue
+            
+            # Get or create executor (preserves checkpointer instance)
+            executor = st.session_state.agent_executors.get(executor_key)
+            if executor is None:
+                agent = self.agent_manager.agents.get(agent_name)
+                if agent and thread_id:
+                    # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
+                    executor = CreateAgentExecutor(agent, thread_id=thread_id)
+                    st.session_state.agent_executors[executor_key] = executor
+            
+            if executor is None:
+                # Clear invalid interrupt
+                clear_update = clear_pending_interrupt(workflow_state, executor_key)
+                workflow_state["metadata"].update(clear_update["metadata"])
+                continue
+            
+            # Get decisions from workflow state or initialize
+            decisions = get_hitl_decision(workflow_state, executor_key)
+            if decisions is None or len(decisions) != len(interrupt_info):
+                decisions = [None] * len(interrupt_info)
+            
+            # Find the first action that needs a decision (show one action at a time)
+            pending_action_index = None
+            for i, decision in enumerate(decisions):
+                if decision is None:
+                    pending_action_index = i
+                    break
+            
+            # If all actions have decisions, resume execution
+            if pending_action_index is None:
+                # Clear interrupt from workflow_state BEFORE resuming
+                clear_update = clear_pending_interrupt(workflow_state, executor_key)
+                workflow_state["metadata"].update(clear_update["metadata"])
+                
+                formatted_decisions = HITLUtils.format_decisions(decisions)
+                
+                # Ensure agent is built
+                if executor.agent_obj is None:
+                    llm_client = get_llm_client(executor.agent)
+                    executor._build_agent(llm_client)
+                
+                resume_config = original_config if original_config else {"configurable": {"thread_id": thread_id}}
+                
+                with st.spinner("Processing your decision..."):
+                    resume_response = executor.resume(formatted_decisions, config=resume_config)
+                
+                # Handle new interrupt after resume
+                if resume_response and resume_response.get("__interrupt__"):
+                    # Store new interrupt
+                    interrupt_update = set_pending_interrupt(
+                        workflow_state,
+                        agent_name,
+                        resume_response,
+                        executor_key
+                    )
+                    workflow_state["metadata"].update(interrupt_update["metadata"])
+                    # Clear old decisions for new interrupt
+                    if "hitl_decisions" in workflow_state["metadata"]:
+                        decisions_key = f"{executor_key}_decisions"
+                        if decisions_key in workflow_state["metadata"]["hitl_decisions"]:
+                            del workflow_state["metadata"]["hitl_decisions"][decisions_key]
+                    st.rerun()
+                    return True
+                
+                # Resume successful - add response to messages and clear interrupt completely
+                if resume_response and resume_response.get("content"):
+                    # Check for duplicates before adding
+                    message_exists = False
+                    for msg in st.session_state.messages:
+                        if (msg.get("role") == "assistant" and 
+                            msg.get("agent") == agent_name and 
+                            msg.get("content") == resume_response.get("content")):
+                            message_exists = True
+                            break
+                    
+                    if not message_exists:
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": resume_response.get("content", ""),
+                            "agent": agent_name
+                        })
+                
+                # Ensure interrupt is fully cleared
+                if "pending_interrupts" in workflow_state["metadata"]:
+                    if executor_key in workflow_state["metadata"]["pending_interrupts"]:
+                        del workflow_state["metadata"]["pending_interrupts"][executor_key]
+                
+                # Clear decisions after successful resume
+                if "hitl_decisions" in workflow_state["metadata"]:
+                    decisions_key = f"{executor_key}_decisions"
+                    if decisions_key in workflow_state["metadata"]["hitl_decisions"]:
+                        del workflow_state["metadata"]["hitl_decisions"][decisions_key]
+                
+                st.rerun()
+            
+            # Display UI for the pending action
+            action = interrupt_info[pending_action_index]
+            with st.container():
+                st.markdown("---")
+                st.markdown(f"**Agent:** {agent_name} is requesting approval to execute the following action:")
+                
+                if isinstance(action, dict):
+                    tool_name = action.get("name", action.get("tool", "Unknown"))
+                    tool_input = action.get("args", action.get("input", {}))
+                    action_id = action.get("id", f"action_{pending_action_index}")
+                else:
+                    tool_name = str(action)
+                    tool_input = {}
+                    action_id = f"action_{pending_action_index}"
+                
+                st.write(f"**Tool:** `{tool_name}`")
+                if tool_input:
+                    st.json(tool_input)
+                
+                agent_interrupt_on = executor.agent.interrupt_on if hasattr(executor.agent, 'interrupt_on') else None
+                allow_edit = HITLUtils.check_edit_allowed(agent_interrupt_on, tool_name)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    approve_key = f"approve_{executor_key}_{action_id}"
+                    if st.button("✅ Approve", key=approve_key):
+                        decisions[pending_action_index] = {"type": "approve"}
+                        if workflow_state:
+                            decision_update = set_hitl_decision(workflow_state, executor_key, decisions)
+                            workflow_state["metadata"].update(decision_update["metadata"])
+                        st.rerun()
+                with col2:
+                    reject_key = f"reject_{executor_key}_{action_id}"
+                    if st.button("❌ Reject", key=reject_key):
+                        decisions[pending_action_index] = {"type": "reject"}
+                        if workflow_state:
+                            decision_update = set_hitl_decision(workflow_state, executor_key, decisions)
+                            workflow_state["metadata"].update(decision_update["metadata"])
+                        st.rerun()
+                with col3:
+                    if allow_edit:
+                        edit_key = f"edit_{executor_key}_{action_id}"
+                        edit_btn_key = f"edit_btn_{executor_key}_{action_id}"
+                        default_edit_value = json.dumps(tool_input, indent=2) if tool_input else ""
+                        edit_text = st.text_area(
+                            f"Edit {tool_name} input (optional)",
+                            value=default_edit_value, key=edit_key, height=100
+                        )
+                        if st.button("✏️ Approve with Edit", key=edit_btn_key):
+                            parsed_input, error_msg = HITLUtils.parse_edit_input(edit_text, tool_input)
+                            if error_msg:
+                                st.error(error_msg)
+                            else:
+                                decisions[pending_action_index] = {"type": "edit", "input": parsed_input}
+                                if workflow_state:
+                                    decision_update = set_hitl_decision(workflow_state, executor_key, decisions)
+                                    workflow_state["metadata"].update(decision_update["metadata"])
+                                st.rerun()
+            
+            return True  # Interrupt is being handled
+        
+        return False  # No valid interrupts found
 
     

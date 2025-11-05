@@ -1,11 +1,17 @@
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
+import uuid
 
 import openai
 import yaml
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.chat_models import init_chat_model
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
+
+from .utils import CustomTool
 
 @dataclass
 class Agent:
@@ -29,6 +35,10 @@ class Agent:
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
     context: Optional[str] = "least"  # Context mode: "full", "summary", or "least"
+    # Human-in-the-loop configuration (only available for multiagent workflows)
+    human_in_loop: bool = False  # Enable human-in-the-loop approval (multiagent workflows only)
+    interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None  # Tool names to interrupt on
+    hitl_description_prefix: Optional[str] = "Tool execution pending approval"  # Prefix for interrupt messages
 
     def __post_init__(self):
         """Post-initialization processing and validation."""
@@ -63,6 +73,9 @@ class Agent:
             "allow_web_search": self.allow_web_search,
             "allow_image_generation": self.allow_image_generation,
             "tools": self.tools,
+            "human_in_loop": self.human_in_loop,
+            "interrupt_on": self.interrupt_on,
+            "hitl_description_prefix": self.hitl_description_prefix,
         }
     
     @classmethod
@@ -205,13 +218,53 @@ class CreateAgentExecutor:
     
     Uses LangChain's standard `create_agent` function which supports multiple providers
     (OpenAI, Anthropic, Google, etc.) through LangChain's chat model interface.
+    
+    Supports human-in-the-loop approval when enabled via agent configuration.
     """
 
-    def __init__(self, agent: Agent, tools: Optional[List] = None):
+    def __init__(self, agent: Agent, tools: Optional[List] = None, thread_id: Optional[str] = None):
         self.agent = agent
-        self.tools = tools or []
+        self.thread_id = thread_id or str(uuid.uuid4())
+        self.checkpointer = None
+        self.agent_obj = None
+        
+        # Initialize checkpointer if human-in-the-loop is enabled
+        if self.agent.human_in_loop:
+            self.checkpointer = MemorySaver()
+        
+        # Build tools configuration from CustomTool registry if not explicitly provided
+        if tools is not None:
+            self.tools = tools
+        else:
+            self.tools = CustomTool.get_langchain_tools(self.agent.tools) if self.agent.tools else []
+    
+    def _build_agent(self, llm_chat_model):
+        """Build the agent with optional human-in-the-loop middleware."""
+        middleware = []
+        if self.agent.human_in_loop and self.agent.interrupt_on:
+            middleware.append(
+                HumanInTheLoopMiddleware(
+                    interrupt_on=self.agent.interrupt_on,
+                    description_prefix=self.agent.hitl_description_prefix,
+                )
+            )
+        
+        agent_kwargs = {
+            "model": llm_chat_model,
+            "tools": self.tools,
+            "system_prompt": self.agent.system_message,
+        }
+        
+        if middleware:
+            agent_kwargs["middleware"] = middleware
+        
+        if self.checkpointer:
+            agent_kwargs["checkpointer"] = self.checkpointer
+        
+        self.agent_obj = create_agent(**agent_kwargs)
+        return self.agent_obj
 
-    def execute(self, llm_chat_model, prompt: str, stream: bool = False):
+    def execute(self, llm_chat_model, prompt: str, stream: bool = False, config: Optional[Dict[str, Any]] = None):
         """
         Execute prompt through a LangChain agent.
 
@@ -219,23 +272,182 @@ class CreateAgentExecutor:
             llm_chat_model: A LangChain chat model instance
             prompt: User's question/prompt
             stream: Streaming support (not currently implemented)
+            config: Optional execution config with thread_id and interrupt handling
 
         Returns:
-            Dict with keys 'role', 'content', 'agent'
+            Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if HITL is active
         """
         try:
-            agent_obj = create_agent(
-                model=llm_chat_model,
-                tools=self.tools,
-                system_prompt=self.agent.system_message
+            # Build agent if not already built or if model changed
+            if self.agent_obj is None or (self.agent.human_in_loop and self.checkpointer is None):
+                self._build_agent(llm_chat_model)
+            
+            # Use provided config or create one with thread_id
+            execution_config = config or {"configurable": {"thread_id": self.thread_id}}
+            
+            # Invoke agent - with HITL, this may pause if there's an interrupt
+            # Use stream to detect interrupts properly
+            thread_id = execution_config.get("configurable", {}).get("thread_id", self.thread_id)
+            interrupt_detected = False
+            interrupt_data = None
+            final_out = None
+            
+            # Use stream to properly detect interrupts
+            event_count = 0
+            for event in self.agent_obj.stream(
+                {"messages": [{"role": "user", "content": prompt}]},
+                config=execution_config
+            ):
+                event_count += 1
+                
+                # Check if __interrupt__ is a direct key in the event (LangGraph interrupt format)
+                if "__interrupt__" in event:
+                    interrupt_node_state = event["__interrupt__"]
+                    
+                    # The interrupt value is typically a tuple or list of tool calls to approve
+                    if isinstance(interrupt_node_state, (tuple, list)):
+                        interrupt_data = list(interrupt_node_state)
+                    else:
+                        interrupt_data = interrupt_node_state
+                    
+                    interrupt_detected = True
+                    break
+                
+                # Each event is a dict with node names as keys
+                for node_name, node_state in event.items():
+                    if isinstance(node_state, dict):
+                        # Check messages for tool calls (which might trigger interrupts)
+                        messages = node_state.get("messages", [])
+                        if messages:
+                            for msg_idx, msg in enumerate(messages[-3:]):  # Check last 3 messages
+                                # Check for tool calls
+                                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                                    pass
+                                # Check for tool call IDs
+                                if hasattr(msg, 'tool_call_id'):
+                                    pass
+                        
+                        # Check for interrupt in the state
+                        if "__interrupt__" in node_state:
+                            interrupt_data = node_state["__interrupt__"]
+                            interrupt_detected = True
+                            break
+                        
+                        # Check all keys for debugging
+                        all_keys = list(node_state.keys())
+                        if "__interrupt__" not in all_keys:
+                            # Deep check for any interrupt-related keys
+                            interrupt_keys = [k for k in all_keys if "interrupt" in k.lower() or "pause" in k.lower()]
+                            if interrupt_keys:
+                                pass
+                        
+                        # Store the final state
+                        final_out = node_state
+                    elif isinstance(node_state, (tuple, list)):
+                        # Interrupt data might be a tuple/list directly
+                        if node_name == "__interrupt__" or len(node_state) > 0:
+                            interrupt_data = list(node_state) if isinstance(node_state, tuple) else node_state
+                            interrupt_detected = True
+                            break
+                
+                if interrupt_detected:
+                    break
+            
+            
+            # If no interrupt in stream, check final state
+            if not interrupt_detected and final_out and isinstance(final_out, dict):
+                if "__interrupt__" in final_out:
+                    interrupt_data = final_out["__interrupt__"]
+                    interrupt_detected = True
+            
+            # Also check checkpointer state for interrupts
+            if not interrupt_detected and self.checkpointer:
+                checkpoint = self.checkpointer.get({"configurable": {"thread_id": thread_id}})
+                if checkpoint:
+                    channel_values = checkpoint.get("channel_values", {})
+                    
+                    # Check for interrupt in channel_values
+                    if "__interrupt__" in channel_values:
+                        interrupt_data = channel_values["__interrupt__"]
+                        interrupt_detected = True
+                    
+                    # Check messages in checkpoint for tool calls
+                    checkpoint_messages = channel_values.get("messages", [])
+                    if checkpoint_messages:
+                        for msg in checkpoint_messages[-3:]:
+                            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                                pass
+                    
+                    # Check for any interrupt-related keys
+                    interrupt_keys = [k for k in channel_values.keys() if "interrupt" in k.lower() or "pause" in k.lower()]
+                    if interrupt_keys:
+                        for key in interrupt_keys:
+                            pass
+            
+            if interrupt_detected and interrupt_data:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "agent": self.agent.name,
+                    "__interrupt__": interrupt_data,
+                    "thread_id": thread_id,
+                    "config": execution_config
+                }
+            
+            # Use final_out if available, otherwise invoke normally
+            out = final_out if final_out else self.agent_obj.invoke(
+                {"messages": [{"role": "user", "content": prompt}]},
+                config=execution_config
             )
-            out = agent_obj.invoke({
-                "messages": [{"role": "user", "content": prompt}]
-            })
+            
+            # Final check for interrupts in output
+            if isinstance(out, dict) and "__interrupt__" in out:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "agent": self.agent.name,
+                    "__interrupt__": out["__interrupt__"],
+                    "thread_id": thread_id,
+                    "config": execution_config
+                }
+            
             result_text = self._extract_response_text(out)
             return {"role": "assistant", "content": result_text, "agent": self.agent.name}
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
+    
+    def resume(self, decisions: List[Dict[str, Any]], config: Optional[Dict[str, Any]] = None):
+        """
+        Resume agent execution after human approval/rejection.
+        
+        Args:
+            decisions: List of decision dicts with 'type' ('approve', 'reject', 'edit') and optional 'edit' content
+            config: Execution config with thread_id
+            
+        Returns:
+            Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if more approvals needed
+        """
+        if not self.agent.human_in_loop or not self.agent_obj:
+            raise ValueError("Cannot resume: human-in-the-loop not enabled or agent not initialized")
+        
+        execution_config = config or {"configurable": {"thread_id": self.thread_id}}
+        
+        resume_command = Command(resume={"decisions": decisions})
+        out = self.agent_obj.invoke(resume_command, config=execution_config)
+        
+        # Check for additional interrupts
+        if isinstance(out, dict) and "__interrupt__" in out:
+            return {
+                "role": "assistant",
+                "content": "",
+                "agent": self.agent.name,
+                "__interrupt__": out["__interrupt__"],
+                "thread_id": execution_config.get("configurable", {}).get("thread_id", self.thread_id),
+                "config": execution_config
+            }
+        
+        result_text = self._extract_response_text(out)
+        return {"role": "assistant", "content": result_text, "agent": self.agent.name}
 
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
