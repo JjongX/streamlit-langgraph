@@ -9,7 +9,7 @@ import streamlit as st
 from langchain_core.tools import StructuredTool
 # from langchain.tools import StructuredTool
 
-from .agent import CreateAgentExecutor, get_llm_client
+from .agent import CreateAgentExecutor, ResponseAPIExecutor, get_llm_client
 from .workflow.state import (
     clear_pending_interrupt,
     get_hitl_decision,
@@ -301,6 +301,57 @@ class CustomTool:
                 continue
         
         return tools
+    
+    @classmethod
+    def get_openai_tools(cls, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Convert CustomTool registry items to OpenAI function calling format.
+        
+        Args:
+            tool_names: Optional list of tool names to include. If None, includes all registered tools.
+        
+        Returns:
+            List of OpenAI function tool dictionaries
+        """
+        tools = []
+        registry = cls._registry
+        
+        if tool_names:
+            registry = {name: registry[name] for name in tool_names if name in registry}
+        
+        for tool_name, custom_tool in registry.items():
+            try:
+                # Use parameters if available, otherwise extract from function
+                parameters = custom_tool.parameters if custom_tool.parameters else custom_tool._extract_parameters()
+                
+                tool_dict = {
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "description": custom_tool.description,
+                        "parameters": parameters
+                    }
+                }
+                tools.append(tool_dict)
+            except Exception:
+                # Skip tools that fail to convert
+                continue
+        
+        return tools
+    
+    @classmethod
+    def get_tool_function(cls, tool_name: str) -> Optional[Callable]:
+        """
+        Get the function for a registered tool.
+        
+        Args:
+            tool_name: Name of the tool
+        
+        Returns:
+            The tool function if found, None otherwise
+        """
+        tool = cls._registry.get(tool_name)
+        return tool.function if tool else None
     
     def _extract_parameters(self) -> Dict[str, Any]:
         """Extract parameters from function signature."""
@@ -623,6 +674,8 @@ class HITLHandler:
         """
         Get existing executor or create a new one.
         
+        Supports both CreateAgentExecutor and ResponseAPIExecutor.
+        
         Args:
             executor_key: Key identifying the executor
             agent_name: Name of the agent
@@ -630,13 +683,17 @@ class HITLHandler:
             workflow_state: Current workflow state
             
         Returns:
-            CreateAgentExecutor instance or None
+            CreateAgentExecutor or ResponseAPIExecutor instance or None
         """
         executor = st.session_state.agent_executors.get(executor_key)
         if executor is None:
             agent = self.agent_manager.agents.get(agent_name)
             if agent and thread_id:
-                executor = CreateAgentExecutor(agent, thread_id=thread_id)
+                # Determine which executor to use based on agent type
+                if agent.provider.lower() == "openai" and agent.type == "response":
+                    executor = ResponseAPIExecutor(agent, thread_id=thread_id)
+                else:
+                    executor = CreateAgentExecutor(agent, thread_id=thread_id)
                 st.session_state.agent_executors[executor_key] = executor
         
         if executor is None:
@@ -656,7 +713,7 @@ class HITLHandler:
         Args:
             workflow_state: Current workflow state
             executor_key: Key identifying the executor
-            executor: CreateAgentExecutor instance
+            executor: CreateAgentExecutor or ResponseAPIExecutor instance
             agent_name: Name of the agent
             decisions: List of user decisions
             original_config: Original execution config
@@ -670,7 +727,8 @@ class HITLHandler:
         
         formatted_decisions = HITLUtils.format_decisions(decisions)
         
-        if executor.agent_obj is None:
+        # Handle CreateAgentExecutor which needs agent_obj initialization
+        if hasattr(executor, 'agent_obj') and executor.agent_obj is None:
             llm_client = get_llm_client(executor.agent)
             executor._build_agent(llm_client)
         

@@ -151,38 +151,38 @@ def main():
         ),
         function=escalate_negative_sentiment
     )
-
-    # Will remove the human_in_loop for the supervisor in later
+    
+    # Using ResponseAPIExecutor (type="response") with HITL enabled
     supervisor = Agent(
         name="supervisor",
         role="Sentiment Analysis Supervisor",
-        instructions="You coordinate sentiment analysis tasks and delegate to specialists. You have access to tools for analyzing sentiment and escalating negative sentiment cases.",
-        type="agent",
+        instructions="You coordinate sentiment analysis tasks and delegate to specialists. You have access to tools for analyzing sentiment, escalating negative sentiment cases, and sending notifications. Coordinate the workflow and ensure all tasks are properly handled.",
+        type="response",  # Using ResponseAPIExecutor instead of CreateAgentExecutor
         provider="openai",
         model="gpt-4o-mini",
-        tools=["analyze_sentiment", "escalate_negative_sentiment"],
+        tools=["analyze_sentiment", "escalate_negative_sentiment", "send_notification"],
         human_in_loop=True,  # Enable HITL for supervisor
         interrupt_on={
             "analyze_sentiment": {"allowed_decisions": ["approve", "reject"]},
             "escalate_negative_sentiment": {"allowed_decisions": ["approve", "reject", "edit"]},
         },
-        hitl_description_prefix="⚠️ Supervisor action requires approval"
+        hitl_description_prefix="Supervisor action requires approval"
     )
     
     workers = [
         Agent(
             name="researcher",
             role="Information Researcher",
-            instructions="You gather comprehensive information on topics.",
-            type="agent",
+            instructions="You gather comprehensive information on topics and provide research summaries.",
+            type="response",  # Using ResponseAPIExecutor
             provider="openai",
             model="gpt-4o-mini",
         ),
         Agent(
             name="analyst",
             role="Sentiment Analyst",
-            instructions="You analyze sentiment in customer communications and feedback. You can analyze sentiment using analyze_sentiment and escalate negative cases using escalate_negative_sentiment.",
-            type="agent",
+            instructions="You analyze sentiment in customer communications and feedback. You can analyze sentiment using analyze_sentiment and escalate negative cases using escalate_negative_sentiment. Always provide detailed analysis reports.",
+            type="response",  # Using ResponseAPIExecutor
             provider="openai",
             model="gpt-4o-mini",
             tools=["analyze_sentiment", "escalate_negative_sentiment"],
@@ -191,7 +191,15 @@ def main():
                 "analyze_sentiment": {"allowed_decisions": ["approve", "reject"]},
                 "escalate_negative_sentiment": {"allowed_decisions": ["approve", "reject", "edit"]},
             },
-            hitl_description_prefix="⚠️ Analyst action pending approval"
+            hitl_description_prefix="Analyst action pending approval"
+        ),
+        Agent(
+            name="notifier",
+            role="Notification Coordinator",
+            instructions="You handle notifications and communications. You can send notifications using send_notification to alert teams about important events or escalated cases.",
+            type="response",  # Using ResponseAPIExecutor
+            provider="openai",
+            model="gpt-4o-mini",
         )
     ]
 
@@ -205,24 +213,29 @@ def main():
     )
     
     config = UIConfig(
-        title="Human-in-the-Loop Multiagent Workflow",
+        title="Human-in-the-Loop Multiagent Workflow (ResponseAPI)",
         welcome_message=(
-            "Hello! This is a **multiagent workflow** with human-in-the-loop approval enabled.\n\n"
+            "Hello! This is a **multiagent workflow** using **ResponseAPIExecutor** with human-in-the-loop approval enabled.\n\n"
             "**How it works:**\n"
             "- Multiple agents work together in a coordinated workflow\n"
+            "- All agents use OpenAI's Response API (ResponseAPIExecutor)\n"
             "- When agents need to execute tools that require approval, execution pauses\n"
             "- You'll see a warning message with the tool details\n"
             "- You can approve, reject, or edit the tool input\n"
             "- Once you make a decision, the workflow continues\n\n"
-            "**Note:** Human-in-the-loop is only available for multiagent workflows.\n"
-            "Single-agent scenarios don't require this level of oversight.\n\n"
+            "**Key Features:**\n"
+            "- Uses ResponseAPIExecutor (type='response') instead of CreateAgentExecutor\n"
+            "- Human-in-the-loop approval for tool execution\n"
+            "- Multiagent coordination with supervisor and worker agents\n"
+            "- Supports approve, reject, and edit decisions\n\n"
             "**Try asking:**\n"
-            "- 'Analyze the sentiment of this customer review: I love this product!'\n"
+            "- 'Analyze the sentiment of this customer review: I love this product! It works perfectly.'\n"
             "- 'Check the sentiment of this feedback: This service is terrible and needs improvement'\n"
-            "- 'Analyze sentiment for this social media post: Great experience with excellent support'\n"
-            "- 'Escalate this negative review for review: I want a refund, this is the worst product ever'\n"
-            "- The agent will pause and ask for your approval before executing these actions."
-        )
+            "- 'Analyze sentiment for this social media post and escalate if negative: I want a refund, this is the worst product ever'\n"
+            "- 'Send a notification to customer support about the negative review'\n"
+            "- The agents will pause and ask for your approval before executing these actions."
+        ),
+        stream=False
     )
     
     chat = LangGraphChat(

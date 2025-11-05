@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
@@ -134,27 +135,48 @@ def get_llm_client(agent: Agent) -> Union[openai.OpenAI, Any]:
         return chat_model
 
 class ResponseAPIExecutor:
-    """Executor for OpenAI Responses API generation."""
+    """
+    Executor for OpenAI Responses API generation.
+    
+    Supports human-in-the-loop approval when enabled via agent configuration.
+    When HITL is enabled, uses Chat Completions API with function calling for tool interception.
+    """
 
-    def __init__(self, agent: Agent):
+    def __init__(self, agent: Agent, thread_id: Optional[str] = None):
         self.agent = agent
+        self.thread_id = thread_id or str(uuid.uuid4())
+        # Store conversation history for HITL resume
+        self.conversation_history: List[Dict[str, Any]] = []
+        # Store pending tool calls for HITL
+        self.pending_tool_calls: List[Dict[str, Any]] = []
 
-    def execute(self, llm_client, prompt: str, stream: bool = True, file_messages: Optional[List] = None):
+    def execute(self, llm_client, prompt: str, stream: bool = True, file_messages: Optional[List] = None, config: Optional[Dict[str, Any]] = None):
         """
         Execute prompt using the Responses API client.
         
         Supports file messages, code interpreter, web search, and image generation tools.
         Note: file_search requires vector_store_ids and is handled by FileHandler.
+        
+        When human_in_loop is enabled, uses Chat Completions API to intercept tool calls.
 
         Args:
             llm_client: Client exposing `responses.create` method
             prompt: Full prompt or input to send
             stream: Whether to request a streaming response
             file_messages: Optional list of file-related input messages
+            config: Optional execution config with thread_id
 
         Returns:
-            Dict with keys 'role', 'content', 'agent' and optionally 'stream'
+            Dict with keys 'role', 'content', 'agent', optionally 'stream', and '__interrupt__' if HITL is active
         """
+        execution_config = config or {"configurable": {"thread_id": self.thread_id}}
+        thread_id = execution_config.get("configurable", {}).get("thread_id", self.thread_id)
+        
+        # If HITL is enabled, use Chat Completions API for tool interception
+        if self.agent.human_in_loop and self.agent.interrupt_on:
+            return self._execute_with_hitl(llm_client, prompt, stream, file_messages, thread_id, execution_config)
+        
+        # Normal execution using Responses API
         input_messages = []
         if file_messages:
             input_messages.extend(file_messages)
@@ -180,6 +202,272 @@ class ResponseAPIExecutor:
                 return {"role": "assistant", "content": response_content, "agent": self.agent.name}
         except Exception as e:
             return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
+    
+    def _execute_with_hitl(self, llm_client, prompt: str, stream: bool, file_messages: Optional[List], 
+                           thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute with human-in-the-loop support using Chat Completions API.
+        
+        This allows us to intercept tool calls before execution.
+        """
+        # Build messages from conversation history
+        messages = self.conversation_history.copy() if self.conversation_history else []
+        
+        # Add file messages if provided
+        if file_messages:
+            messages.extend(file_messages)
+        
+        # Add user prompt
+        messages.append({"role": "user", "content": prompt})
+        
+        # Build function tools from CustomTool registry
+        from .utils import CustomTool
+        custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
+        
+        # Also include built-in tools as function definitions if needed
+        # Note: Built-in tools (code_interpreter, web_search, image_generation) are handled differently
+        # We'll focus on custom tools for HITL
+        
+        try:
+            # Use Chat Completions API for tool interception
+            response = llm_client.chat.completions.create(
+                model=self.agent.model,
+                messages=messages,
+                temperature=self.agent.temperature,
+                tools=custom_tools if custom_tools else None,
+                tool_choice="auto" if custom_tools else None
+            )
+            
+            message = response.choices[0].message
+            
+            # Check for tool calls that need approval
+            if message.tool_calls:
+                interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
+                if interrupt_data:
+                    # Store conversation state including the assistant message with tool_calls
+                    # This is critical for resume() to work correctly
+                    self.pending_tool_calls = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
+                    assistant_message_with_tools = self._message_to_dict(message)
+                    self.conversation_history = messages + [assistant_message_with_tools]
+                    interrupt_response = self._create_interrupt_response(interrupt_data, thread_id, config)
+                    return interrupt_response
+            
+            # No interrupt needed, continue execution
+            # Add assistant message to history
+            self.conversation_history = messages + [self._message_to_dict(message)]
+            
+            # If there are tool calls, execute them (for non-interrupted tools)
+            if message.tool_calls:
+                # Execute tool calls and continue conversation
+                tool_results = []
+                for tool_call in message.tool_calls:
+                    tool_name = tool_call.function.name
+                    tool_args = json.loads(tool_call.function.arguments)
+                    
+                    # Execute tool (this should be handled by CustomTool)
+                    tool_result = self._execute_tool(tool_name, tool_args)
+                    tool_results.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_name,
+                        "content": str(tool_result)
+                    })
+                
+                # Continue conversation with tool results
+                messages_with_tools = self.conversation_history + tool_results
+                followup_response = llm_client.chat.completions.create(
+                    model=self.agent.model,
+                    messages=messages_with_tools,
+                    temperature=self.agent.temperature,
+                    tools=custom_tools if custom_tools else None,
+                    tool_choice="auto" if custom_tools else None
+                )
+                
+                final_message = followup_response.choices[0].message
+                self.conversation_history = messages_with_tools + [self._message_to_dict(final_message)]
+                
+                content = final_message.content or ""
+            else:
+                content = message.content or ""
+            
+            return {"role": "assistant", "content": content, "agent": self.agent.name}
+            
+        except Exception as e:
+            return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
+    
+    def _check_tool_calls_for_interrupt(self, tool_calls: List[Any]) -> Optional[List[Dict[str, Any]]]:
+        """
+        Check if any tool calls require human approval based on interrupt_on config.
+        
+        Returns interrupt data in the format expected by HITL system.
+        """
+        if not self.agent.interrupt_on:
+            return None
+        
+        action_requests = []
+        for tool_call in tool_calls:
+            tool_name = tool_call.function.name
+            tool_args = json.loads(tool_call.function.arguments)
+            
+            # Check if this tool requires interruption
+            should_interrupt = False
+            if tool_name in self.agent.interrupt_on:
+                tool_config = self.agent.interrupt_on[tool_name]
+                if isinstance(tool_config, dict):
+                    should_interrupt = True
+                elif tool_config is True:
+                    should_interrupt = True
+            
+            if should_interrupt:
+                # Create action request in format expected by HITL
+                action_requests.append({
+                    "name": tool_name,
+                    "args": tool_args,
+                    "id": tool_call.id,
+                    "description": f"{self.agent.hitl_description_prefix or 'Tool execution pending approval'}: {tool_name}"
+                })
+        
+        return action_requests if action_requests else None
+    
+    def _tool_call_to_dict(self, tool_call: Any) -> Dict[str, Any]:
+        """Convert OpenAI tool call to dictionary."""
+        return {
+            "id": tool_call.id,
+            "type": "function",
+            "function": {
+                "name": tool_call.function.name,
+                "arguments": tool_call.function.arguments
+            }
+        }
+    
+    def _message_to_dict(self, message: Any) -> Dict[str, Any]:
+        """Convert OpenAI message to dictionary."""
+        msg_dict = {
+            "role": message.role,
+            "content": message.content or ""
+        }
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            msg_dict["tool_calls"] = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
+        return msg_dict
+    
+    def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
+        """Execute a tool by name."""
+        from .utils import CustomTool
+        tool_func = CustomTool.get_tool_function(tool_name)
+        if tool_func:
+            return tool_func(**tool_args)
+        return f"Tool {tool_name} not found"
+    
+    def _create_interrupt_response(self, interrupt_data: List[Dict[str, Any]], thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Create response dict for interrupt."""
+        return {
+            "role": "assistant",
+            "content": "",
+            "agent": self.agent.name,
+            "__interrupt__": interrupt_data,
+            "thread_id": thread_id,
+            "config": config
+        }
+    
+    def resume(self, decisions: List[Dict[str, Any]], config: Optional[Dict[str, Any]] = None):
+        """
+        Resume execution after human approval/rejection.
+        
+        Args:
+            decisions: List of decision dicts with 'type' ('approve', 'reject', 'edit') and optional 'edit' content
+            config: Execution config with thread_id
+            
+        Returns:
+            Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if more approvals needed
+        """
+        if not self.agent.human_in_loop:
+            raise ValueError("Cannot resume: human-in-the-loop not enabled")
+        
+        execution_config = config or {"configurable": {"thread_id": self.thread_id}}
+        thread_id = execution_config.get("configurable", {}).get("thread_id", self.thread_id)
+        
+        # Get LLM client
+        llm_client = get_llm_client(self.agent)
+        
+        # Apply decisions to pending tool calls
+        tool_results = []
+        for i, decision in enumerate(decisions):
+            if i >= len(self.pending_tool_calls):
+                break
+            
+            tool_call_dict = self.pending_tool_calls[i]
+            tool_name = tool_call_dict["function"]["name"]
+            tool_args = json.loads(tool_call_dict["function"]["arguments"])
+            
+            decision_type = decision.get("type", "approve")
+            
+            if decision_type == "reject":
+                # Skip this tool call
+                continue
+            elif decision_type == "edit":
+                # Use edited arguments
+                tool_args = decision.get("edit", tool_args)
+            
+            # Execute approved/edited tool
+            tool_result = self._execute_tool(tool_name, tool_args)
+            tool_results.append({
+                "role": "tool",
+                "tool_call_id": tool_call_dict["id"],
+                "name": tool_name,
+                "content": str(tool_result)
+            })
+        
+        # Conversation history should already have the assistant message with tool_calls
+        # (stored when interrupt was detected). Just add tool results.
+        messages_with_tools = self.conversation_history.copy()
+        
+        # Verify the last message is an assistant message with tool_calls
+        if not messages_with_tools:
+            raise ValueError("Cannot resume: conversation history is empty")
+        
+        last_message = messages_with_tools[-1]
+        if last_message.get("role") != "assistant" or "tool_calls" not in last_message:
+            # Fallback: reconstruct assistant message from pending_tool_calls
+            assistant_message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": self.pending_tool_calls
+            }
+            messages_with_tools.append(assistant_message)
+        
+        # Add tool results (must come after assistant message with tool_calls)
+        messages_with_tools.extend(tool_results)
+        
+        from .utils import CustomTool
+        custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
+        
+        try:
+            followup_response = llm_client.chat.completions.create(
+                model=self.agent.model,
+                messages=messages_with_tools,
+                temperature=self.agent.temperature,
+                tools=custom_tools if custom_tools else None,
+                tool_choice="auto" if custom_tools else None
+            )
+            
+            message = followup_response.choices[0].message
+            self.conversation_history = messages_with_tools + [self._message_to_dict(message)]
+            
+            # Check for additional tool calls that need approval
+            if message.tool_calls:
+                interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
+                if interrupt_data:
+                    self.pending_tool_calls = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
+                    return self._create_interrupt_response(interrupt_data, thread_id, execution_config)
+            
+            # Clear pending tool calls
+            self.pending_tool_calls = []
+            
+            content = message.content or ""
+            return {"role": "assistant", "content": content, "agent": self.agent.name}
+            
+        except Exception as e:
+            return {"role": "assistant", "content": f"Error resuming execution: {str(e)}", "agent": self.agent.name}
 
     def _build_tools_config(self, llm_client) -> List[Dict[str, Any]]:
         """Build tools configuration based on agent capabilities."""

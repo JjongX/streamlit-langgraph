@@ -585,8 +585,50 @@ class LangGraphChat:
         file_messages = self.file_handler.get_openai_input_messages()
         
         if agent.type == "response":
-            executor = ResponseAPIExecutor(agent)
-            response = executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages)
+            # For HITL, persist executor in session_state
+            if agent.human_in_loop and agent.interrupt_on:
+                executor_key = "single_agent_executor"
+                if "agent_executors" not in st.session_state:
+                    st.session_state.agent_executors = {}
+                
+                if executor_key not in st.session_state.agent_executors:
+                    executor = ResponseAPIExecutor(agent)
+                    st.session_state.agent_executors[executor_key] = executor
+                else:
+                    executor = st.session_state.agent_executors[executor_key]
+                
+                thread_id = executor.thread_id
+                config = {"configurable": {"thread_id": thread_id}}
+                response = executor.execute(self.llm, prompt, stream=False, file_messages=file_messages, config=config)
+            else:
+                executor = ResponseAPIExecutor(agent)
+                response = executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages)
+            
+            # Handle interrupts from ResponseAPIExecutor
+            if response.get("__interrupt__"):
+                # Store interrupt in workflow state for consistency
+                if "workflow_state" not in st.session_state:
+                    st.session_state.workflow_state = create_initial_state()
+                interrupt_data = {
+                    "__interrupt__": response["__interrupt__"],
+                    "thread_id": response.get("thread_id"),
+                    "config": response.get("config"),
+                    "agent": response.get("agent"),
+                    "executor_key": "single_agent_executor"
+                }
+                set_pending_interrupt(
+                    st.session_state.workflow_state,
+                    agent.name,
+                    interrupt_data,
+                    "single_agent_executor"
+                )
+                if "agent_executors" not in st.session_state:
+                    st.session_state.agent_executors = {}
+                st.session_state.agent_executors["single_agent_executor"] = executor
+                
+                # Sync to session_state
+                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+                return response
             
             # Update workflow_state with agent response (single source of truth)
             if response.get("content"):

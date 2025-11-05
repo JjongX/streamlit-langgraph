@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from typing_extensions import Annotated
 import operator
 
-# Define merge_metadata before WorkflowState since it's used as a reducer in the class definition
+# Used as a reducer in the WorkflowState class
 def merge_metadata(x: Dict[str, Any], y: Dict[str, Any]) -> Dict[str, Any]:
     """
     Merge metadata dictionaries, preserving all keys from both.
@@ -27,10 +27,10 @@ class WorkflowState(TypedDict):
     while being compatible with LangGraph's state management requirements.
     
     Reducer functions handle concurrent updates during parallel execution:
-    - messages: operator.add concatenates lists
+    - messages: `operator.add` concatenates lists
     - current_agent: lambda takes latest non-None value
-    - agent_outputs: operator.or_ merges dictionaries (Python 3.9+)
-    - files: operator.add concatenates lists
+    - agent_outputs: `operator.or_` merges dictionaries
+    - files: `operator.add` concatenates lists
     - metadata: merge_metadata merges dictionaries while preserving all keys
     """
     messages: Annotated[List[Dict[str, Any]], operator.add]
@@ -48,7 +48,6 @@ def create_initial_state(messages: Optional[List[Dict[str, Any]]] = None, curren
         files=[],
         metadata={}
     )
-
 
 # Human-in-the-loop state management functions
 def set_pending_interrupt(state: WorkflowState, agent_name: str, interrupt_data: Dict[str, Any], executor_key: str) -> Dict[str, Any]:

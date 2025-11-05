@@ -39,6 +39,16 @@ class AgentNodeFactory:
             LangGraph node function that executes supervisor and returns routing decision
         """
         def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
+            # Check if there's a pending interrupt - if so, don't execute supervisor
+            # This prevents the supervisor from continuing to delegate when workers are waiting for approval
+            pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
+            if pending_interrupts:
+                # Return minimal update to preserve state and pause workflow
+                return {
+                    "current_agent": supervisor.name,
+                    "metadata": state.get("metadata", {})
+                }
+            
             worker_outputs = AgentNodeFactory._build_worker_outputs_summary(state, workers)
             
             user_query = ""
@@ -282,6 +292,24 @@ class AgentNodeFactory:
         
             response = AgentNodeFactory._execute_agent(worker, state, worker_instructions, [], 0)
             
+            # Check if there's a pending interrupt after execution
+            # _execute_agent updates state["metadata"] with interrupt info if one occurs
+            executor_key = f"workflow_executor_{worker.name}"
+            pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
+            
+            # If there's an interrupt, don't add empty message/agent_output
+            # This prevents the supervisor from seeing empty responses and looping
+            # IMPORTANT: Must include metadata to preserve the interrupt in accumulated_state
+            if executor_key in pending_interrupts:
+                # Interrupt detected - return update with metadata to preserve interrupt
+                # The workflow executor will detect the interrupt and pause
+                return {
+                    "current_agent": worker.name,
+                    "metadata": state.get("metadata", {}),  # CRITICAL: Include metadata to preserve interrupt
+                    # Don't add messages or agent_outputs - let workflow pause for approval
+                }
+            
+            # No interrupt - return normal response (even if empty, it's a valid response)
             return {
                 "current_agent": worker.name,
                 "messages": [{
@@ -304,19 +332,51 @@ class AgentNodeFactory:
         
         # Use appropriate executor based on agent type and provider
         llm_client = get_llm_client(agent)
+        executor_key = f"workflow_executor_{agent.name}"
+        
+        # Initialize agent_executors in session_state if needed
+        if "agent_executors" not in st.session_state:
+            st.session_state.agent_executors = {}
+        
         if agent.provider.lower() == "openai" and agent.type == "response":
-            executor = ResponseAPIExecutor(agent)
-            result = executor.execute(llm_client, enhanced_instructions, stream=False)
+            # For ResponseAPIExecutor, also persist if HITL is enabled
+            if agent.human_in_loop and agent.interrupt_on:
+                # Get or create executor from session_state (preserves conversation history)
+                if executor_key not in st.session_state.agent_executors:
+                    executor = ResponseAPIExecutor(agent)
+                    st.session_state.agent_executors[executor_key] = executor
+                else:
+                    executor = st.session_state.agent_executors[executor_key]
+                
+                # Also store metadata for reference (thread_id, etc.)
+                if "executors" not in state.get("metadata", {}):
+                    state["metadata"]["executors"] = {}
+                state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
+                
+                # Use thread_id from state for consistent execution
+                thread_id = executor.thread_id
+                config = {"configurable": {"thread_id": thread_id}}
+                
+                result = executor.execute(llm_client, enhanced_instructions, stream=False, config=config)
+                
+                # If there's an interrupt, store it in workflow state using state functions
+                if result.get("__interrupt__"):
+                    interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                    # Update state metadata
+                    state["metadata"].update(interrupt_update["metadata"])
+                    # Return empty content - workflow will pause and wait for human decision
+                    return ""
+                
+                content = result.get("content", "")
+                return content
+            else:
+                # Normal ResponseAPIExecutor (no HITL)
+                executor = ResponseAPIExecutor(agent)
+                result = executor.execute(llm_client, enhanced_instructions, stream=False)
+                return result.get("content", "")
         else:
             # For HITL, we need to persist executors across workflow steps
             # Store executor in workflow state metadata to maintain state
-            executor_key = f"workflow_executor_{agent.name}"
-            
-            # Initialize agent_executors in session_state if needed
-            if "agent_executors" not in st.session_state:
-                st.session_state.agent_executors = {}
-            
-            # Get or create executor from session_state (this preserves the checkpointer instance)
             # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
             if executor_key not in st.session_state.agent_executors:
                 # Create new executor (tools are loaded automatically from agent.tools)
@@ -349,8 +409,6 @@ class AgentNodeFactory:
                 return ""
             
             return result.get("content", "")
-        
-        return result.get("content", "")
     
     @staticmethod
     def create_tool_calling_agent_node(calling_agent: Agent, tool_agents: List[Agent]) -> Callable:

@@ -90,7 +90,7 @@ class WorkflowExecutor:
             if key not in initial_metadata:
                 continue
             
-            if key not in final_metadata:
+            if key not in final_metadata: 
                 final_metadata[key] = initial_metadata[key]
             elif isinstance(initial_metadata[key], dict) and isinstance(final_metadata[key], dict):
                 final_metadata[key] = {**final_metadata[key], **initial_metadata[key]}
@@ -104,16 +104,17 @@ class WorkflowExecutor:
         
         for node_output in workflow.stream(initial_state, config=config):
             for node_name, state_update in node_output.items():
-                # Check if interrupt was detected
+                # Apply state update FIRST to get latest metadata
+                if isinstance(state_update, dict):
+                    self._apply_state_update(accumulated_state, state_update)
+                
+                # Check if interrupt was detected AFTER applying update
                 has_pending_interrupts = "pending_interrupts" in accumulated_state.get("metadata", {})
                 is_interrupt_node = node_name == "__interrupt__"
                 has_interrupt_in_update = isinstance(state_update, dict) and "__interrupt__" in state_update
                 
                 if (is_interrupt_node or has_interrupt_in_update) and has_pending_interrupts:
                     return accumulated_state
-                
-                if isinstance(state_update, dict):
-                    self._apply_state_update(accumulated_state, state_update)
                 
                 display_callback(accumulated_state)
         

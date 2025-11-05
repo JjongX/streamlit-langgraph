@@ -75,7 +75,14 @@ class SupervisorPattern:
             
             LangGraph conditional edge function that routes to worker nodes or END
             based on routing_decision metadata set by supervisor node.
+            
+            IMPORTANT: If there's a pending interrupt, route to END to pause workflow.
             """
+            # Check for pending interrupts first - if any exist, route to END to pause
+            pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
+            if pending_interrupts:
+                return "__end__"
+            
             routing_decision = state["metadata"].get("routing_decision", {})
             worker_names = [worker.name for worker in worker_agents]
             action = routing_decision.get("action", "finish")
