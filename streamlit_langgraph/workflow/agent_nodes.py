@@ -47,10 +47,7 @@ class AgentNodeFactory:
                     user_query = msg["content"]
                     break
             
-            supervisor_instructions = AgentNodeFactory._build_supervisor_instructions(
-                supervisor, user_query, workers, worker_outputs
-            )
-            
+            supervisor_instructions = AgentNodeFactory._build_supervisor_instructions(supervisor, user_query, workers, worker_outputs)
             response, routing_decision = AgentNodeFactory._execute_supervisor_with_routing(
                 supervisor, state, supervisor_instructions, workers, allow_parallel
             )

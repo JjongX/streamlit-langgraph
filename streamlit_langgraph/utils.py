@@ -686,18 +686,56 @@ class HITLHandler:
             st.rerun()
         
         if resume_response and resume_response.get("content"):
-            # Add response message if not duplicate
+            # Update workflow_state first (single source of truth)
             content = resume_response.get("content")
+            
+            # Check if message already exists in workflow_state
             message_exists = False
-            for msg in st.session_state.messages:
-                if (msg.get("role") == "assistant" and msg.get("agent") == agent_name and msg.get("content") == content):
+            for msg in workflow_state.get("messages", []):
+                if (msg.get("role") == "assistant" and 
+                    msg.get("agent") == agent_name and 
+                    msg.get("content") == content):
                     message_exists = True
                     break
             
             if not message_exists:
-                st.session_state.messages.append({"role": "assistant", "content": content, "agent": agent_name})
+                assistant_message = {
+                    "role": "assistant",
+                    "content": content,
+                    "agent": agent_name,
+                    "timestamp": None
+                }
+                workflow_state["messages"].append(assistant_message)
+                workflow_state["agent_outputs"][agent_name] = content
+                workflow_state["current_agent"] = agent_name
+            
+            # Sync to session_state for UI rendering
+            # Note: chat.py will also sync this on next render, but we do it here
+            # to ensure immediate UI update
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
+            
+            # Check if message already exists in session_state
+            session_msg_exists = False
+            for msg in st.session_state.messages:
+                if (msg.get("role") == "assistant" and 
+                    msg.get("agent") == agent_name and 
+                    msg.get("content") == content):
+                    session_msg_exists = True
+                    break
+            
+            if not session_msg_exists:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "agent": agent_name
+                })
         
         HITLUtils.clear_interrupt_and_decisions(workflow_state, executor_key)
+        
+        # Persist workflow_state to session_state (single source of truth)
+        st.session_state.workflow_state = workflow_state
+        
         st.rerun()
     
     def display_action_approval_ui(self, executor_key: str, executor,
