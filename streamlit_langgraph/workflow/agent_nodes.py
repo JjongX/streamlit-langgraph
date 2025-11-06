@@ -17,7 +17,57 @@ from .state import WorkflowState, set_pending_interrupt, merge_metadata
 
 class AgentNodeFactory:
     """Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes."""
+
+    @staticmethod
+    def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent], 
+                                     allow_parallel: bool = False,
+                                     delegation_mode: str = "handoff") -> Callable:
+        """Create a supervisor agent node with structured routing."""
+        if delegation_mode == "handoff":
+            def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
+                pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
+                if pending_interrupts:
+                    return {"current_agent": supervisor.name, "metadata": state.get("metadata", {})}
+                
+                worker_outputs = AgentNodeFactory.HandoffDelegation._build_worker_outputs_summary(state, workers)
+                user_query = AgentNodeFactory._extract_user_query(state)
+                supervisor_instructions = get_supervisor_instructions(
+                    role=supervisor.role,
+                    instructions=supervisor.instructions,
+                    user_query=user_query,
+                    worker_list=", ".join([f"{w.name} ({w.role})" for w in workers]),
+                    worker_outputs=worker_outputs
+                )
+                response, routing_decision = AgentNodeFactory.HandoffDelegation._execute_supervisor_with_routing(
+                    supervisor, state, supervisor_instructions, workers, allow_parallel
+                )
+                return {
+                    "current_agent": supervisor.name,
+                    "messages": [{"role": "assistant", "content": response, "agent": supervisor.name}],
+                    "agent_outputs": {supervisor.name: response},
+                    "metadata": merge_metadata(state.get("metadata", {}), {"routing_decision": routing_decision})
+                }
+            return supervisor_agent_node
+        else: # tool calling delegation mode
+            tool_agents_map = {agent.name: agent for agent in workers}
+            def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
+                user_query = AgentNodeFactory._extract_user_query(state)
+                agent_tools = AgentNodeFactory.ToolCallingDelegation._create_agent_tools(workers, state)
+                response = AgentNodeFactory.ToolCallingDelegation._execute_agent_with_tools(
+                    supervisor, state, user_query, agent_tools, tool_agents_map
+                )
+                return {
+                    "current_agent": supervisor.name,
+                    "messages": [{"role": "assistant", "content": response, "agent": supervisor.name}],
+                    "agent_outputs": {supervisor.name: response}
+                }
+            return supervisor_agent_node
     
+    @staticmethod
+    def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
+        """Create a worker agent node for workflow patterns (handoff delegation mode only)."""
+        return AgentNodeFactory.HandoffDelegation.create_worker_agent_node(worker, supervisor)
+
     @staticmethod
     def _extract_user_query(state: WorkflowState) -> str:
         """Extract user query from state messages."""
@@ -141,10 +191,9 @@ class AgentNodeFactory:
             """
             Execute supervisor agent with structured routing via function calling.
             
-            LangGraph workflows use conditional edges based on routing decisions. This method
-            uses OpenAI's function calling to get structured routing decisions for ResponseAPIExecutor.
-            For CreateAgentExecutor, it uses LangChain's tool calling mechanism to enable delegation.
-            Other providers fallback to text-based analysis.
+            Routes to appropriate executor based on agent type:
+            - ResponseAPIExecutor (OpenAI response type) -> uses OpenAI function calling directly
+            - CreateAgentExecutor (LangChain) -> uses LangChain tool calling
             
             Args:
                 agent: Supervisor agent
@@ -157,33 +206,38 @@ class AgentNodeFactory:
                 Tuple of (response_content, routing_decision_dict)
             """
             if agent.provider.lower() == "openai" and agent.type == "response":
-                client = get_llm_client(agent)
-                tools = AgentNodeFactory.HandoffDelegation._build_delegation_tool(workers, allow_parallel)
-                enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-                messages = [{"role": "user", "content": enhanced_instructions}]
-                
-                with st.spinner(f"🤖 {agent.name} is working..."):
-                    response = client.chat.completions.create(
-                        model=agent.model, messages=messages, temperature=agent.temperature,
-                        tools=tools, tool_choice="auto" if tools else None
-                    )
-                message = response.choices[0].message
-                content = message.content or ""
-                routing_decision = AgentNodeFactory.HandoffDelegation._extract_routing_decision(message, content)
-                return routing_decision[1], routing_decision[0]
-            
-            # Handle CreateAgentExecutor with LangChain tool calling for delegation
-            # Check if we have workers to delegate to
-            if workers:
-                return AgentNodeFactory.HandoffDelegation._execute_supervisor_with_langchain_routing(
+                # Use ResponseAPIExecutor approach - OpenAI function calling
+                return AgentNodeFactory.HandoffDelegation._execute_with_response_api_executor(
                     agent, state, input_message, workers, allow_parallel
                 )
-            # No workers available, fallback to text-based
-            content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
-            return content, {"action": "finish"}
+            else:
+                # Use CreateAgentExecutor approach - LangChain tool calling
+                return AgentNodeFactory.HandoffDelegation._execute_with_create_agent_executor(
+                    agent, state, input_message, workers, allow_parallel
+                )
         
         @staticmethod
-        def _build_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
+        def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
+                                               input_message: str, workers: List[Agent],
+                                               allow_parallel: bool) -> tuple[str, Dict[str, Any]]:
+            """Execute supervisor using ResponseAPIExecutor approach with OpenAI function calling."""
+            client = get_llm_client(agent)
+            tools = AgentNodeFactory.HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
+            enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
+            messages = [{"role": "user", "content": enhanced_instructions}]
+            
+            with st.spinner(f"🤖 {agent.name} is working..."):
+                response = client.chat.completions.create(
+                    model=agent.model, messages=messages, temperature=agent.temperature,
+                    tools=tools, tool_choice="auto" if tools else None
+                )
+            message = response.choices[0].message
+            content = message.content or ""
+            routing_decision = AgentNodeFactory.HandoffDelegation._extract_openai_routing_decision(message, content)
+            return routing_decision[1], routing_decision[0]
+
+        @staticmethod
+        def _build_openai_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
             """Build OpenAI function tool definition for delegation."""
             if not workers:
                 return []
@@ -223,26 +277,35 @@ class AgentNodeFactory:
             }]
         
         @staticmethod
-        def _execute_supervisor_with_langchain_routing(agent: Agent, state: WorkflowState,
-                                                       input_message: str, workers: List[Agent],
-                                                       allow_parallel: bool = False) -> tuple[str, Dict[str, Any]]:
-            """
-            Execute supervisor agent with LangChain tool calling for delegation.
-            This method enables CreateAgentExecutor to delegate tasks using LangChain's
-            tool calling mechanism, similar to how ResponseAPIExecutor uses OpenAI function calling.
+        def _extract_openai_routing_decision(message, content: str) -> tuple[Dict[str, Any], str]:
+            """Extract routing decision from OpenAI function call response."""
+            routing_decision = {"action": "finish"}
+            if message.tool_calls:
+                tool_call = message.tool_calls[0]
+                if tool_call.function.name == "delegate_task":
+                    args = json.loads(tool_call.function.arguments)
+                    routing_decision = {
+                        "action": "delegate",
+                        "target_worker": args.get("worker_name"),
+                        "task_description": args.get("task_description"),
+                        "priority": args.get("priority", "medium")
+                    }
+                    delegation_text = f"\n\n**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
+                    content = content + delegation_text if content else delegation_text[2:]
+            return routing_decision, content
+        
+        @staticmethod
+        def _execute_with_create_agent_executor(agent: Agent, state: WorkflowState,
+                                               input_message: str, workers: List[Agent],
+                                               allow_parallel: bool) -> tuple[str, Dict[str, Any]]:
+            """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
+            # Check if we have workers to delegate to
+            if not workers:
+                content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
+                return content, {"action": "finish"}
             
-            Args:
-                agent: Supervisor agent (using CreateAgentExecutor)
-                state: Current workflow state
-                input_message: Supervisor instructions/prompt
-                workers: Available worker agents
-                allow_parallel: If True, allows "PARALLEL" delegation option
-                
-            Returns:
-                Tuple of (response_content, routing_decision_dict)
-            """
             # Build delegation tool as LangChain StructuredTool
-            delegation_tool = AgentNodeFactory.HandoffDelegation._build_delegation_langchain_tool(workers, allow_parallel)
+            delegation_tool = AgentNodeFactory.HandoffDelegation._build_langchain_delegation_tool(workers, allow_parallel)
             if not delegation_tool:
                 content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
                 return content, {"action": "finish"}
@@ -270,7 +333,7 @@ class AgentNodeFactory:
                 state["metadata"]["executors"] = {}
             state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
             
-            # Execute with enhanced instructions - might remove this later
+            # Execute with enhanced instructions
             enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
             config = {"configurable": {"thread_id": executor.thread_id}}
             
@@ -296,13 +359,11 @@ class AgentNodeFactory:
                     state["metadata"].update(interrupt_update["metadata"])
                     return "", {"action": "finish"}
             # Extract routing decision from LangChain output
-            routing_decision = AgentNodeFactory.HandoffDelegation._extract_routing_decision_from_langchain(
-                out, enhanced_instructions
-            )
+            routing_decision = AgentNodeFactory.HandoffDelegation._extract_langchain_routing_decision(out, enhanced_instructions)
             return routing_decision[1], routing_decision[0]
         
         @staticmethod
-        def _build_delegation_langchain_tool(workers: List[Agent], allow_parallel: bool) -> Optional[StructuredTool]:
+        def _build_langchain_delegation_tool(workers: List[Agent], allow_parallel: bool) -> Optional[StructuredTool]:
             """Build LangChain StructuredTool for delegation."""
             if not workers:
                 return None
@@ -313,13 +374,10 @@ class AgentNodeFactory:
                 worker_name_options.append("PARALLEL")
                 worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
             
-            
             # Create a dummy function that will be called when tool is invoked
-            # The actual routing decision is extracted from the tool call itself
+            # Function required by StructuredTool - return value is not used, routing decision is extracted from tool call
             def delegate_task(worker_name: str, task_description: str, priority: str = "medium") -> str:
-                """Delegate a task to a specialist worker agent."""
                 return f"Task delegated to {worker_name}: {task_description}"
-            
             tool_description = (
                 f"Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work. "
                 f"Available workers: {', '.join(worker_desc_parts)}"
@@ -335,16 +393,16 @@ class AgentNodeFactory:
                     description="Priority level of this task",
                     enum=["high", "medium", "low"]
                 )
-            tool = StructuredTool.from_function(
+
+            return StructuredTool.from_function(
                 func=delegate_task,
                 name="delegate_task",
                 description=tool_description,
                 args_schema=DelegationParams
             )
-            return tool 
         
         @staticmethod
-        def _extract_routing_decision_from_langchain(out: Any, prompt: str) -> tuple[Dict[str, Any], str]:
+        def _extract_langchain_routing_decision(out: Any, prompt: str) -> tuple[Dict[str, Any], str]:
             """Extract routing decision from LangChain agent output."""
             routing_decision = {"action": "finish"}
             content = ""
@@ -413,24 +471,6 @@ class AgentNodeFactory:
                     content = str(out.get('output', '')) if isinstance(out, dict) and 'output' in out else (out if isinstance(out, str) else str(out))
             
             return routing_decision, content or ""
-        
-        @staticmethod
-        def _extract_routing_decision(message, content: str) -> tuple[Dict[str, Any], str]:
-            """Extract routing decision from OpenAI function call response."""
-            routing_decision = {"action": "finish"}
-            if message.tool_calls:
-                tool_call = message.tool_calls[0]
-                if tool_call.function.name == "delegate_task":
-                    args = json.loads(tool_call.function.arguments)
-                    routing_decision = {
-                        "action": "delegate",
-                        "target_worker": args.get("worker_name"),
-                        "task_description": args.get("task_description"),
-                        "priority": args.get("priority", "medium")
-                    }
-                    delegation_text = f"\n\n**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
-                    content = content + delegation_text if content else delegation_text[2:]
-            return routing_decision, content
 
         @staticmethod
         def _get_previous_worker_outputs(state: WorkflowState, supervisor_name: str, current_worker_name: str) -> Optional[List[str]]:
@@ -441,6 +481,7 @@ class AgentNodeFactory:
                 if name not in (supervisor_name, current_worker_name):
                     worker_outputs.append(f"**{name}**: {output}")
             return worker_outputs if worker_outputs else None
+        
         @staticmethod
         def _build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
             """Build context data for worker based on context mode."""
@@ -450,7 +491,7 @@ class AgentNodeFactory:
             if context_mode == "full":
                 return supervisor_output, AgentNodeFactory.HandoffDelegation._get_previous_worker_outputs(
                     state, supervisor.name, worker.name
-            )
+                )
             elif context_mode == "summary":
                 routing_decision = state.get("metadata", {}).get("routing_decision", {})
                 return routing_decision.get("task_description", supervisor_output), None
@@ -528,66 +569,11 @@ class AgentNodeFactory:
                 tool_agent = tool_agents_map.get(tool_name)
                 if not tool_agent:
                     return f"Error: Agent {tool_name} not found"
-                return AgentNodeFactory.ToolCallingDelegation._execute_tool_agent(tool_agent, args.get("task", ""), state)
+                tool_instructions = get_tool_agent_instructions(
+                    role=tool_agent.role,
+                    instructions=tool_agent.instructions,
+                    task=args.get("task", "")
+                )
+                return AgentNodeFactory._execute_agent(tool_agent, state, tool_instructions, [], 0)
             except Exception as e:
                 return f"Error executing {tool_name}: {str(e)}"
-        
-        @staticmethod
-        def _execute_tool_agent(agent: Agent, task: str, state: WorkflowState) -> str:
-            """Execute a tool agent with a simple task description."""
-            tool_instructions = get_tool_agent_instructions(
-                role=agent.role,
-                instructions=agent.instructions,
-                task=task
-            )
-            return AgentNodeFactory._execute_agent(agent, state, tool_instructions, [], 0)
-    
-    @staticmethod
-    def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent], 
-                                     allow_parallel: bool = False,
-                                     delegation_mode: str = "handoff") -> Callable:
-        """Create a supervisor agent node with structured routing."""
-        if delegation_mode == "handoff":
-            def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
-                pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
-                if pending_interrupts:
-                    return {"current_agent": supervisor.name, "metadata": state.get("metadata", {})}
-                
-                worker_outputs = AgentNodeFactory.HandoffDelegation._build_worker_outputs_summary(state, workers)
-                user_query = AgentNodeFactory._extract_user_query(state)
-                supervisor_instructions = get_supervisor_instructions(
-                    role=supervisor.role,
-                    instructions=supervisor.instructions,
-                    user_query=user_query,
-                    worker_list=", ".join([f"{w.name} ({w.role})" for w in workers]),
-                    worker_outputs=worker_outputs
-                )
-                response, routing_decision = AgentNodeFactory.HandoffDelegation._execute_supervisor_with_routing(
-                    supervisor, state, supervisor_instructions, workers, allow_parallel
-                )
-                return {
-                    "current_agent": supervisor.name,
-                    "messages": [{"role": "assistant", "content": response, "agent": supervisor.name}],
-                    "agent_outputs": {supervisor.name: response},
-                    "metadata": merge_metadata(state.get("metadata", {}), {"routing_decision": routing_decision})
-                }
-            return supervisor_agent_node
-        else: # tool calling delegation mode
-            tool_agents_map = {agent.name: agent for agent in workers}
-            def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
-                user_query = AgentNodeFactory._extract_user_query(state)
-                agent_tools = AgentNodeFactory.ToolCallingDelegation._create_agent_tools(workers, state)
-                response = AgentNodeFactory.ToolCallingDelegation._execute_agent_with_tools(
-                    supervisor, state, user_query, agent_tools, tool_agents_map
-                )
-                return {
-                    "current_agent": supervisor.name,
-                    "messages": [{"role": "assistant", "content": response, "agent": supervisor.name}],
-                    "agent_outputs": {supervisor.name: response}
-                }
-            return supervisor_agent_node
-    
-    @staticmethod
-    def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
-        """Create a worker agent node for workflow patterns (handoff delegation mode only)."""
-        return AgentNodeFactory.HandoffDelegation.create_worker_agent_node(worker, supervisor)
