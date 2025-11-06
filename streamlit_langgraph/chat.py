@@ -6,10 +6,8 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from .utils import MIME_TYPES
-
 from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
-from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils
+from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils, MIME_TYPES
 from .workflow import WorkflowExecutor, create_initial_state
 from .workflow.state import set_pending_interrupt
 

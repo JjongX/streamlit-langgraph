@@ -3,7 +3,6 @@ import os
 from streamlit_langgraph import UIConfig, LangGraphChat, load_agents_from_yaml
 from streamlit_langgraph.workflow import WorkflowBuilder, SupervisorTeam
 
-
 def create_hierarchical_workflow_example():
     """Create a hierarchical workflow with multiple supervisor teams."""
     

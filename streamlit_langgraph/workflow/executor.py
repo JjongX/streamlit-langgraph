@@ -71,7 +71,6 @@ class WorkflowExecutor:
                     "role": "system",
                     "content": "Workflow completed successfully.",
                     "agent": None,
-                    "timestamp": None
                 })
         
         return final_state
@@ -130,7 +129,6 @@ class WorkflowExecutor:
                     "role": "system",
                     "content": "Workflow completed successfully.",
                     "agent": None,
-                    "timestamp": None
                 })
         
         return accumulated_state
