@@ -1,37 +1,10 @@
 import os
 
-from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, load_agents_from_yaml
+from streamlit_langgraph import UIConfig, LangGraphChat, load_agents_from_yaml
 from streamlit_langgraph.workflow import WorkflowBuilder
-
-def format_proposal(content: str, proposal_type: str = "academic") -> str:
-    """Format content into a simple research proposal structure."""
-    try:
-        formatted = f"""# Research Proposal ({proposal_type.title()})
-
-## Overview
-{content[:1000] if len(content) > 1000 else content}
-
-## Key Sections
-- Background and context
-- Research objectives
-- Methodology approach
-- Expected outcomes
-
----
-*Formatted using format_proposal tool*
-"""
-        return formatted
-    except Exception as e:
-        return f"Formatting error: {str(e)}"
 
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""
-    
-    CustomTool.register_tool(
-        name="format_proposal",
-        description="Format content into a simple research proposal structure",
-        function=format_proposal
-    )
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_sequential.yaml")
     agents = load_agents_from_yaml(config_path)
@@ -46,7 +19,6 @@ def main():
     
     # Create a supervisor and workers
     supervisor, workers = create_supervisor_workflow_example()
-    
     # Create a workflow
     builder = WorkflowBuilder()
     supervisor_workflow = builder.create_supervisor_workflow(
@@ -68,8 +40,8 @@ def main():
 
 ### **🎯 Team Structure**
 **🎯 Research Supervisor**: Project coordination and task delegation
-🔍 **Information Gatherer**: Comprehensive research and data collection  
-📝 **Proposal Writer**: Professional proposal creation and formatting
+**🔍 Information Gatherer**: Comprehensive research and data collection  
+**📝 Proposal Writer**: Professional proposal creation and formatting
 
 ### **🏗️ Sequential Workflow**
 1. **Supervisor** analyzes your request and creates a project plan
@@ -77,8 +49,7 @@ def main():
 3. **Supervisor** coordinates handoffs and ensures quality
 4. **Workflow can finish at any time when the supervisor determines the task is complete**
 
-## ❓ Example Requests:
-
+### ❓ Example Requests:
 - *"Create a research proposal on renewable energy adoption"*
 - *"I need a comprehensive analysis of market trends"* 
 - *"Research and write a business proposal for AI implementation"*

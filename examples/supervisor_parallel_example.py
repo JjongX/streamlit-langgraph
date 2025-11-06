@@ -26,7 +26,7 @@ def analyze_sentiment(text: str) -> str:
 def create_parallel_supervisor_workflow():
     """Create a parallel supervisor workflow for comprehensive product analysis."""
     
-    # Register custom tool
+    # Register custom tool BEFORE loading agents
     CustomTool.register_tool(
         name="analyze_sentiment",
         description="Perform sentiment analysis on text",
@@ -34,6 +34,7 @@ def create_parallel_supervisor_workflow():
     )
     
     # Load agent configurations from YAML
+    # Customer_Analyst agent has "analyze_sentiment" in its tools list (see config file)
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
     agents = load_agents_from_yaml(config_path)
     
@@ -47,8 +48,7 @@ def main():
     
     # Create supervisor and workers
     supervisor, workers = create_parallel_supervisor_workflow()
-    
-    # Build parallel workflow
+    # Create a workflow
     builder = WorkflowBuilder()
     parallel_workflow = builder.create_supervisor_workflow(
         supervisor=supervisor,

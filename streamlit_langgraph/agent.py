@@ -34,7 +34,6 @@ class Agent:
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
     context: Optional[str] = "least"  # Context mode: "full", "summary", or "least"
-    # Human-in-the-loop configuration (only available for multiagent workflows)
     human_in_loop: bool = False  # Enable human-in-the-loop approval (multiagent workflows only)
     interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None  # Tool names to interrupt on
     hitl_description_prefix: Optional[str] = "Tool execution pending approval"  # Prefix for interrupt messages
