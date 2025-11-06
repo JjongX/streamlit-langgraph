@@ -89,14 +89,6 @@ def load_agents_from_yaml(yaml_path: str) -> List[Agent]:
     This function is designed for multi-agent configurations. For single agents,
     use the Agent class directly: Agent(name="...", role="...", ...)
     
-    Args:
-        yaml_path: Path to the YAML file containing agent configurations.
-                  Can be absolute or relative path. If relative, it's resolved
-                  relative to the current working directory.
-    
-    Returns:
-        List of Agent instances loaded from the YAML file.
-    
     Example:
         # Load agents from a config file
         agents = load_agents_from_yaml("./configs/supervisor_sequential.yaml")

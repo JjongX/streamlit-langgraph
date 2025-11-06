@@ -341,7 +341,7 @@ class LangGraphChat:
             self._process_file_uploads(files)
         
         # Update workflow_state first
-        user_message = {"role": "user", "content": prompt, "agent": None, "timestamp": None}
+        user_message = {"role": "user", "content": prompt, "agent": None}
         st.session_state.workflow_state["messages"].append(user_message)
         # Sync to session_state for UI rendering
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -517,7 +517,6 @@ class LangGraphChat:
                 "role": "assistant",
                 "content": f"❌ **Error executing workflow: {str(e)}**",
                 "agent": "workflow",
-                "timestamp": None
             }
             st.session_state.workflow_state["messages"].append(error_message)
             st.session_state.workflow_state["agent_outputs"]["workflow"] = error_message["content"]
@@ -636,7 +635,6 @@ class LangGraphChat:
                     "role": "assistant",
                     "content": response.get("content", ""),
                     "agent": response.get("agent", agent.name),
-                    "timestamp": None
                 }
                 st.session_state.workflow_state["messages"].append(assistant_message)
                 st.session_state.workflow_state["agent_outputs"][agent.name] = response.get("content", "")
@@ -657,7 +655,6 @@ class LangGraphChat:
                     "role": "assistant",
                     "content": response.get("content", ""),
                     "agent": agent.name,
-                    "timestamp": None
                 }
                 st.session_state.workflow_state["messages"].append(assistant_message)
                 st.session_state.workflow_state["agent_outputs"][agent.name] = response.get("content", "")
