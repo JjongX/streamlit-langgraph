@@ -133,7 +133,7 @@ class AgentNodeFactory:
                     output = state['agent_outputs'][worker_name]
                     worker_outputs.append(f"**{worker_name}**: {output}")
             return worker_outputs
-        
+    
         @staticmethod
         def _execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
                                             input_message: str, workers: List[Agent],
@@ -320,7 +320,10 @@ class AgentNodeFactory:
                 """Delegate a task to a specialist worker agent."""
                 return f"Task delegated to {worker_name}: {task_description}"
             
-            
+            tool_description = (
+                f"Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work. "
+                f"Available workers: {', '.join(worker_desc_parts)}"
+            )
             class DelegationParams(BaseModel):
                 worker_name: str = Field(
                     description=f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}",
@@ -552,8 +555,12 @@ class AgentNodeFactory:
                 
                 worker_outputs = AgentNodeFactory.HandoffDelegation._build_worker_outputs_summary(state, workers)
                 user_query = AgentNodeFactory._extract_user_query(state)
-                supervisor_instructions = AgentNodeFactory.HandoffDelegation._build_supervisor_instructions(
-                    supervisor, user_query, workers, worker_outputs
+                supervisor_instructions = get_supervisor_instructions(
+                    role=supervisor.role,
+                    instructions=supervisor.instructions,
+                    user_query=user_query,
+                    worker_list=", ".join([f"{w.name} ({w.role})" for w in workers]),
+                    worker_outputs=worker_outputs
                 )
                 response, routing_decision = AgentNodeFactory.HandoffDelegation._execute_supervisor_with_routing(
                     supervisor, state, supervisor_instructions, workers, allow_parallel
