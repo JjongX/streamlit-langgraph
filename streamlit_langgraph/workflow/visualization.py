@@ -5,7 +5,6 @@ from langgraph.graph import StateGraph
 from ..agent import Agent
 from .builder import WorkflowBuilder
 
-
 class WorkflowVisualizer:
     """
     Provides visualization capabilities for different LangGraph workflow patterns.

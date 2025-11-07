@@ -761,7 +761,6 @@ class HITLHandler:
                     "role": "assistant",
                     "content": content,
                     "agent": agent_name,
-                    "timestamp": None
                 }
                 workflow_state["messages"].append(assistant_message)
                 workflow_state["agent_outputs"][agent_name] = content

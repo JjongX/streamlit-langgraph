@@ -11,7 +11,7 @@ class SupervisorPattern:
     Supervisor workflow pattern supporting multiple delegation modes.
     
     Delegation modes:
-    - "handoff": Agents transfer control between nodes, full context transfer
+    - "handoff": Agents transfer control between nodes
     - "tool_calling": Calling agent stays in control, agents called as tools
     """
     
@@ -38,14 +38,23 @@ class SupervisorPattern:
     
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":
-            return SupervisorPattern._create_tool_calling_workflow(supervisor_agent, worker_agents)
+            graph = StateGraph(WorkflowState)
+            # Use delegation mechanism via create_supervisor_agent_node with tool_calling mode
+            calling_node = AgentNodeFactory.create_supervisor_agent_node(
+                supervisor_agent, worker_agents, delegation_mode="tool_calling"
+            )
+            graph.add_node(supervisor_agent.name, calling_node)
+            graph.add_edge(START, supervisor_agent.name)
+            graph.add_edge(supervisor_agent.name, END)
+            return graph.compile()
+        
         # Handoff mode - multiple nodes, structural handoff
         graph = StateGraph(WorkflowState)
         
         # Create supervisor node
         allow_parallel = (execution_mode == "parallel")
         supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
-            supervisor_agent, worker_agents, allow_parallel=allow_parallel
+            supervisor_agent, worker_agents, allow_parallel=allow_parallel, delegation_mode="handoff"
         )
         graph.add_node(supervisor_agent.name, supervisor_node)
         graph.add_edge(START, supervisor_agent.name)
@@ -135,32 +144,6 @@ class SupervisorPattern:
         for worker in worker_agents:
             graph.add_edge("parallel_fanout", worker.name)
             graph.add_edge(worker.name, supervisor_agent.name)
-        
-        return graph.compile()
-    
-    @staticmethod
-    def _create_tool_calling_workflow(calling_agent: Agent, tool_agents: List[Agent]) -> StateGraph:
-        """
-        Create a tool calling workflow implementing the "agent-as-tools" pattern.
-        
-        LangGraph pattern: Single node workflow where the calling agent uses OpenAI
-        function calling to invoke tool agents synchronously. Unlike supervisor pattern,
-        control stays with the calling agent (no handoff between nodes).
-        
-        Args:
-            calling_agent: Agent that can call other agents as tools
-            tool_agents: List of agents exposed as callable tools
-        
-        Returns:
-            Compiled LangGraph workflow with single node
-        """
-        graph = StateGraph(WorkflowState)
-        calling_node = AgentNodeFactory.create_tool_calling_agent_node(
-            calling_agent, tool_agents
-        )
-        graph.add_node(calling_agent.name, calling_node)
-        graph.add_edge(START, calling_agent.name)
-        graph.add_edge(calling_agent.name, END)
         
         return graph.compile()
     

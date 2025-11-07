@@ -159,7 +159,7 @@ def main():
         instructions="You coordinate sentiment analysis tasks and delegate to specialists. You have access to tools for analyzing sentiment and escalating negative sentiment cases.",
         type="agent",
         provider="openai",
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
         tools=["analyze_sentiment", "escalate_negative_sentiment"],
         human_in_loop=True,  # Enable HITL for supervisor
         interrupt_on={
@@ -176,7 +176,7 @@ def main():
             instructions="You gather comprehensive information on topics.",
             type="agent",
             provider="openai",
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
         ),
         Agent(
             name="analyst",
@@ -184,7 +184,7 @@ def main():
             instructions="You analyze sentiment in customer communications and feedback. You can analyze sentiment using analyze_sentiment and escalate negative cases using escalate_negative_sentiment.",
             type="agent",
             provider="openai",
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             tools=["analyze_sentiment", "escalate_negative_sentiment"],
             human_in_loop=True,
             interrupt_on={

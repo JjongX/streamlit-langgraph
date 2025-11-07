@@ -17,14 +17,14 @@ class Agent:
     """
     Configuration class for defining individual agents in a multiagent system.
     Required fields: name, role, instructions, type ('response' or 'agent').
-    provider and model default to 'openai' and 'gpt-4.1' if not specified.
+    provider and model default to 'openai' and 'gpt-4.1-mini' if not specified.
     """
     name: str
     role: str
     instructions: str
     type: str # Must be 'response' or 'agent'
     provider: Optional[str] = "openai"
-    model: Optional[str] = "gpt-4.1"
+    model: Optional[str] = "gpt-4.1-mini"
     system_message: Optional[str] = None
     temperature: float = 0.0
     allow_file_search: bool = False
@@ -34,7 +34,6 @@ class Agent:
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
     context: Optional[str] = "least"  # Context mode: "full", "summary", or "least"
-    # Human-in-the-loop configuration (only available for multiagent workflows)
     human_in_loop: bool = False  # Enable human-in-the-loop approval (multiagent workflows only)
     interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None  # Tool names to interrupt on
     hitl_description_prefix: Optional[str] = "Tool execution pending approval"  # Prefix for interrupt messages
@@ -88,14 +87,6 @@ def load_agents_from_yaml(yaml_path: str) -> List[Agent]:
     
     This function is designed for multi-agent configurations. For single agents,
     use the Agent class directly: Agent(name="...", role="...", ...)
-    
-    Args:
-        yaml_path: Path to the YAML file containing agent configurations.
-                  Can be absolute or relative path. If relative, it's resolved
-                  relative to the current working directory.
-    
-    Returns:
-        List of Agent instances loaded from the YAML file.
     
     Example:
         # Load agents from a config file
