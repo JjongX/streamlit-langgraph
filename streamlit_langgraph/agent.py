@@ -17,14 +17,14 @@ class Agent:
     """
     Configuration class for defining individual agents in a multiagent system.
     Required fields: name, role, instructions, type ('response' or 'agent').
-    provider and model default to 'openai' and 'gpt-4.1' if not specified.
+    provider and model default to 'openai' and 'gpt-4.1-mini' if not specified.
     """
     name: str
     role: str
     instructions: str
     type: str # Must be 'response' or 'agent'
     provider: Optional[str] = "openai"
-    model: Optional[str] = "gpt-4.1"
+    model: Optional[str] = "gpt-4.1-mini"
     system_message: Optional[str] = None
     temperature: float = 0.0
     allow_file_search: bool = False

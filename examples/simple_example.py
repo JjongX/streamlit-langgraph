@@ -7,7 +7,7 @@ def main():
         role="Helpful Assistant", 
         instructions="You are a helpful assistant that can answer questions and have conversations.",
         provider="openai",
-        model="gpt-4.1",
+        model="gpt-4.1-mini",
         temperature=0.7,
         ## Response mode
         type="response",
