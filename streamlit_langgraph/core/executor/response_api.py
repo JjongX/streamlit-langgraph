@@ -3,7 +3,7 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from ...agent import Agent, AgentManager
+from ...agent import AgentManager
 from .base import BaseExecutor
 
 
@@ -138,7 +138,7 @@ class ResponseAPIExecutor(BaseExecutor):
         # Add tool results (must come after assistant message with tool_calls)
         messages_with_tools.extend(tool_results)
         
-        from ...utils import CustomTool
+        from ...utils import CustomTool  # lazy import to avoid circular import
         custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
         
         followup_response = llm_client.chat.completions.create(
@@ -191,8 +191,7 @@ class ResponseAPIExecutor(BaseExecutor):
         # Add user prompt
         messages.append({"role": "user", "content": prompt})
         
-        # Build function tools from CustomTool registry
-        from ...utils import CustomTool
+        from ...utils import CustomTool  # lazy import to avoid circular import
         custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
         
         try:
@@ -312,27 +311,7 @@ class ResponseAPIExecutor(BaseExecutor):
             msg_dict["tool_calls"] = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
         return msg_dict
     
-    def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
-        """Execute a tool by name."""
-        from ...utils import CustomTool  # lazy import to avoid circular import
-        tool = CustomTool._registry.get(tool_name)
-        if tool and tool.function:
-            return tool.function(**tool_args)
-        return f"Tool {tool_name} not found"
-    
-    def _create_interrupt_response(self, interrupt_data: List[Dict[str, Any]], thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create response dict for interrupt."""
-        return {
-            "role": "assistant",
-            "content": "",
-            "agent": self.agent.name,
-            "__interrupt__": interrupt_data,
-            "thread_id": thread_id,
-            "config": config
-        }
-    
-    # ========== Tool Configuration Methods ==========
-    
+        
     def _build_tools_config(self, llm_client) -> List[Dict[str, Any]]:
         """Build tools configuration based on agent capabilities."""
         tools = []

@@ -172,16 +172,6 @@ class CreateAgentExecutor(BaseExecutor):
         
         return None
     
-    def _create_interrupt_response(self, interrupt_data: Any, thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create response dict for interrupt."""
-        return {
-            "role": "assistant",
-            "content": "",
-            "agent": self.agent.name,
-            "__interrupt__": interrupt_data,
-            "thread_id": thread_id,
-            "config": config
-        }
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""

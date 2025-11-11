@@ -1,11 +1,11 @@
-"""
-Centralized state coordinator for managing WorkflowState and session_state synchronization.
-"""
+# Centralized state coordinator for managing WorkflowState and session_state synchronization
 
+
+import uuid
 from typing import Any, Dict, List
 import streamlit as st
 
-from .workflow.state import WorkflowStateManager
+from .workflow_state import WorkflowStateManager
 
 class StateCoordinator:
     """
@@ -54,15 +54,15 @@ class StateCoordinator:
             self.sync_to_session_state()
     
     def add_user_message(self, content: str) -> None:
-        """Add a user message to workflow state."""
+        """Add a user message to workflow state with unique ID."""
         self.update_workflow_state({
-            "messages": [{"role": "user", "content": content, "agent": None}]
+            "messages": [{"id": str(uuid.uuid4()), "role": "user", "content": content, "agent": None}]
         })
     
     def add_assistant_message(self, content: str, agent_name: str) -> None:
-        """Add an assistant message to workflow state."""
+        """Add an assistant message to workflow state with unique ID."""
         self.update_workflow_state({
-            "messages": [{"role": "assistant", "content": content, "agent": agent_name}],
+            "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": content, "agent": agent_name}],
             "agent_outputs": {agent_name: content},
             "current_agent": agent_name
         })
@@ -72,7 +72,7 @@ class StateCoordinator:
         Sync workflow_state to session_state for UI rendering.
         
         This is the ONLY method that writes to session_state.messages.
-        Uses signature-based duplicate detection to handle system messages correctly.
+        Uses ID-based duplicate detection for simple and reliable tracking.
         """
         workflow_messages = st.session_state.workflow_state.get("messages", [])
         session_messages = st.session_state.messages
@@ -89,26 +89,36 @@ class StateCoordinator:
         """
         Find messages in workflow_messages that aren't in session_messages.
         
-        Uses signature-based comparison to handle system messages and duplicates.
+        Uses ID-based comparison for simple and reliable duplicate detection.
+        Also checks content+role as fallback for messages without IDs.
         """
-        # Create a set of message signatures for fast lookup
-        session_signatures = {
-            self._message_signature(msg)
+        # Create a set of message IDs for fast lookup
+        session_ids = {msg.get("id") for msg in session_messages if msg.get("id")}
+        
+        # Also create a set of (role, content) tuples for messages without IDs (fallback)
+        session_content_signatures = {
+            (msg.get("role"), msg.get("content", ""))
             for msg in session_messages
+            if not msg.get("id")  # Only for messages without IDs
         }
         
         new_messages = []
         for msg in workflow_messages:
-            # Skip system messages
-            if msg.get("role") == "system":
+            msg_id = msg.get("id")
+            
+            # Check by ID first (most reliable)
+            if msg_id and msg_id in session_ids:
                 continue
             
-            # Skip messages already in session_state
-            if self._message_signature(msg) in session_signatures:
-                continue
+            # Fallback: check by content+role for messages without IDs
+            if not msg_id:
+                content_sig = (msg.get("role"), msg.get("content", ""))
+                if content_sig in session_content_signatures:
+                    continue
             
-            # Convert to session format
+            # Convert to session format (copy message with ID)
             session_msg = {
+                "id": msg_id if msg_id else str(uuid.uuid4()),  # Ensure all messages have IDs
                 "role": msg.get("role"),
                 "content": msg.get("content", "")
             }
@@ -118,14 +128,6 @@ class StateCoordinator:
             new_messages.append(session_msg)
         
         return new_messages
-    
-    def _message_signature(self, msg: Dict[str, Any]) -> tuple:
-        """Create a unique signature for a message to detect duplicates."""
-        return (
-            msg.get("role"),
-            msg.get("content"),
-            msg.get("agent")
-        )
     
     def set_pending_interrupt(
         self, 

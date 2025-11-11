@@ -137,3 +137,4 @@ class WorkflowState(TypedDict):
     agent_outputs: Annotated[Dict[str, Any], operator.or_]
     files: Annotated[List[Dict[str, Any]], operator.add]
     metadata: Annotated[Dict[str, Any], WorkflowStateManager.merge_metadata]
+
