@@ -5,7 +5,6 @@ from typing import Any, Optional
 import streamlit as st
 
 from ..agent import Agent, ExecutorFactory
-from ..utils import CustomTool
 from .executor import ResponseAPIExecutor, CreateAgentExecutor
 
 
@@ -71,6 +70,7 @@ class ExecutorRegistry:
             
             # Update tools for CreateAgentExecutor if needed
             if hasattr(executor, 'tools') and agent.tools:
+                from ..utils import CustomTool # lazy import to avoid circular import
                 executor.tools = CustomTool.get_langchain_tools(agent.tools)
         
         return executor

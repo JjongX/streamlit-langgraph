@@ -188,6 +188,17 @@ class DisplayManager:
             section._agent_info = {"agent": message.get("agent", "Assistant")}
             section.update("text", message.get("content", ""))
             section.stream()
+            
+            # Add to session_state immediately to prevent duplicates on reruns
+            session_msg = {
+                "id": msg_id,
+                "role": message.get("role"),
+                "content": message.get("content", "")
+            }
+            if "agent" in message:
+                session_msg["agent"] = message["agent"]
+            st.session_state.messages.append(session_msg)
+            
             return True
         
         return False

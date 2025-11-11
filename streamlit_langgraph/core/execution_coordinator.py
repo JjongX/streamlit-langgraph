@@ -67,6 +67,12 @@ class ExecutionCoordinator:
                 last_user_msg_id = msg.get("id")
                 break
         
+        # Track which messages have already been displayed to prevent duplicates
+        displayed_message_ids = set()
+        # Initialize with messages that are already in session_state
+        if "messages" in st.session_state:
+            displayed_message_ids = {msg.get("id") for msg in st.session_state.messages if msg.get("id")}
+        
         def display_agent_response(state):
             """Callback to display agent responses as they complete during workflow execution."""
             if not state or "messages" not in state:
@@ -75,8 +81,10 @@ class ExecutionCoordinator:
             # Only process messages that come after the last user message
             found_last_user = last_user_msg_id is None
             for msg in state["messages"]:
+                msg_id = msg.get("id")
+                
                 # Track when we've reached the last user message
-                if last_user_msg_id and msg.get("id") == last_user_msg_id:
+                if last_user_msg_id and msg_id == last_user_msg_id:
                     found_last_user = True
                     continue
                 
@@ -84,9 +92,16 @@ class ExecutionCoordinator:
                 if not found_last_user:
                     continue
                 
+                # Skip if message has already been displayed
+                if msg_id and msg_id in displayed_message_ids:
+                    continue
+                
                 # Use display callback if provided, otherwise skip
                 if display_callback:
-                    display_callback(msg, msg.get("id"))
+                    display_callback(msg, msg_id)
+                    # Mark as displayed
+                    if msg_id:
+                        displayed_message_ids.add(msg_id)
             
         
         # Use existing workflow_state as initial state (user message already added)
