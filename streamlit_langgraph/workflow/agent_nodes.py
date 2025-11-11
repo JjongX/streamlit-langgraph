@@ -5,15 +5,9 @@ import streamlit as st
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from ..agent import Agent, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
-from ..prompts import (
-    get_supervisor_instructions,
-    get_worker_agent_instructions,
-    get_tool_calling_agent_instructions,
-    get_tool_agent_instructions,
-)
-from .state import WorkflowState, set_pending_interrupt, merge_metadata
-
+from ..agent import Agent, ResponseAPIExecutor, CreateAgentExecutor, AgentManager
+from .prompts import SupervisorPromptBuilder, ToolCallingPromptBuilder
+from .state import WorkflowState, WorkflowStateManager
 
 class AgentNodeFactory:
     """Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes."""
@@ -31,7 +25,7 @@ class AgentNodeFactory:
                 
                 worker_outputs = AgentNodeFactory.HandoffDelegation._build_worker_outputs_summary(state, workers)
                 user_query = AgentNodeFactory._extract_user_query(state)
-                supervisor_instructions = get_supervisor_instructions(
+                supervisor_instructions = SupervisorPromptBuilder.get_supervisor_instructions(
                     role=supervisor.role,
                     instructions=supervisor.instructions,
                     user_query=user_query,
@@ -45,7 +39,7 @@ class AgentNodeFactory:
                     "current_agent": supervisor.name,
                     "messages": [{"role": "assistant", "content": response, "agent": supervisor.name}],
                     "agent_outputs": {supervisor.name: response},
-                    "metadata": merge_metadata(state.get("metadata", {}), {"routing_decision": routing_decision})
+                    "metadata": WorkflowStateManager.merge_metadata(state.get("metadata", {}), {"routing_decision": routing_decision})
                 }
             return supervisor_agent_node
         else: # tool calling delegation mode
@@ -92,7 +86,7 @@ class AgentNodeFactory:
             Agent response content as string
         """
         enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-        llm_client = get_llm_client(agent)
+        llm_client = AgentManager.get_llm_client(agent)
         executor_key = f"workflow_executor_{agent.name}"
         
         if "agent_executors" not in st.session_state:
@@ -111,9 +105,10 @@ class AgentNodeFactory:
                 state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
                 
                 config = {"configurable": {"thread_id": executor.thread_id}}
-                result = executor.execute(llm_client, enhanced_instructions, stream=False, config=config)
+                conversation_messages = state.get("messages", [])
+                result = executor.execute(llm_client, enhanced_instructions, stream=False, config=config, messages=conversation_messages)
                 if result.get("__interrupt__"):
-                    interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                    interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                     state["metadata"].update(interrupt_update["metadata"])
                     return ""
                 return result.get("content", "")
@@ -135,9 +130,10 @@ class AgentNodeFactory:
             state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
             
             config = {"configurable": {"thread_id": executor.thread_id}}
-            result = executor.execute(llm_client, input_message, stream=False, config=config)
+            conversation_messages = state.get("messages", [])
+            result = executor.execute(llm_client, input_message, stream=False, config=config, messages=conversation_messages)
             if result.get("__interrupt__"):
-                interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return ""
             return result.get("content", "")
@@ -153,7 +149,7 @@ class AgentNodeFactory:
                 context_data, previous_worker_outputs = AgentNodeFactory.HandoffDelegation._build_worker_context(
                     state, worker, supervisor
                 )
-                worker_instructions = get_worker_agent_instructions(
+                worker_instructions = SupervisorPromptBuilder.get_worker_agent_instructions(
                     role=worker.role, instructions=worker.instructions, user_query=user_query,
                     supervisor_output=context_data, previous_worker_outputs=previous_worker_outputs
                 )
@@ -221,7 +217,7 @@ class AgentNodeFactory:
                                                input_message: str, workers: List[Agent],
                                                allow_parallel: bool) -> tuple[str, Dict[str, Any]]:
             """Execute supervisor using ResponseAPIExecutor approach with OpenAI function calling."""
-            client = get_llm_client(agent)
+            client = AgentManager.get_llm_client(agent)
             tools = AgentNodeFactory.HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
             enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
             messages = [{"role": "user", "content": enhanced_instructions}]
@@ -310,7 +306,7 @@ class AgentNodeFactory:
                 content = AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
                 return content, {"action": "finish"}
             
-            llm_client = get_llm_client(agent)
+            llm_client = AgentManager.get_llm_client(agent)
             executor_key = f"workflow_executor_{agent.name}"
             if "agent_executors" not in st.session_state:
                 st.session_state.agent_executors = {}
@@ -345,7 +341,7 @@ class AgentNodeFactory:
                 interrupt_data = executor._detect_interrupt_in_stream(config, enhanced_instructions)
                 if interrupt_data:
                     result = executor._create_interrupt_response(interrupt_data, executor.thread_id, config)
-                    interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                    interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                     state["metadata"].update(interrupt_update["metadata"])
                     return "", {"action": "finish"}
                 # Invoke agent and get raw output
@@ -355,7 +351,7 @@ class AgentNodeFactory:
                 # Check for interrupts in output
                 if isinstance(out, dict) and "__interrupt__" in out:
                     result = executor._create_interrupt_response(out["__interrupt__"], executor.thread_id, config)
-                    interrupt_update = set_pending_interrupt(state, agent.name, result, executor_key)
+                    interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                     state["metadata"].update(interrupt_update["metadata"])
                     return "", {"action": "finish"}
             # Extract routing decision from LangChain output
@@ -527,8 +523,8 @@ class AgentNodeFactory:
             if agent.provider.lower() != "openai":
                 return AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
 
-            client = get_llm_client(agent)
-            enhanced_instructions = get_tool_calling_agent_instructions(
+            client = AgentManager.get_llm_client(agent)
+            enhanced_instructions = ToolCallingPromptBuilder.get_tool_calling_agent_instructions(
                 role=agent.role,
                 instructions=agent.instructions
             )
@@ -569,7 +565,7 @@ class AgentNodeFactory:
                 tool_agent = tool_agents_map.get(tool_name)
                 if not tool_agent:
                     return f"Error: Agent {tool_name} not found"
-                tool_instructions = get_tool_agent_instructions(
+                tool_instructions = ToolCallingPromptBuilder.get_tool_agent_instructions(
                     role=tool_agent.role,
                     instructions=tool_agent.instructions,
                     task=args.get("task", "")

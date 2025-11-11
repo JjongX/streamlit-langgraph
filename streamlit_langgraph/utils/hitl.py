@@ -1,399 +1,16 @@
-import inspect
-import os
-import tempfile
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+"""Human-in-the-Loop (HITL) utilities and handlers."""
+
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
-from langchain_core.tools import StructuredTool
-# from langchain.tools import StructuredTool
 
-from .agent import CreateAgentExecutor, ResponseAPIExecutor, get_llm_client
-from .workflow.state import (
-    clear_pending_interrupt,
-    get_hitl_decision,
-    get_pending_interrupts,
-    set_hitl_decision,
-    set_pending_interrupt,
-)
+from ..agent import AgentManager, ResponseAPIExecutor, CreateAgentExecutor
+from ..workflow.state import WorkflowStateManager
 
-FILE_SEARCH_EXTENSIONS = [
-    ".c", ".cpp", ".cs", ".css", ".doc", ".docx", ".go", 
-    ".html", ".java", ".js", ".json", ".md", ".pdf", ".php", 
-    ".pptx", ".py", ".rb", ".sh", ".tex", ".ts", ".txt"
-]
-
-CODE_INTERPRETER_EXTENSIONS = [
-    ".c", ".cs", ".cpp", ".csv", ".doc", ".docx", ".html", 
-    ".java", ".json", ".md", ".pdf", ".php", ".pptx", ".py", 
-    ".rb", ".tex", ".txt", ".css", ".js", ".sh", ".ts", ".csv", 
-    ".jpeg", ".jpg", ".gif", ".pkl", ".png", ".tar", ".xlsx", 
-    ".xml", ".zip"
-]
-
-VISION_EXTENSIONS = [".png", ".jpeg", ".jpg", ".webp", ".gif"]
-
-MIME_TYPES = {
-    "txt" : "text/plain",
-    "csv" : "text/csv",
-    "tsv" : "text/tab-separated-values",
-    "html": "text/html",
-    "yaml": "text/yaml",
-    "md"  : "text/markdown",
-    "png" : "image/png",
-    "jpg" : "image/jpeg",
-    "jpeg": "image/jpeg",
-    "gif" : "image/gif",
-    "xml" : "application/xml",
-    "json": "application/json",
-    "pdf" : "application/pdf",
-    "zip" : "application/zip",
-    "tar" : "application/x-tar",
-    "gz"  : "application/gzip",
-    "xls" : "application/vnd.ms-excel",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "doc" : "application/msword",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "ppt" : "application/vnd.ms-powerpoint",
-    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-}
-
-@dataclass
-class FileInfo:
-    """Comprehensive information about uploaded or processed files."""
-    name: str
-    path: str
-    size: int
-    type: str
-    content: Optional[bytes] = None
-    metadata: Dict[str, Any] = None
-    # OpenAI integration fields
-    openai_file_id: Optional[str] = None
-    vision_file_id: Optional[str] = None
-    input_messages: List[Dict[str, Any]] = None
-    
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
-        if self.input_messages is None:
-            self.input_messages = []
-    
-    @property
-    def extension(self) -> str:
-        """Get file extension."""
-        return Path(self.name).suffix.lower()
-    
-    @property
-    def capabilities(self) -> List[str]:
-        """Get list of capabilities for this file type."""
-        caps = []
-        ext = self.extension
-        
-        if ext in VISION_EXTENSIONS:
-            caps.append("image analysis")
-        if ext in CODE_INTERPRETER_EXTENSIONS:
-            caps.append("code execution")
-        if ext in FILE_SEARCH_EXTENSIONS:
-            caps.append("text search")
-        if ext == ".pdf":
-            caps.append("PDF processing")
-        
-        return caps or ["basic file handling"]
-    
-    def get_summary(self) -> str:
-        """Get a summary string for this file."""
-        cap_str = ", ".join(self.capabilities)
-        return f"📄 **{self.name}** ({self.size} bytes) - Available for: {cap_str}"
-
-class FileHandler:
-    """
-    Handler for managing file uploads with OpenAI API integration.
-    """
-    
-    def __init__(self, temp_dir: Optional[str] = None, openai_client=None):
-        self.temp_dir = temp_dir or tempfile.mkdtemp()
-        self.files: Dict[str, FileInfo] = {}
-        self.openai_client = openai_client
-    
-    def save_uploaded_file(self, uploaded_file, file_id: Optional[str] = None) -> FileInfo:
-        """
-        Save an uploaded file and process it for OpenAI integration.
-        
-        Args:
-            uploaded_file: Streamlit uploaded file object
-            file_id: Optional custom file ID
-            
-        Returns:
-            FileInfo: Information about the saved file
-        """
-        if file_id is None:
-            file_id = uploaded_file.file_id if hasattr(uploaded_file, 'file_id') else uploaded_file.name
-        
-        file_path = os.path.join(self.temp_dir, uploaded_file.name)
-        
-        with open(file_path, 'wb') as f:
-            f.write(uploaded_file.getvalue())
-        
-        file_ext = Path(uploaded_file.name).suffix.lower()
-        file_type = MIME_TYPES.get(file_ext)
-        
-        file_info = FileInfo(
-            name=uploaded_file.name,
-            path=file_path,
-            size=len(uploaded_file.getvalue()),
-            type=file_type,
-            content=uploaded_file.getvalue(),
-            metadata={
-                'file_id': file_id,
-                'extension': file_ext,
-                'uploaded_at': None
-            }
-        )
-        
-        if self.openai_client:
-            self._process_file_for_openai(file_info)
-        
-        self.files[file_id] = file_info
-        return file_info
-    
-    def get_openai_input_messages(self) -> List[Dict[str, Any]]:
-        """Get OpenAI input messages for all files.
-        
-        Returns:
-            List[Dict]: List of OpenAI input messages for files
-        """
-        messages = []
-        for file_info in self.files.values():
-            messages.extend(file_info.input_messages)
-        return messages
-    
-    def get_file_context_summary(self) -> str:
-        """Get a summary of all uploaded files for context.
-        
-        Returns:
-            str: Summary of uploaded files
-        """
-        if not self.files:
-            return "No files uploaded."
-        
-        return "\n".join(file_info.get_summary() for file_info in self.files.values())
-
-    def _process_file_for_openai(self, file_info: FileInfo) -> None:
-        """
-        Process a file for OpenAI integration and update its input_messages.
-        
-        Handles different file types: PDFs, images (vision), and text files.
-        Creates appropriate OpenAI file objects and adds them to input_messages.
-        """
-        if not self.openai_client:
-            return
-        
-        file_ext = file_info.extension
-        file_path = Path(file_info.path)
-        
-        file_info.input_messages.append({
-            "role": "user", 
-            "content": f"File locally available at: {file_path}"
-        })
-        
-        if file_ext == ".pdf":
-            with open(file_path, "rb") as f:
-                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-                file_info.openai_file_id = openai_file.id
-            file_info.input_messages.append({
-                "role": "user",
-                "content": [{"type": "input_file", "file_id": openai_file.id}]
-            })
-        elif file_ext in VISION_EXTENSIONS:
-            with open(file_path, "rb") as f:
-                vision_file = self.openai_client.files.create(file=f, purpose="vision")
-                file_info.vision_file_id = vision_file.id
-            file_info.input_messages.append({
-                "role": "user",
-                "content": [{"type": "input_image", "file_id": vision_file.id}]
-            })
-        elif file_ext in [".txt", ".md", ".json", ".csv", ".py", ".js", ".html", ".xml"]:
-            with open(file_path, "rb") as f:
-                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-                file_info.openai_file_id = openai_file.id
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                file_info.input_messages.append({
-                    "role": "user",
-                    "content": f"Content of {file_path.name}:\n```\n{content[:2000]}{'...' if len(content) > 2000 else ''}\n```"
-                })
-
-@dataclass
-class CustomTool:
-    """
-    A custom tool that can be used by agents in the multiagent system.
-    """
-    name: str
-    description: str
-    function: Callable
-    parameters: Optional[Dict[str, Any]] = None
-    return_direct: bool = False
-
-    _registry = {}
-
-    @classmethod
-    def register_tool(cls, name: str, description: str, function: Callable, **kwargs) -> "CustomTool":
-        """
-        Register a custom tool and add it to the class-level registry.
-        """
-        tool = cls(
-            name=name,
-            description=description,
-            function=function,
-            **kwargs
-        )
-        cls._registry[name] = tool
-        return tool
-    
-    @classmethod
-    def tool(cls, name: str, description: str, **kwargs):
-        """
-        Decorator for registering functions as tools.
-        
-        Example:
-            @CustomTool.tool("calculator", "Performs basic arithmetic")
-            def calculate(expression: str) -> float:
-                return eval(expression)
-        """
-        def decorator(func: Callable) -> Callable:
-            cls.register_tool(name, description, func, **kwargs)
-            return func
-        return decorator
-    
-    def __post_init__(self):
-        """Extract function parameters if not provided."""
-        if self.parameters is None:
-            self.parameters = self._extract_parameters()
-    
-    @classmethod
-    def get_langchain_tools(cls, tool_names: Optional[List[str]] = None) -> List[Any]:
-        """
-        Convert CustomTool registry items to LangChain tools.
-        
-        Args:
-            tool_names: Optional list of tool names to include. If None, includes all registered tools.
-        
-        Returns:
-            List of LangChain tool objects
-        """
-        tools = []
-        registry = cls._registry
-        
-        if tool_names:
-            registry = {name: registry[name] for name in tool_names if name in registry}
-        
-        for tool_name, custom_tool in registry.items():
-            try:
-                tool = StructuredTool.from_function(
-                    func=custom_tool.function,
-                    name=tool_name,
-                    description=custom_tool.description,
-                )
-                tools.append(tool)
-            except Exception:
-                # Skip tools that fail to convert
-                continue
-        
-        return tools
-    
-    @classmethod
-    def get_openai_tools(cls, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """
-        Convert CustomTool registry items to OpenAI function calling format.
-        
-        Args:
-            tool_names: Optional list of tool names to include. If None, includes all registered tools.
-        
-        Returns:
-            List of OpenAI function tool dictionaries
-        """
-        tools = []
-        registry = cls._registry
-        
-        if tool_names:
-            registry = {name: registry[name] for name in tool_names if name in registry}
-        
-        for tool_name, custom_tool in registry.items():
-            try:
-                # Use parameters if available, otherwise extract from function
-                parameters = custom_tool.parameters if custom_tool.parameters else custom_tool._extract_parameters()
-                
-                tool_dict = {
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "description": custom_tool.description,
-                        "parameters": parameters
-                    }
-                }
-                tools.append(tool_dict)
-            except Exception:
-                # Skip tools that fail to convert
-                continue
-        
-        return tools
-    
-    @classmethod
-    def get_tool_function(cls, tool_name: str) -> Optional[Callable]:
-        """
-        Get the function for a registered tool.
-        
-        Args:
-            tool_name: Name of the tool
-        
-        Returns:
-            The tool function if found, None otherwise
-        """
-        tool = cls._registry.get(tool_name)
-        return tool.function if tool else None
-    
-    def _extract_parameters(self) -> Dict[str, Any]:
-        """Extract parameters from function signature."""
-        sig = inspect.signature(self.function)
-        parameters = {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-        
-        for param_name, param in sig.parameters.items():
-            param_info = {"type": "string"}  # Default type
-            
-            # Try to extract type from annotation
-            if param.annotation is not inspect.Parameter.empty:
-                if param.annotation is str:
-                    param_info["type"] = "string"
-                elif param.annotation is int:
-                    param_info["type"] = "integer"
-                elif param.annotation is float:
-                    param_info["type"] = "number"
-                elif param.annotation is bool:
-                    param_info["type"] = "boolean"
-                elif param.annotation is list:
-                    param_info["type"] = "array"
-                elif param.annotation is dict:
-                    param_info["type"] = "object"
-            
-            parameters["properties"][param_name] = param_info
-            
-            # Check if parameter is required
-            if param.default == inspect.Parameter.empty:
-                parameters["required"].append(param_name)
-        
-        return parameters
 
 class HITLUtils:
     """
-    Utility class for Human-in-the-Loop (HITL) functionality.
-    
-    Provides static methods for handling interrupts, formatting decisions,
-    and checking permissions in HITL workflows.
+    Static utility operations for Human-in-the-Loop (HITL) functionality.
     """
     
     @staticmethod
@@ -547,7 +164,7 @@ class HITLUtils:
         if not workflow_state:
             return False
         
-        pending_interrupts = get_pending_interrupts(workflow_state)
+        pending_interrupts = WorkflowStateManager.get_pending_interrupts(workflow_state)
         
         # Check if any interrupt has valid __interrupt__ data
         for value in pending_interrupts.values():
@@ -559,7 +176,7 @@ class HITLUtils:
     @staticmethod
     def get_valid_interrupts(workflow_state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """Extract and filter valid interrupts from workflow state."""
-        pending_interrupts = get_pending_interrupts(workflow_state)
+        pending_interrupts = WorkflowStateManager.get_pending_interrupts(workflow_state)
         return {
             key: value for key, value in pending_interrupts.items()
             if isinstance(value, dict) and value.get("__interrupt__")
@@ -569,7 +186,7 @@ class HITLUtils:
     def initialize_decisions(workflow_state: Dict[str, Any], executor_key: str, 
                             num_actions: int) -> List[Optional[Dict[str, Any]]]:
         """Initialize decisions list from workflow state or create new one."""
-        decisions = get_hitl_decision(workflow_state, executor_key)
+        decisions = WorkflowStateManager.get_hitl_decision(workflow_state, executor_key)
         if decisions is None or len(decisions) != num_actions:
             decisions = [None] * num_actions
         return decisions
@@ -588,19 +205,26 @@ class HITLUtils:
             decisions_key = f"{executor_key}_decisions"
             workflow_state["metadata"]["hitl_decisions"].pop(decisions_key, None)
 
+
 class HITLHandler:
-    """Handler for Human-in-the-Loop (HITL) interrupt processing and UI."""
+    """
+    Orchestrator for Human-in-the-Loop (HITL) interrupt processing and UI.
     
-    def __init__(self, agent_manager, config):
+    Uses HITLUtils for data transformation utilities.
+    """
+    
+    def __init__(self, agent_manager, config, state_coordinator):
         """
         Initialize HITL handler with dependencies.
         
         Args:
             agent_manager: AgentManager instance for accessing agents
             config: UIConfig instance for UI settings
+            state_coordinator: StateCoordinator instance for state management
         """
         self.agent_manager = agent_manager
         self.config = config
+        self.state_coordinator = state_coordinator
     
     def handle_pending_interrupts(self, workflow_state: Dict[str, Any]) -> bool:
         """
@@ -698,7 +322,7 @@ class HITLHandler:
         
         if executor is None:
             # Clear invalid interrupt
-            clear_update = clear_pending_interrupt(workflow_state, executor_key)
+            clear_update = WorkflowStateManager.clear_pending_interrupt(workflow_state, executor_key)
             workflow_state["metadata"].update(clear_update["metadata"])
         
         return executor
@@ -722,71 +346,36 @@ class HITLHandler:
         Returns:
             True if execution was resumed
         """
-        clear_update = clear_pending_interrupt(workflow_state, executor_key)
-        workflow_state["metadata"].update(clear_update["metadata"])
+        # Clear interrupt using coordinator
+        self.state_coordinator.clear_pending_interrupt(executor_key)
         
         formatted_decisions = HITLUtils.format_decisions(decisions)
         
         # Handle CreateAgentExecutor which needs agent_obj initialization
         if hasattr(executor, 'agent_obj') and executor.agent_obj is None:
-            llm_client = get_llm_client(executor.agent)
+            llm_client = AgentManager.get_llm_client(executor.agent)
             executor._build_agent(llm_client)
         
         resume_config = original_config or {"configurable": {"thread_id": thread_id}}
         
-        with st.spinner("Processing your decision..."):
-            resume_response = executor.resume(formatted_decisions, config=resume_config)
+        # Get messages from workflow_state for resume
+        conversation_messages = workflow_state.get("messages", [])
         
+        with st.spinner("Processing your decision..."):
+            resume_response = executor.resume(formatted_decisions, config=resume_config, messages=conversation_messages)
+        
+        # Handle additional interrupts
         if resume_response and resume_response.get("__interrupt__"):
-            interrupt_update = set_pending_interrupt(workflow_state, agent_name, resume_response, executor_key)
-            workflow_state["metadata"].update(interrupt_update["metadata"])
+            self.state_coordinator.set_pending_interrupt(agent_name, resume_response, executor_key)
             HITLUtils.clear_decisions(workflow_state, executor_key)
             st.rerun()
         
+        # Add response using coordinator (automatic deduplication)
         if resume_response and resume_response.get("content"):
-            # Update workflow_state first (single source of truth)
-            content = resume_response.get("content")
-            
-            # Check if message already exists in workflow_state
-            message_exists = False
-            for msg in workflow_state.get("messages", []):
-                if (msg.get("role") == "assistant" and 
-                    msg.get("agent") == agent_name and 
-                    msg.get("content") == content):
-                    message_exists = True
-                    break
-            
-            if not message_exists:
-                assistant_message = {
-                    "role": "assistant",
-                    "content": content,
-                    "agent": agent_name,
-                }
-                workflow_state["messages"].append(assistant_message)
-                workflow_state["agent_outputs"][agent_name] = content
-                workflow_state["current_agent"] = agent_name
-            
-            # Sync to session_state for UI rendering
-            # Note: chat.py will also sync this on next render, but we do it here
-            # to ensure immediate UI update
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
-            
-            # Check if message already exists in session_state
-            session_msg_exists = False
-            for msg in st.session_state.messages:
-                if (msg.get("role") == "assistant" and 
-                    msg.get("agent") == agent_name and 
-                    msg.get("content") == content):
-                    session_msg_exists = True
-                    break
-            
-            if not session_msg_exists:
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": content,
-                    "agent": agent_name
-                })
+            self.state_coordinator.add_assistant_message(
+                resume_response["content"],
+                agent_name
+            )
         
         HITLUtils.clear_interrupt_and_decisions(workflow_state, executor_key)
         
@@ -875,6 +464,9 @@ class HITLHandler:
             decision: Decision dictionary (type: approve/reject/edit)
         """        
         decisions[action_index] = decision
-        decision_update = set_hitl_decision(workflow_state, executor_key, decisions)
+        decision_update = WorkflowStateManager.set_hitl_decision(workflow_state, executor_key, decisions)
         workflow_state["metadata"].update(decision_update["metadata"])
         st.rerun()
+
+
+

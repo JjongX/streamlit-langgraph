@@ -1,13 +1,13 @@
 import os
 
-from streamlit_langgraph import UIConfig, LangGraphChat, load_agents_from_yaml
+from streamlit_langgraph import AgentManager, UIConfig, LangGraphChat
 from streamlit_langgraph.workflow import WorkflowBuilder
 
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_sequential.yaml")
-    agents = load_agents_from_yaml(config_path)
+    agents = AgentManager.load_from_yaml(config_path)
 
     supervisor = agents[0]
     workers = agents[1:]

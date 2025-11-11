@@ -1,17 +1,14 @@
-from typing import Any, Callable, Dict, Optional
 import uuid
+from typing import Any, Callable, Dict, Optional
 
 from langgraph.graph import StateGraph
 
-from .state import WorkflowState, create_initial_state, merge_metadata
+from .state import WorkflowState, WorkflowStateManager
 
 class WorkflowExecutor:
     """
     Handles execution of compiled workflows with Streamlit integration.
     """
-    
-    # HITL-related metadata keys that need special preservation
-    HITL_METADATA_KEYS = ["pending_interrupts", "executors", "hitl_decisions"]
     
     def execute_workflow(self, workflow: StateGraph, user_input: str, 
                         display_callback: Optional[Callable] = None,
@@ -28,40 +25,32 @@ class WorkflowExecutor:
         Returns:
             Final state after workflow execution (may contain pending_interrupts in metadata)
         """
-        initial_state = self._create_initial_state(user_input, config)
-        workflow_config = self._build_workflow_config(config)
-        
-        if display_callback:
-            return self._execute_with_display(workflow, initial_state, display_callback, workflow_config)
-        return self._execute_basic(workflow, initial_state, workflow_config)
-    
-    def _create_initial_state(self, user_input: str, config: Optional[Dict[str, Any]]) -> WorkflowState:
-        """Create and initialize workflow state."""
-        initial_state = create_initial_state(
+        # Create and initialize workflow state
+        initial_state = WorkflowStateManager.create_initial_state(
             messages=[{"role": "user", "content": user_input}]
         )
         if config:
             initial_state["metadata"].update(config)
-        return initial_state
-    
-    def _build_workflow_config(self, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Build workflow configuration with thread_id for checkpointing."""
+
+        # Build workflow configuration with thread_id for checkpointing
         configurable = {}
         if config and "configurable" in config:
             configurable.update(config["configurable"])
-        
         if "thread_id" not in configurable:
             configurable["thread_id"] = str(uuid.uuid4())
+        workflow_config = {"configurable": configurable}
         
-        return {"configurable": configurable}
+        if display_callback:
+            return self._execute_streaming(workflow, initial_state, display_callback, workflow_config)
+        return self._execute_invoke(workflow, initial_state, workflow_config)
     
-    def _execute_basic(self, workflow: StateGraph, initial_state: WorkflowState, 
-                      config: Dict[str, Any]) -> WorkflowState:
-        """Execute workflow without display callbacks."""
+    def _execute_invoke(self, workflow: StateGraph, initial_state: WorkflowState, 
+                       config: Dict[str, Any]) -> WorkflowState:
+        """Execute workflow synchronously using invoke() method."""
         final_state = workflow.invoke(initial_state, config=config)
         
         # Preserve HITL metadata from initial state
-        self._preserve_hitl_metadata(initial_state, final_state)
+        WorkflowStateManager.preserve_hitl_metadata(initial_state, final_state)
         
         # Add completion message if workflow ended
         if final_state.get("messages"):
@@ -75,30 +64,9 @@ class WorkflowExecutor:
         
         return final_state
     
-    def _preserve_hitl_metadata(self, initial_state: WorkflowState, final_state: WorkflowState) -> None:
-        """Preserve HITL-related metadata from initial state to final state."""
-        initial_metadata = initial_state.get("metadata", {})
-        if not initial_metadata:
-            return
-        
-        if "metadata" not in final_state:
-            final_state["metadata"] = {}
-        
-        final_metadata = final_state["metadata"]
-        for key in self.HITL_METADATA_KEYS:
-            if key not in initial_metadata:
-                continue
-            
-            if key not in final_metadata: 
-                final_metadata[key] = initial_metadata[key]
-            elif isinstance(initial_metadata[key], dict) and isinstance(final_metadata[key], dict):
-                final_metadata[key] = {**final_metadata[key], **initial_metadata[key]}
-            else:
-                final_metadata[key] = initial_metadata[key]
-    
-    def _execute_with_display(self, workflow: StateGraph, initial_state: WorkflowState, 
-                             display_callback: Callable, config: Dict[str, Any]) -> WorkflowState:
-        """Execute workflow with real-time display updates."""
+    def _execute_streaming(self, workflow: StateGraph, initial_state: WorkflowState, 
+                          display_callback: Callable, config: Dict[str, Any]) -> WorkflowState:
+        """Execute workflow using stream() method with real-time display updates."""
         accumulated_state = initial_state.copy()
         
         for node_output in workflow.stream(initial_state, config=config):
@@ -139,7 +107,7 @@ class WorkflowExecutor:
             accumulated_state["messages"] = accumulated_state.get("messages", []) + state_update["messages"]
         
         if "metadata" in state_update:
-            accumulated_state["metadata"] = merge_metadata(
+            accumulated_state["metadata"] = WorkflowStateManager.merge_metadata(
                 accumulated_state.get("metadata", {}),
                 state_update["metadata"]
             )

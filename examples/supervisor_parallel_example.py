@@ -1,27 +1,24 @@
 import os
 
-from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, load_agents_from_yaml
+from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, AgentManager
 from streamlit_langgraph.workflow import WorkflowBuilder
 
 def analyze_sentiment(text: str) -> str:
     """Simple sentiment analysis placeholder."""
-    try:
-        # In real implementation, this would use an NLP library
-        positive_words = ['good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic']
-        negative_words = ['bad', 'terrible', 'awful', 'poor', 'horrible', 'disappointing']
-        
-        text_lower = text.lower()
-        pos_count = sum(1 for word in positive_words if word in text_lower)
-        neg_count = sum(1 for word in negative_words if word in text_lower)
-        
-        if pos_count > neg_count:
-            return f"Sentiment: Positive (score: +{pos_count - neg_count})"
-        elif neg_count > pos_count:
-            return f"Sentiment: Negative (score: -{neg_count - pos_count})"
-        else:
-            return "Sentiment: Neutral"
-    except Exception as e:
-        return f"Analysis error: {str(e)}"
+    # In real implementation, this would use an NLP library
+    positive_words = ['good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic']
+    negative_words = ['bad', 'terrible', 'awful', 'poor', 'horrible', 'disappointing']
+    
+    text_lower = text.lower()
+    pos_count = sum(1 for word in positive_words if word in text_lower)
+    neg_count = sum(1 for word in negative_words if word in text_lower)
+    
+    if pos_count > neg_count:
+        return f"Sentiment: Positive (score: +{pos_count - neg_count})"
+    elif neg_count > pos_count:
+        return f"Sentiment: Negative (score: -{neg_count - pos_count})"
+    else:
+        return "Sentiment: Neutral"
 
 def create_parallel_supervisor_workflow():
     """Create a parallel supervisor workflow for comprehensive product analysis."""
@@ -36,7 +33,7 @@ def create_parallel_supervisor_workflow():
     # Load agent configurations from YAML
     # Customer_Analyst agent has "analyze_sentiment" in its tools list (see config file)
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
-    agents = load_agents_from_yaml(config_path)
+    agents = AgentManager.load_from_yaml(config_path)
     
     supervisor = agents[0]
     workers = agents[1:]

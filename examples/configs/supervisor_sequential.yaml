@@ -25,7 +25,7 @@
     You do not need to use every worker for every request, and the workflow will finish automatically when all 
     required steps are complete according to the orchestration logic.
   provider: openai
-  model: gpt-4.1
+  model: gpt-4.1-mini
   temperature: 0.3
   allow_web_search: true
   allow_file_search: true
@@ -54,7 +54,7 @@
     
     Always work within your supervisor's guidance and report back with detailed, well-sourced research results.
   provider: openai
-  model: gpt-4.1
+  model: gpt-4.1-mini
   temperature: 0.0
   allow_web_search: true
   allow_file_search: true
@@ -83,7 +83,7 @@
     
     Always work within your supervisor's guidance and deliver professionally formatted, comprehensive proposals.
   provider: openai
-  model: gpt-4.1
+  model: gpt-4.1-mini
   temperature: 0.4
   allow_code_interpreter: true
   context: full
@@ -120,7 +120,7 @@
     
     Always be helpful, friendly, and concise in your responses.
   provider: openai
-  model: gpt-4.1
+  model: gpt-4.1-mini
   temperature: 0.7
   allow_web_search: true
 
