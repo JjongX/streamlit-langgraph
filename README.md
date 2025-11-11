@@ -14,6 +14,12 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 - [Status](#status)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Examples](#examples)
+  - [Simple Single Agent](#simple-single-agent)
+  - [Supervisor Sequential](#supervisor-sequential)
+  - [Supervisor Parallel](#supervisor-parallel)
+  - [Hierarchical Workflow](#hierarchical-workflow)
+  - [Human-in-the-Loop](#human-in-the-loop)
 - [Core Concepts](#core-concepts)
   - [Agent Configuration](#agent-configuration)
   - [Workflow Patterns](#workflow-patterns)
@@ -24,13 +30,6 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 - [Configuration](#configuration)
   - [Agent Configuration Files](#agent-configuration-files)
   - [UI Configuration](#ui-configuration)
-- [Architecture Patterns](#architecture-patterns)
-- [Examples](#examples)
-  - [Simple Single Agent](#simple-single-agent)
-  - [Supervisor Sequential](#supervisor-sequential)
-  - [Supervisor Parallel](#supervisor-parallel)
-  - [Hierarchical Workflow](#hierarchical-workflow)
-  - [Human-in-the-Loop](#human-in-the-loop)
 - [API Reference](#api-reference)
   - [Agent](#agent)
   - [AgentManager](#agentmanager)
@@ -132,6 +131,73 @@ chat = slg.LangGraphChat(workflow=workflow, agents=agents)
 chat.run()
 ```
 
+## Examples
+
+All examples are in the `examples/` directory.
+
+### Simple Single Agent
+
+**File**: `examples/simple_example.py`
+
+Basic chat interface with a single agent. No workflow orchestration.
+
+```bash
+streamlit run examples/simple_example.py
+```
+
+### Supervisor Sequential
+
+**File**: `examples/supervisor_sequential_example.py`
+
+Supervisor coordinates workers sequentially. Workers execute one at a time with full context.
+
+**Config**: `examples/configs/supervisor_sequential.yaml`
+
+```bash
+streamlit run examples/supervisor_sequential_example.py
+```
+
+### Supervisor Parallel
+
+**File**: `examples/supervisor_parallel_example.py`
+
+Supervisor delegates tasks to multiple workers who can work in parallel.
+
+**Config**: `examples/configs/supervisor_parallel.yaml`
+
+```bash
+streamlit run examples/supervisor_parallel_example.py
+```
+
+### Hierarchical Workflow
+
+**File**: `examples/hierarchical_example.py`
+
+Multi-level organization with top supervisor managing sub-supervisor teams.
+
+**Config**: `examples/configs/hierarchical.yaml`
+
+```bash
+streamlit run examples/hierarchical_example.py
+```
+
+### Human-in-the-Loop
+
+**File**: `examples/human_in_the_loop_example.py`
+
+Demonstrates HITL with tool execution approval. Users can approve, reject, or edit tool calls before execution.
+
+**Config**: `examples/configs/human_in_the_loop.yaml`
+
+```bash
+streamlit run examples/human_in_the_loop_example.py
+```
+
+**Features**:
+- Custom tools with approval workflow
+- Sentiment analysis example
+- Review escalation with edit capability
+
 ## Core Concepts
 
 ### Agent Configuration
@@ -170,6 +236,14 @@ Multiple supervisor teams coordinated by a top supervisor:
 - Top supervisor delegates to sub-supervisors
 - Each sub-supervisor manages their own team
 - Multi-level organizational structure
+
+#### **Pattern Selection Guide**
+
+| Pattern | Use Case | Execution | Best For |
+|---------|----------|-----------|----------|
+| **Supervisor Sequential** | Tasks need full context from previous steps | Sequential | Research, analysis pipelines |
+| **Supervisor Parallel** | Independent tasks can run simultaneously | Parallel | Data processing, multi-source queries |
+| **Hierarchical** | Complex multi-level organization | Sequential | Large teams, department structure |
 
 ### Executor Types
 
@@ -449,83 +523,6 @@ with st.sidebar:
 
 chat.run()
 ```
-
-## Architecture Patterns
-
-### Pattern Selection Guide
-
-| Pattern | Use Case | Execution | Best For |
-|---------|----------|-----------|----------|
-| **Supervisor Sequential** | Tasks need full context from previous steps | Sequential | Research, analysis pipelines |
-| **Supervisor Parallel** | Independent tasks can run simultaneously | Parallel | Data processing, multi-source queries |
-| **Hierarchical** | Complex multi-level organization | Sequential | Large teams, department structure |
-
-## Examples
-
-All examples are in the `examples/` directory.
-
-### Simple Single Agent
-
-**File**: `examples/simple_example.py`
-
-Basic chat interface with a single agent. No workflow orchestration.
-
-```bash
-streamlit run examples/simple_example.py
-```
-
-### Supervisor Sequential
-
-**File**: `examples/supervisor_sequential_example.py`
-
-Supervisor coordinates workers sequentially. Workers execute one at a time with full context.
-
-**Config**: `examples/configs/supervisor_sequential.yaml`
-
-```bash
-streamlit run examples/supervisor_sequential_example.py
-```
-
-### Supervisor Parallel
-
-**File**: `examples/supervisor_parallel_example.py`
-
-Supervisor delegates tasks to multiple workers who can work in parallel.
-
-**Config**: `examples/configs/supervisor_parallel.yaml`
-
-```bash
-streamlit run examples/supervisor_parallel_example.py
-```
-
-### Hierarchical Workflow
-
-**File**: `examples/hierarchical_example.py`
-
-Multi-level organization with top supervisor managing sub-supervisor teams.
-
-**Config**: `examples/configs/hierarchical.yaml`
-
-```bash
-streamlit run examples/hierarchical_example.py
-```
-
-### Human-in-the-Loop
-
-**File**: `examples/human_in_the_loop_example.py`
-
-Demonstrates HITL with tool execution approval. Users can approve, reject, or edit tool calls before execution.
-
-**Config**: `examples/configs/human_in_the_loop.yaml`
-
-```bash
-streamlit run examples/human_in_the_loop_example.py
-```
-
-**Features**:
-- Custom tools with approval workflow
-- Sentiment analysis example
-- Review escalation with edit capability
 
 ## API Reference
 
