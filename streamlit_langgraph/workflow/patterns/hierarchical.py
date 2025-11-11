@@ -4,13 +4,16 @@ from typing import List
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
-from ..state import WorkflowState
 from ..agent_nodes import AgentNodeFactory
+from ..state import WorkflowState
 
 
 @dataclass
 class SupervisorTeam:
-    """Represents a sub-supervisor and their team of workers."""
+    """
+    Represents a sub-supervisor and their team of workers.
+    Internal implementation for HierarchicalPattern.
+    """
     supervisor: Agent
     workers: List[Agent]
     team_name: str = ""
@@ -18,6 +21,7 @@ class SupervisorTeam:
     def __post_init__(self):
         if not self.team_name:
             self.team_name = f"{self.supervisor.name}_team"
+
 
 class HierarchicalPattern:
     """

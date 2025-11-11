@@ -1,8 +1,8 @@
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat
+import streamlit_langgraph as slg
 
 def main():    
     # Create a simple assistant
-    assistant = Agent(
+    assistant = slg.Agent(
         name="assistant",
         role="Helpful Assistant", 
         instructions="You are a helpful assistant that can answer questions and have conversations.",
@@ -18,7 +18,7 @@ def main():
         # type="agent",
     )
     # Create UI configuration
-    config = UIConfig(
+    config = slg.UIConfig(
         title="Simple Chat Assistant",
         page_icon="💬",
         stream=True,
@@ -38,7 +38,7 @@ What would you like to talk about?""",
         enable_file_upload=True,
     )
     # Create the chat interface (single agent, no workflow needed)
-    chat = LangGraphChat(
+    chat = slg.LangGraphChat(
         agents=[assistant],
         config=config
     )

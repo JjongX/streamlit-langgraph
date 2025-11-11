@@ -5,6 +5,7 @@ from langgraph.graph import StateGraph
 
 from .state import WorkflowState, WorkflowStateManager
 
+
 class WorkflowExecutor:
     """
     Handles execution of compiled workflows with Streamlit integration.

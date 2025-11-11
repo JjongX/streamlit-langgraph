@@ -6,6 +6,7 @@ from ...agent import Agent
 from ..agent_nodes import AgentNodeFactory
 from ..state import WorkflowState
 
+
 class SupervisorPattern:
     """
     Supervisor workflow pattern supporting multiple delegation modes.

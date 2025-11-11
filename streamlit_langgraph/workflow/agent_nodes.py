@@ -524,7 +524,7 @@ class AgentNodeFactory:
                 return AgentNodeFactory._execute_agent(agent, state, input_message, [], 0)
 
             client = AgentManager.get_llm_client(agent)
-            enhanced_instructions = ToolCallingPromptBuilder.get_tool_calling_agent_instructions(
+            enhanced_instructions = ToolCallingPromptBuilder.get_orchestrator_tool_instructions(
                 role=agent.role,
                 instructions=agent.instructions
             )
@@ -565,7 +565,7 @@ class AgentNodeFactory:
                 tool_agent = tool_agents_map.get(tool_name)
                 if not tool_agent:
                     return f"Error: Agent {tool_name} not found"
-                tool_instructions = ToolCallingPromptBuilder.get_tool_agent_instructions(
+                tool_instructions = ToolCallingPromptBuilder.get_worker_tool_instructions(
                     role=tool_agent.role,
                     instructions=tool_agent.instructions,
                     task=args.get("task", "")
