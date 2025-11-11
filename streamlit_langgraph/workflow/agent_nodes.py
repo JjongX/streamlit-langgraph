@@ -5,7 +5,8 @@ import streamlit as st
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from ..agent import Agent, ResponseAPIExecutor, CreateAgentExecutor, AgentManager
+from ..agent import Agent, AgentManager
+from ..core.executor import CreateAgentExecutor
 from .prompts import SupervisorPromptBuilder, ToolCallingPromptBuilder
 from .state import WorkflowState, WorkflowStateManager
 
@@ -75,6 +76,10 @@ class AgentNodeFactory:
                       context_messages: List[str], agent_responses_count: int) -> str:
         """
         Execute an agent and return the response.
+        
+        This method orchestrates agent execution using the ExecutorFactory and InterruptManager.
+        Broken down into smaller, testable methods for better maintainability.
+        
         Args:
             agent: Agent to execute
             state: Current workflow state
@@ -83,60 +88,151 @@ class AgentNodeFactory:
             agent_responses_count: Number of agent responses (unused for now)
             
         Returns:
-            Agent response content as string
+            Agent response content as string (empty string if interrupted)
         """
-        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-        llm_client = AgentManager.get_llm_client(agent)
+        # Get or create executor
+        executor = AgentNodeFactory._get_or_create_executor(agent, state)
+        
+        # Prepare execution config
+        config = AgentNodeFactory._prepare_execution_config(executor, state)
+        
+        # Execute agent
+        result = AgentNodeFactory._invoke_executor(executor, agent, input_message, config, state)
+        
+        # Handle result (including interrupts)
+        return AgentNodeFactory._handle_execution_result(result, agent, executor, state)
+    
+    @staticmethod
+    def _get_or_create_executor(agent: Agent, state: WorkflowState):
+        """
+        Get existing executor from session state or create new one.
+        
+        Args:
+            agent: Agent configuration
+            state: Current workflow state
+            
+        Returns:
+            Executor instance (ResponseAPIExecutor or CreateAgentExecutor)
+        """
+        from ..agent import ExecutorFactory
+        
         executor_key = f"workflow_executor_{agent.name}"
         
+        # Ensure agent_executors exists in session state
         if "agent_executors" not in st.session_state:
             st.session_state.agent_executors = {}
         
-        if agent.provider.lower() == "openai" and agent.type == "response":
-            if agent.human_in_loop and agent.interrupt_on:
-                if executor_key not in st.session_state.agent_executors:
-                    executor = ResponseAPIExecutor(agent)
-                    st.session_state.agent_executors[executor_key] = executor
-                else:
-                    executor = st.session_state.agent_executors[executor_key]
-                
-                if "executors" not in state.get("metadata", {}):
-                    state["metadata"]["executors"] = {}
-                state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
-                
-                config = {"configurable": {"thread_id": executor.thread_id}}
-                conversation_messages = state.get("messages", [])
-                result = executor.execute(llm_client, enhanced_instructions, stream=False, config=config, messages=conversation_messages)
-                if result.get("__interrupt__"):
-                    interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
-                    state["metadata"].update(interrupt_update["metadata"])
-                    return ""
-                return result.get("content", "")
-            else:
-                executor = ResponseAPIExecutor(agent)
-                result = executor.execute(llm_client, enhanced_instructions, stream=False)
-                return result.get("content", "")
+        # Get existing executor or create new one
+        if executor_key not in st.session_state.agent_executors:
+            executor = ExecutorFactory.create(agent)
+            st.session_state.agent_executors[executor_key] = executor
         else:
-            if executor_key not in st.session_state.agent_executors:
-                executor = CreateAgentExecutor(agent)
-                st.session_state.agent_executors[executor_key] = executor
-            else:
-                executor = st.session_state.agent_executors[executor_key]
-                from ..utils import CustomTool # lazy import to avoid circular import
+            executor = st.session_state.agent_executors[executor_key]
+            
+            # Update tools for CreateAgentExecutor if needed
+            if hasattr(executor, 'tools'):
+                from ..utils import CustomTool
                 executor.tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+        
+        return executor
+    
+    @staticmethod
+    def _prepare_execution_config(executor, state: WorkflowState) -> Dict[str, Any]:
+        """
+        Prepare execution configuration with thread ID and metadata.
+        
+        Args:
+            executor: Executor instance
+            state: Current workflow state
             
-            if "executors" not in state.get("metadata", {}):
-                state["metadata"]["executors"] = {}
-            state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
+        Returns:
+            Configuration dictionary
+        """
+        # Ensure metadata structure exists
+        if "metadata" not in state:
+            state["metadata"] = {}
+        if "executors" not in state["metadata"]:
+            state["metadata"]["executors"] = {}
+        
+        # Store executor metadata
+        executor_key = f"workflow_executor_{executor.agent.name}"
+        state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
+        
+        # Return execution config
+        return {"configurable": {"thread_id": executor.thread_id}}
+    
+    @staticmethod
+    def _invoke_executor(executor, agent: Agent, input_message: str, 
+                        config: Dict[str, Any], state: WorkflowState) -> Dict[str, Any]:
+        """
+        Invoke the executor with appropriate parameters.
+        
+        Args:
+            executor: Executor instance
+            agent: Agent configuration
+            input_message: Input message/prompt
+            config: Execution configuration
+            state: Current workflow state
             
-            config = {"configurable": {"thread_id": executor.thread_id}}
-            conversation_messages = state.get("messages", [])
-            result = executor.execute(llm_client, input_message, stream=False, config=config, messages=conversation_messages)
-            if result.get("__interrupt__"):
-                interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
-                state["metadata"].update(interrupt_update["metadata"])
-                return ""
-            return result.get("content", "")
+        Returns:
+            Execution result dictionary
+        """
+        llm_client = AgentManager.get_llm_client(agent)
+        conversation_messages = state.get("messages", [])
+        
+        # For ResponseAPIExecutor, enhance instructions
+        if hasattr(executor, '_execute_with_hitl'):  # ResponseAPIExecutor
+            enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
+            return executor.execute(
+                llm_client=llm_client,
+                prompt=enhanced_instructions,
+                stream=False,
+                config=config,
+                messages=conversation_messages
+            )
+        else:  # CreateAgentExecutor
+            return executor.execute(
+                llm_client=llm_client,
+                prompt=input_message,
+                stream=False,
+                config=config,
+                messages=conversation_messages
+            )
+    
+    @staticmethod
+    def _handle_execution_result(result: Dict[str, Any], agent: Agent, 
+                                 executor, state: WorkflowState) -> str:
+        """
+        Handle execution result, including interrupt detection and storage.
+        
+        Args:
+            result: Execution result from executor
+            agent: Agent configuration
+            executor: Executor instance
+            state: Current workflow state
+            
+        Returns:
+            Response content string (empty if interrupted)
+        """
+        from ..agent import InterruptManager
+        
+        # Check for interrupt
+        if InterruptManager.should_interrupt(result):
+            executor_key = f"workflow_executor_{agent.name}"
+            interrupt_data = InterruptManager.extract_interrupt_data(result)
+            
+            # Store interrupt in state
+            interrupt_update = InterruptManager.store_interrupt(
+                state=state,
+                agent_name=agent.name,
+                interrupt_data=interrupt_data,
+                executor_key=executor_key
+            )
+            state["metadata"].update(interrupt_update["metadata"])
+            return ""
+        
+        # Return normal response
+        return result.get("content", "")
     
     class HandoffDelegation:
         """Inner class for handoff delegation pattern where agents transfer control between nodes."""

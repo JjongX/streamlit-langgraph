@@ -5,9 +5,9 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor
+from .agent import Agent, AgentManager
+from .core.executor import ResponseAPIExecutor, CreateAgentExecutor, WorkflowExecutor
 from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils, MIME_TYPES
-from .workflow import WorkflowExecutor
 from .workflow.state import WorkflowStateManager
 from .state_coordinator import StateCoordinator
 
