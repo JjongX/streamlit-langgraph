@@ -1,8 +1,8 @@
 import json
 import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
-import uuid
 
 import openai
 import yaml

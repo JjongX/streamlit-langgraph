@@ -10,7 +10,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 
 ## Table of Contents
 
-- [Main Goals](#main-goals)
+- [Main Goal](#main-goal)
 - [Status](#status)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -21,8 +21,9 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Context Modes](#context-modes)
   - [Human-in-the-Loop](#human-in-the-loop-hitl)
   - [Custom Tools](#custom-tools)
-- [Configuration Files](#configuration-files)
-- [UI Customization](#ui-customization)
+- [Configuration](#configuration)
+  - [Agent Configuration Files](#agent-configuration-files)
+  - [UI Configuration](#ui-configuration)
 - [Architecture Patterns](#architecture-patterns)
 - [Examples](#examples)
   - [Simple Single Agent](#simple-single-agent)
@@ -31,9 +32,16 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Hierarchical Workflow](#hierarchical-workflow)
   - [Human-in-the-Loop](#human-in-the-loop)
 - [API Reference](#api-reference)
+  - [Agent](#agent)
+  - [AgentManager](#agentmanager)
+  - [UIConfig](#uiconfig)
+  - [LangGraphChat](#langgraphchat)
+  - [WorkflowBuilder](#workflowbuilder)
+  - [WorkflowBuilder.SupervisorTeam](#workflowbuildersupervisorteam)
+  - [CustomTool](#customtool)
 - [License](#license)
 
-## Main Goals
+## Main Goal
 
 To build successful multi-agent systems, defining agent instructions, tasks, and context is more important than the actual orchestration logic. As illustrated by:
 
@@ -355,7 +363,9 @@ agent = slg.Agent(
 )
 ```
 
-## Configuration Files
+## Configuration
+
+### Agent Configuration Files
 
 Agents can be configured using YAML files:
 
@@ -383,7 +393,7 @@ Agents can be configured using YAML files:
   temperature: 0.0
 ```
 
-### HITL Configuration
+#### HITL Configuration
 
 ```yaml
 - name: analyst
@@ -402,7 +412,7 @@ Agents can be configured using YAML files:
   hitl_description_prefix: "Action requires approval"
 ```
 
-## UI Customization
+### UI Configuration
 
 ```python
 import streamlit_langgraph as slg
@@ -422,7 +432,7 @@ chat = slg.LangGraphChat(workflow=workflow, agents=agents, config=config)
 chat.run()
 ```
 
-### Custom Sidebar
+#### Custom Sidebar
 
 ```python
 import streamlit as st
@@ -519,64 +529,326 @@ streamlit run examples/human_in_the_loop_example.py
 
 ## API Reference
 
-### Core Classes
+---
 
-#### `Agent`: Agent configuration dataclass.
+### `Agent`
 
-**Key Parameters**:
-- `name`: Unique identifier
-- `role`: Role description
-- `instructions`: Detailed task instructions
-- `type`: "response" or "agent"
-- `provider`: LLM provider (openai, anthropic, etc.)
-- `model`: Model name
-- `tools`: List of tool names
-- `human_in_loop`: Enable HITL
-- `context`: Context mode (full, summary, least)
+**Description**: Core class for defining individual agents with their configurations.
 
-#### `AgentManager`: Manages multiple agents and their interactions.
+**Constructor Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | Required | Unique identifier for the agent |
+| `role` | `str` | Required | Brief description of the agent's role |
+| `instructions` | `str` | Required | Detailed instructions guiding agent behavior |
+| `type` | `str` | `"response"` | Executor type: `"response"` (OpenAI Response API) or `"agent"` (LangChain) |
+| `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
+| `model` | `str` | `"gpt-4o-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
+| `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
+| `tools` | `List[str]` | `[]` | List of tool names available to the agent |
+| `context` | `str` | `"full"` | Context mode: `"full"`, `"summary"`, or `"least"` |
+| `human_in_loop` | `bool` | `False` | Enable human-in-the-loop approval for tool execution |
+| `interrupt_on` | `Dict` | `{}` | HITL configuration per tool |
+| `hitl_description_prefix` | `str` | `""` | Prefix for HITL approval messages |
+| `allow_code_interpreter` | `bool` | `False` | Enable code interpreter (Response API only) |
+| `allow_file_search` | `bool` | `False` | Enable file search (Response API only) |
+| `allow_web_search` | `bool` | `False` | Enable web search (Response API only) |
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+agent = slg.Agent(
+    name="analyst",
+    role="Data Analyst",
+    instructions="Analyze data and provide insights",
+    type="response",
+    provider="openai",
+    model="gpt-4o-mini",
+    temperature=0.0,
+    tools=["analyze_data", "visualize"],
+    context="full",
+    human_in_loop=True,
+    interrupt_on={
+        "analyze_data": {
+            "allowed_decisions": ["approve", "reject", "edit"]
+        }
+    }
+)
+```
+
+---
+
+### `AgentManager`
+
+**Description**: Manages multiple agents and handles agent loading/retrieval.
+
+**Class Methods**:
+
+| Method | Parameters | Returns | Description |
+|--------|-----------|---------|-------------|
+| `load_from_yaml(path)` | `path: str` | `List[Agent]` | Load agents from YAML configuration file |
+| `get_llm_client(agent)` | `agent: Agent` | LLM client | Get configured LLM client for an agent |
+
+**Instance Methods**:
+
+| Method | Parameters | Returns | Description |
+|--------|-----------|---------|-------------|
+| `add_agent(agent)` | `agent: Agent` | `None` | Add agent to the manager |
+| `remove_agent(name)` | `name: str` | `None` | Remove agent by name |
+| `get_agent(name)` | `name: str` | `Agent` | Retrieve agent by name |
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+# Load from YAML
+agents = slg.AgentManager.load_from_yaml("config/agents.yaml")
+
+# Or create manager and add agents
+manager = slg.AgentManager()
+manager.add_agent(my_agent)
+agent = manager.get_agent("analyst")
+```
+
+---
+
+### `UIConfig`
+
+**Description**: Configuration for Streamlit UI customization.
+
+**Constructor Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `title` | `str` | `"LangGraph Chat"` | Application title shown in browser tab and header |
+| `page_icon` | `str` | `"🤖"` | Favicon emoji or path to image file |
+| `welcome_message` | `str` | `None` | Welcome message shown at start (supports Markdown) |
+| `user_avatar` | `str` | `"👤"` | Avatar for user messages (emoji or image path) |
+| `assistant_avatar` | `str` | `"🤖"` | Avatar for assistant messages (emoji or image path) |
+| `stream` | `bool` | `True` | Enable streaming responses |
+| `enable_file_upload` | `bool` | `False` | Show file upload widget |
+| `show_sidebar` | `bool` | `True` | Show default sidebar (set False for custom) |
+| `placeholder` | `str` | `None` | Placeholder text for chat input |
+| `show_agent_info` | `bool` | `True` | Show agent name in messages |
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+config = slg.UIConfig(
+    title="My AI Team",
+    page_icon="🚀",
+    welcome_message="Welcome to **My AI Team**!",
+    user_avatar="👨‍💼",
+    assistant_avatar="🤖",
+    stream=True,
+    enable_file_upload=True,
+    show_sidebar=True,
+    placeholder="Ask me anything..."
+)
+```
+
+---
+
+### `LangGraphChat`
+
+**Description**: Main interface for running chat applications with single or multiple agents.
+
+**Constructor Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `workflow` | `StateGraph` | `None` | Compiled LangGraph workflow (for multi-agent) |
+| `agents` | `List[Agent]` | Required | List of agents in the application |
+| `config` | `UIConfig` | `UIConfig()` | UI configuration |
+| `custom_tools` | `List[CustomTool]` | `None` | List of custom tools to register |
 
 **Methods**:
-- `load_from_yaml(path)`: Load agents from YAML
-- `get_llm_client(agent)`: Get LLM client for agent
-- `add_agent(agent)`: Add agent to manager
-- `remove_agent(name)`: Remove agent by name
 
-#### `UIConfig`: UI configuration.
+| Method | Parameters | Returns | Description |
+|--------|-----------|---------|-------------|
+| `run()` | None | `None` | Start the Streamlit chat interface |
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+# Single agent
+chat = slg.LangGraphChat(
+    agents=[assistant],
+    config=config
+)
+chat.run()
+
+# Multi-agent with workflow
+chat = slg.LangGraphChat(
+    workflow=compiled_workflow,
+    agents=all_agents,
+    config=config
+)
+chat.run()
+```
+
+---
+
+### `WorkflowBuilder`
+
+**Description**: Builder for creating multi-agent workflows with different patterns.
+
+**Methods**:
+
+#### `create_supervisor_workflow()`
+
+Creates a supervisor pattern where one agent coordinates multiple workers.
 
 **Parameters**:
-- `title`: App title
-- `welcome_message`: Initial message
-- `user_avatar`: User avatar emoji/image
-- `assistant_avatar`: Assistant avatar
-- `enable_file_upload`: Enable file uploads
-- `show_sidebar`: Show default sidebar
-- `stream`: Enable streaming responses
 
-#### `LangGraphChat`: Main chat interface.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `supervisor` | `Agent` | Required | Supervisor agent that coordinates |
+| `workers` | `List[Agent]` | Required | Worker agents to be coordinated |
+| `execution_mode` | `str` | `"sequential"` | `"sequential"` or `"parallel"` |
+| `delegation_mode` | `str` | `"handoff"` | `"handoff"` or `"tool_calling"` |
+
+**Returns**: `StateGraph` - Compiled workflow
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+builder = slg.WorkflowBuilder()
+workflow = builder.create_supervisor_workflow(
+    supervisor=supervisor_agent,
+    workers=[worker1, worker2, worker3],
+    execution_mode="sequential",  # or "parallel"
+    delegation_mode="handoff"      # or "tool_calling"
+)
+```
+
+#### `create_hierarchical_workflow()`
+
+Creates a hierarchical pattern with a top supervisor managing sub-supervisor teams.
 
 **Parameters**:
-- `workflow`: Optional LangGraph workflow
-- `agents`: List of agents
-- `config`: UIConfig instance
 
-**Methods**:
-- `run()`: Start the chat interface
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `top_supervisor` | `Agent` | Required | Top-level supervisor |
+| `supervisor_teams` | `List[SupervisorTeam]` | Required | List of sub-supervisor teams |
+| `execution_mode` | `str` | `"sequential"` | Currently only `"sequential"` supported |
 
-#### `WorkflowBuilder`: Build multi-agent workflows.
+**Returns**: `StateGraph` - Compiled workflow
 
-**Methods**:
-- `create_supervisor_workflow(supervisor, workers, execution_mode, delegation_mode)`
-- `create_hierarchical_workflow(top_supervisor, supervisor_teams, execution_mode)`
+**Example**:
+```python
+import streamlit_langgraph as slg
 
-#### `CustomTool`: Tool registry and management.
+# Create teams
+research_team = slg.WorkflowBuilder.SupervisorTeam(
+    supervisor=research_lead,
+    workers=[researcher1, researcher2],
+    team_name="research_team"
+)
 
-**Methods**:
-- `register_tool(name, description, function)`: Register a tool
-- `get_openai_tools(tool_names)`: Get OpenAI tool definitions
-- `get_langchain_tools(tool_names)`: Get LangChain tools
+content_team = slg.WorkflowBuilder.SupervisorTeam(
+    supervisor=content_lead,
+    workers=[writer, editor],
+    team_name="content_team"
+)
 
+# Create hierarchical workflow
+builder = slg.WorkflowBuilder()
+workflow = builder.create_hierarchical_workflow(
+    top_supervisor=project_manager,
+    supervisor_teams=[research_team, content_team],
+    execution_mode="sequential"
+)
+```
 
+---
+
+##### `WorkflowBuilder.SupervisorTeam`
+
+**Description**: Dataclass representing a sub-supervisor and their team for hierarchical workflows.
+
+**Constructor Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `supervisor` | `Agent` | Required | Sub-supervisor agent |
+| `workers` | `List[Agent]` | Required | Worker agents in this team |
+| `team_name` | `str` | Auto-generated | Team identifier |
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+team = slg.WorkflowBuilder.SupervisorTeam(
+    supervisor=team_lead_agent,
+    workers=[worker1, worker2, worker3],
+    team_name="engineering_team"
+)
+```
+
+---
+
+### `CustomTool`
+
+**Description**: Registry for custom tools that agents can use.
+
+**Method**:
+
+#### `register_tool()`
+
+Register a custom function as a tool available to agents.
+
+**Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | Required | Unique tool name |
+| `description` | `str` | Required | Description shown to LLM |
+| `function` | `Callable` | Required | Python function to execute |
+| `parameters` | `Dict` | Auto-extracted | Tool parameters schema |
+| `return_direct` | `bool` | `False` | Return tool output directly to user |
+
+**Returns**: `CustomTool` instance
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+def calculate_sum(a: float, b: float) -> str:
+    """
+    Add two numbers together.
+    
+    Args:
+        a: First number
+        b: Second number
+    
+    Returns:
+        The sum as a string
+    """
+    return str(a + b)
+
+slg.CustomTool.register_tool(
+    name="calculate_sum",
+    description="Add two numbers and return the sum",
+    function=calculate_sum
+)
+
+# Use in agent
+agent = slg.Agent(
+    name="calculator",
+    role="Calculator",
+    instructions="Use calculate_sum to add numbers",
+    tools=["calculate_sum"]
+)
+```
+
+---
 
 ## License
 
