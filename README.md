@@ -54,13 +54,13 @@ With that in mind, this package is designed so users can focus on defining agent
 
 **Key Features:**
 
-1. **Seamless Integration of Streamlit and LangGraph:** Combine Streamlit's rapid UI development with LangGraph's flexible agent orchestration for real-time interaction and monitoring.
+1. **Seamless Integration of Streamlit and LangGraph:** Combine Streamlit's rapid UI development to turn simple Python scripts into interactive web applications with LangGraph's flexible agent orchestration for real-time interaction.
 
-2. **Lowering the Barrier to Multi-Agent Orchestration:** Abstract away LangGraph's complexity with simple interfaces and templates.
+2. **Lowering the Barrier to Multi-Agent Orchestration:** Simplify multi-agent development with easy-to-use interfaces that abstract LangGraph's complexity.
 
 3. **Ready-to-Use Multi-Agent Architectures:** Include standard patterns (supervisor, hierarchical, networked) out of the box.
 
-4. **Enhanced Compatibility with OpenAI Response API:** Support OpenAI's newer Response API for advanced capabilities like code execution and file search.
+4. **Enhanced Compatibility with OpenAI Response API:** Support OpenAI's newer Response API for advanced capabilities like file search and code execution.
 
 5. **Extensibility to Other LLMs:** Design for easy integration with Gemini, Claude, and local models.
 
