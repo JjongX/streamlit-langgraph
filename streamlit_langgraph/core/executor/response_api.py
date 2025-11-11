@@ -91,35 +91,64 @@ class ResponseAPIExecutor(BaseExecutor):
         llm_client = AgentManager.get_llm_client(self.agent)
         
         # Apply decisions to pending tool calls
+        # OpenAI requires a tool response for EVERY tool_call_id, even if rejected
         tool_results = []
-        for i, decision in enumerate(decisions):
-            if i >= len(self.pending_tool_calls):
-                break
-            
-            tool_call_dict = self.pending_tool_calls[i]
+        # Process all pending tool calls, using decisions if available
+        for i, tool_call_dict in enumerate(self.pending_tool_calls):
             tool_name = tool_call_dict["function"]["name"]
-            tool_args = json.loads(tool_call_dict["function"]["arguments"])
+            tool_call_id = tool_call_dict["id"]
             
-            decision_type = decision.get("type", "approve")
+            # Get decision for this tool call (default to approve if not provided)
+            decision = decisions[i] if i < len(decisions) else {"type": "approve"}
+            decision_type = decision.get("type", "approve") if decision else "approve"
             
             if decision_type == "reject":
-                # Skip this tool call
+                # Still need to provide a tool response for rejected calls
+                # OpenAI requires responses for all tool_call_ids
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "content": json.dumps({"error": "Tool call was rejected by user"})
+                })
                 continue
             elif decision_type == "edit":
                 # Use edited arguments
-                tool_args = decision.get("edit", tool_args)
+                tool_args = decision.get("input", decision.get("edit", {}))
+            else:
+                # Approve - use original arguments
+                tool_args = json.loads(tool_call_dict["function"]["arguments"])
             
             # Execute approved/edited tool
             tool_result = self._execute_tool(tool_name, tool_args)
             tool_results.append({
                 "role": "tool",
-                "tool_call_id": tool_call_dict["id"],
+                "tool_call_id": tool_call_id,
                 "name": tool_name,
                 "content": str(tool_result)
             })
         
-        # Get conversation history from workflow_state
-        messages_with_tools = messages.copy() if messages else []
+        # Get conversation history from workflow_state and clean for OpenAI API
+        # OpenAI API expects messages with only: role, content, tool_calls, tool_call_id, name
+        # Remove extra fields like "id" and "agent" that are used for workflow_state tracking
+        messages_with_tools = []
+        if messages:
+            for msg in messages:
+                # Clean message for OpenAI API format
+                clean_msg = {
+                    "role": msg.get("role"),
+                    "content": msg.get("content")
+                }
+                # Include tool_calls if present
+                if "tool_calls" in msg:
+                    clean_msg["tool_calls"] = msg["tool_calls"]
+                # Include tool_call_id and name for tool messages
+                if msg.get("role") == "tool":
+                    if "tool_call_id" in msg:
+                        clean_msg["tool_call_id"] = msg["tool_call_id"]
+                    if "name" in msg:
+                        clean_msg["name"] = msg["name"]
+                messages_with_tools.append(clean_msg)
         
         # Verify we have messages and the last message is an assistant message with tool_calls
         if not messages_with_tools:

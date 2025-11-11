@@ -3,8 +3,6 @@
 import uuid
 from typing import Any, Dict, List
 
-import streamlit as st
-
 from ...agent import Agent, AgentManager
 from ...core.executor_registry import ExecutorRegistry
 from ...hitl import InterruptManager
@@ -169,6 +167,21 @@ class AgentNodeBase:
             from ...core.executor_registry import ExecutorRegistry
             executor_key = ExecutorRegistry._get_executor_key(agent.name, "workflow")
             interrupt_data = InterruptManager.extract_interrupt_data(result)
+            
+            # If assistant_message is present (from ResponseAPIExecutor), add it to workflow_state
+            # This is needed for resume() to have the complete conversation history
+            if "assistant_message" in result:
+                assistant_msg = result["assistant_message"]
+                # Ensure the message has an ID
+                if "id" not in assistant_msg:
+                    assistant_msg["id"] = str(uuid.uuid4())
+                # Ensure agent name is set
+                if "agent" not in assistant_msg:
+                    assistant_msg["agent"] = agent.name
+                # Add to workflow_state messages
+                if "messages" not in state:
+                    state["messages"] = []
+                state["messages"].append(assistant_msg)
             
             # Store interrupt in state
             interrupt_update = InterruptManager.store_interrupt(
