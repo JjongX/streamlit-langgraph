@@ -81,49 +81,74 @@ class Agent:
         """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
 
-def load_agents_from_yaml(yaml_path: str) -> List[Agent]:
+class AgentManager:
     """
-    Load multiple Agent instances from a YAML configuration file.
+    Manager class for handling multiple agents and their interactions.
+    Provides utilities for loading agents and creating LLM clients.
+    """
     
-    This function is designed for multi-agent configurations. For single agents,
-    use the Agent class directly: Agent(name="...", role="...", ...)
+    def __init__(self):
+        self.agents: Dict[str, Agent] = {}
+        self.active_agent: Optional[str] = None
     
-    Example:
-        # Load agents from a config file
-        agents = load_agents_from_yaml("./configs/supervisor_sequential.yaml")
-        supervisor = agents[0]
-        workers = agents[1:]
+    def add_agent(self, agent: Agent) -> None:
+        """Add an agent to the manager."""
+        self.agents[agent.name] = agent
+        if self.active_agent is None:
+            self.active_agent = agent.name
+    
+    def remove_agent(self, name: str) -> None:
+        """Remove an agent from the manager."""
+        if name in self.agents:
+            del self.agents[name]
+            if self.active_agent == name:
+                self.active_agent = next(iter(self.agents.keys())) if self.agents else None
+    
+    @staticmethod
+    def load_from_yaml(yaml_path: str) -> List[Agent]:
+        """
+        Load multiple Agent instances from a YAML configuration file.
         
-        # Or use relative to current file
-        config_path = os.path.join(os.path.dirname(__file__), "./configs/my_agents.yaml")
-        agents = load_agents_from_yaml(config_path)
-    """
-    # Resolve path - handle both absolute and relative paths
-    if not os.path.isabs(yaml_path):
-        yaml_path = os.path.abspath(yaml_path)
-    if not os.path.exists(yaml_path):
-        raise FileNotFoundError(f"YAML config file not found: {yaml_path}")
+        This method is designed for multi-agent configurations. For single agents,
+        use the Agent class directly: Agent(name="...", role="...", ...)
+        
+        Example:
+            # Load agents from a config file
+            agents = AgentManager.load_from_yaml("./configs/supervisor_sequential.yaml")
+            supervisor = agents[0]
+            workers = agents[1:]
+            
+            # Or use relative to current file
+            config_path = os.path.join(os.path.dirname(__file__), "./configs/my_agents.yaml")
+            agents = AgentManager.load_from_yaml(config_path)
+        """
+        # Resolve path - handle both absolute and relative paths
+        if not os.path.isabs(yaml_path):
+            yaml_path = os.path.abspath(yaml_path)
+        if not os.path.exists(yaml_path):
+            raise FileNotFoundError(f"YAML config file not found: {yaml_path}")
+        
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            agent_configs = yaml.safe_load(f)
+        if not isinstance(agent_configs, list):
+            raise ValueError(f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}")
+        agents = []
+        for cfg in agent_configs:
+            if not isinstance(cfg, dict):
+                raise ValueError(f"Each agent configuration must be a dictionary. Got: {type(cfg)}")
+            agents.append(Agent(**cfg))
+        
+        return agents
     
-    with open(yaml_path, "r", encoding="utf-8") as f:
-        agent_configs = yaml.safe_load(f)
-    if not isinstance(agent_configs, list):
-        raise ValueError(f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}")
-    agents = []
-    for cfg in agent_configs:
-        if not isinstance(cfg, dict):
-            raise ValueError(f"Each agent configuration must be a dictionary. Got: {type(cfg)}")
-        agents.append(Agent(**cfg))
-    
-    return agents
-
-def get_llm_client(agent: Agent) -> Union[openai.OpenAI, Any]:
-    """Get the appropriate LLM client for an agent based on its configuration."""
-    if agent.type == "response" and agent.provider.lower() == "openai":
-        return openai.OpenAI()
-    else:
-        chat_model = init_chat_model(model=agent.model)
-        setattr(chat_model, "_provider", agent.provider.lower())
-        return chat_model
+    @staticmethod
+    def get_llm_client(agent: Agent) -> Union[openai.OpenAI, Any]:
+        """Get the appropriate LLM client for an agent based on its configuration."""
+        if agent.type == "response" and agent.provider.lower() == "openai":
+            return openai.OpenAI()
+        else:
+            chat_model = init_chat_model(model=agent.model)
+            setattr(chat_model, "_provider", agent.provider.lower())
+            return chat_model
 
 class ResponseAPIExecutor:
     """
@@ -136,12 +161,11 @@ class ResponseAPIExecutor:
     def __init__(self, agent: Agent, thread_id: Optional[str] = None):
         self.agent = agent
         self.thread_id = thread_id or str(uuid.uuid4())
-        # Store conversation history for HITL resume
-        self.conversation_history: List[Dict[str, Any]] = []
-        # Store pending tool calls for HITL
+        # Store pending tool calls for HITL (workflow_state metadata)
         self.pending_tool_calls: List[Dict[str, Any]] = []
 
-    def execute(self, llm_client, prompt: str, stream: bool = True, file_messages: Optional[List] = None, config: Optional[Dict[str, Any]] = None):
+    def execute(self, llm_client, prompt: str, stream: bool = True, file_messages: Optional[List] = None, 
+                config: Optional[Dict[str, Any]] = None, messages: Optional[List[Dict[str, Any]]] = None):
         """
         Execute prompt using the Responses API client.
         
@@ -156,6 +180,7 @@ class ResponseAPIExecutor:
             stream: Whether to request a streaming response
             file_messages: Optional list of file-related input messages
             config: Optional execution config with thread_id
+            messages: Optional conversation history from workflow_state (for HITL)
 
         Returns:
             Dict with keys 'role', 'content', 'agent', optionally 'stream', and '__interrupt__' if HITL is active
@@ -165,7 +190,7 @@ class ResponseAPIExecutor:
         
         # If HITL is enabled, use Chat Completions API for tool interception
         if self.agent.human_in_loop and self.agent.interrupt_on:
-            return self._execute_with_hitl(llm_client, prompt, stream, file_messages, thread_id, execution_config)
+            return self._execute_with_hitl(llm_client, prompt, stream, file_messages, thread_id, execution_config, messages)
         
         # Normal execution using Responses API
         input_messages = []
@@ -195,14 +220,14 @@ class ResponseAPIExecutor:
             return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
     
     def _execute_with_hitl(self, llm_client, prompt: str, stream: bool, file_messages: Optional[List], 
-                           thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+                           thread_id: str, config: Dict[str, Any], conversation_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Execute with human-in-the-loop support using Chat Completions API.
         
         This allows us to intercept tool calls before execution.
         """
-        # Build messages from conversation history
-        messages = self.conversation_history.copy() if self.conversation_history else []
+        # Build messages from passed conversation history (from workflow_state)
+        messages = conversation_messages.copy() if conversation_messages else []
         
         # Add file messages if provided
         if file_messages:
@@ -235,18 +260,15 @@ class ResponseAPIExecutor:
             if message.tool_calls:
                 interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
                 if interrupt_data:
-                    # Store conversation state including the assistant message with tool_calls
-                    # This is critical for resume() to work correctly
+                    # Store pending tool calls for resume()
+                    # Note: conversation history will be managed in workflow_state
                     self.pending_tool_calls = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
-                    assistant_message_with_tools = self._message_to_dict(message)
-                    self.conversation_history = messages + [assistant_message_with_tools]
                     interrupt_response = self._create_interrupt_response(interrupt_data, thread_id, config)
+                    # Include the assistant message with tool_calls for caller to add to workflow_state
+                    interrupt_response["assistant_message"] = self._message_to_dict(message)
                     return interrupt_response
             
             # No interrupt needed, continue execution
-            # Add assistant message to history
-            self.conversation_history = messages + [self._message_to_dict(message)]
-            
             # If there are tool calls, execute them (for non-interrupted tools)
             if message.tool_calls:
                 # Execute tool calls and continue conversation
@@ -265,7 +287,8 @@ class ResponseAPIExecutor:
                     })
                 
                 # Continue conversation with tool results
-                messages_with_tools = self.conversation_history + tool_results
+                messages_with_assistant = messages + [self._message_to_dict(message)]
+                messages_with_tools = messages_with_assistant + tool_results
                 followup_response = llm_client.chat.completions.create(
                     model=self.agent.model,
                     messages=messages_with_tools,
@@ -275,7 +298,6 @@ class ResponseAPIExecutor:
                 )
                 
                 final_message = followup_response.choices[0].message
-                self.conversation_history = messages_with_tools + [self._message_to_dict(final_message)]
                 
                 content = final_message.content or ""
             else:
@@ -343,10 +365,10 @@ class ResponseAPIExecutor:
     
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """Execute a tool by name."""
-        from .utils import CustomTool
-        tool_func = CustomTool.get_tool_function(tool_name)
-        if tool_func:
-            return tool_func(**tool_args)
+        from .utils import CustomTool # lazy import to avoid circular import
+        tool = CustomTool._registry.get(tool_name)
+        if tool and tool.function:
+            return tool.function(**tool_args)
         return f"Tool {tool_name} not found"
     
     def _create_interrupt_response(self, interrupt_data: List[Dict[str, Any]], thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -360,13 +382,15 @@ class ResponseAPIExecutor:
             "config": config
         }
     
-    def resume(self, decisions: List[Dict[str, Any]], config: Optional[Dict[str, Any]] = None):
+    def resume(self, decisions: List[Dict[str, Any]], config: Optional[Dict[str, Any]] = None, 
+               messages: Optional[List[Dict[str, Any]]] = None):
         """
         Resume execution after human approval/rejection.
         
         Args:
             decisions: List of decision dicts with 'type' ('approve', 'reject', 'edit') and optional 'edit' content
             config: Execution config with thread_id
+            messages: Conversation history from workflow_state
             
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if more approvals needed
@@ -378,7 +402,7 @@ class ResponseAPIExecutor:
         thread_id = execution_config.get("configurable", {}).get("thread_id", self.thread_id)
         
         # Get LLM client
-        llm_client = get_llm_client(self.agent)
+        llm_client = AgentManager.get_llm_client(self.agent)
         
         # Apply decisions to pending tool calls
         tool_results = []
@@ -408,11 +432,11 @@ class ResponseAPIExecutor:
                 "content": str(tool_result)
             })
         
-        # Conversation history should already have the assistant message with tool_calls
-        # (stored when interrupt was detected). Just add tool results.
-        messages_with_tools = self.conversation_history.copy()
+        # Get conversation history from workflow_state
+        # It should already have the assistant message with tool_calls
+        messages_with_tools = messages.copy() if messages else []
         
-        # Verify the last message is an assistant message with tool_calls
+        # Verify we have messages and the last message is an assistant message with tool_calls
         if not messages_with_tools:
             raise ValueError("Cannot resume: conversation history is empty")
         
@@ -432,33 +456,29 @@ class ResponseAPIExecutor:
         from .utils import CustomTool
         custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
         
-        try:
-            followup_response = llm_client.chat.completions.create(
-                model=self.agent.model,
-                messages=messages_with_tools,
-                temperature=self.agent.temperature,
-                tools=custom_tools if custom_tools else None,
-                tool_choice="auto" if custom_tools else None
-            )
+        followup_response = llm_client.chat.completions.create(
+            model=self.agent.model,
+            messages=messages_with_tools,
+            temperature=self.agent.temperature,
+            tools=custom_tools if custom_tools else None,
+            tool_choice="auto" if custom_tools else None
+        )
+        
+        message = followup_response.choices[0].message
+        
+        # Check for additional tool calls that need approval
+        if message.tool_calls:
+            interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
+            if interrupt_data:
+                self.pending_tool_calls = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
+                return self._create_interrupt_response(interrupt_data, thread_id, execution_config)
+        
+        # Clear pending tool calls
+        self.pending_tool_calls = []
+        
+        content = message.content or ""
+        return {"role": "assistant", "content": content, "agent": self.agent.name}
             
-            message = followup_response.choices[0].message
-            self.conversation_history = messages_with_tools + [self._message_to_dict(message)]
-            
-            # Check for additional tool calls that need approval
-            if message.tool_calls:
-                interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
-                if interrupt_data:
-                    self.pending_tool_calls = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
-                    return self._create_interrupt_response(interrupt_data, thread_id, execution_config)
-            
-            # Clear pending tool calls
-            self.pending_tool_calls = []
-            
-            content = message.content or ""
-            return {"role": "assistant", "content": content, "agent": self.agent.name}
-            
-        except Exception as e:
-            return {"role": "assistant", "content": f"Error resuming execution: {str(e)}", "agent": self.agent.name}
 
     def _build_tools_config(self, llm_client) -> List[Dict[str, Any]]:
         """Build tools configuration based on agent capabilities."""
@@ -653,26 +673,3 @@ class CreateAgentExecutor:
         elif hasattr(out, 'content'):
             return out.content
         return str(out)
-
-class AgentManager:
-    """
-    Manager class for handling multiple agents and their interactions.
-    """
-    
-    def __init__(self):
-        self.agents: Dict[str, Agent] = {}
-        self.active_agent: Optional[str] = None
-    
-    def add_agent(self, agent: Agent) -> None:
-        """Add an agent to the manager."""
-        self.agents[agent.name] = agent
-        if self.active_agent is None:
-            self.active_agent = agent.name
-    
-    def remove_agent(self, name: str) -> None:
-        """Remove an agent from the manager."""
-        if name in self.agents:
-            del self.agents[name]
-            if self.active_agent == name:
-                self.active_agent = next(iter(self.agents.keys())) if self.agents else None
-    

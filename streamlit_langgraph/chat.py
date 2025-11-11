@@ -1,15 +1,15 @@
 import base64
 import os
-import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor, get_llm_client
+from .agent import Agent, AgentManager, ResponseAPIExecutor, CreateAgentExecutor
 from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils, MIME_TYPES
-from .workflow import WorkflowExecutor, create_initial_state
-from .workflow.state import set_pending_interrupt
+from .workflow import WorkflowExecutor
+from .workflow.state import WorkflowStateManager
+from .state_coordinator import StateCoordinator
 
 @dataclass
 class UIConfig:
@@ -19,19 +19,28 @@ class UIConfig:
     page_layout: str = "wide"
     stream: bool = True  # Enable/disable streaming responses
     enable_file_upload: bool = True
+    show_sidebar: bool = True  # Show default sidebar
     user_avatar: Optional[str] = "👤"
     assistant_avatar: Optional[str] = "🤖"
     placeholder: str = "Type your message here..."
     welcome_message: Optional[str] = None
-    info_message: Optional[str] = None
 
 class LangGraphChat:
     """
     Main class for creating agent chat interfaces with Streamlit and LangGraph.
+    
+    Inner Classes:
+        Block: Individual content unit (text, code, reasoning, download)
+        Section: Container for Blocks representing a single chat message (user or assistant)
     """
     
     class Block:
-        """A block of content in the chat."""
+        """
+        Individual content unit within a Section.
+        
+        A Block represents a single piece of content (text, code, reasoning, or download)
+        that will be rendered as part of a chat message.
+        """
         def __init__(
             self,
             chat: "LangGraphChat",
@@ -46,12 +55,8 @@ class LangGraphChat:
             self.filename = filename
             self.file_id = file_id
 
-        def iscategory(self, category) -> bool:
-            """Checks if the block belongs to the specified category."""
-            return self.category == category
-
         def write(self) -> None:
-            """Renders the block's content to the chat."""
+            """Render this block's content to the Streamlit interface."""
             if self.category == "text":
                 st.markdown(self.content)
             elif self.category == "code":
@@ -61,18 +66,27 @@ class LangGraphChat:
                 with st.expander("", expanded=False, icon=":material/lightbulb:"):
                     st.markdown(self.content)
             elif self.category == "download":
-                _, file_extension = os.path.splitext(self.filename)
-                st.download_button(
-                    label=self.filename,
-                    data=self.content,
-                    file_name=self.filename,
-                    mime=MIME_TYPES[file_extension.lstrip(".")],
-                    key=self.chat._download_button_key,
-                )
-                self.chat._download_button_key += 1
+                self._render_download()
+        
+        def _render_download(self) -> None:
+            """Render download button for file content."""
+            _, file_extension = os.path.splitext(self.filename)
+            st.download_button(
+                label=self.filename,
+                data=self.content,
+                file_name=self.filename,
+                mime=MIME_TYPES[file_extension.lstrip(".")],
+                key=self.chat._download_button_key,
+            )
+            self.chat._download_button_key += 1
 
     class Section:
-        """A section of the chat."""
+        """
+        Container for Blocks representing a single chat message.
+        
+        A Section groups multiple Blocks together to form a complete chat message
+        from either a user or assistant. It handles streaming updates and rendering.
+        """
         def __init__(
             self,
             chat: "LangGraphChat",
@@ -83,51 +97,57 @@ class LangGraphChat:
             self.role = role
             self.blocks = blocks or []
             self.delta_generator = st.empty()
-                
+        
         @property
         def empty(self) -> bool:
-            """Returns True if the section has no blocks."""
             return len(self.blocks) == 0
 
         @property
         def last_block(self) -> Optional["LangGraphChat.Block"]:
-            """Returns the last block in the section or None if empty."""
             return None if self.empty else self.blocks[-1]
-
-        def update(self, category, content, filename=None, file_id=None) -> None:
-            """Updates the section with new content, appending or extending existing blocks."""
+        
+        def update(self, category: str, content: str, filename: Optional[str] = None, 
+                   file_id: Optional[str] = None) -> None:
+            """
+            Add or append content to this section.
+            
+            If the last block has the same category and is streamable, content is appended.
+            Otherwise, a new block is created.
+            """
             if self.empty:
+                 # Create first block
                 self.blocks = [self.chat.create_block(
                     category, content, filename=filename, file_id=file_id
                 )]
-            elif category in ["text", "code", "reasoning"] and self.last_block.iscategory(category):
+            elif (category in ["text", "code", "reasoning"] and 
+                  self.last_block.category == category):
+                # Append to existing block for same category
                 self.last_block.content += content
             else:
+                # Create new block for different category
                 self.blocks.append(self.chat.create_block(
                     category, content, filename=filename, file_id=file_id
                 ))
-
-        def update_and_stream(self, category, content, filename=None, file_id=None) -> None:
-            """Updates the section and streams the update live to the UI."""
-            self.update(category, content, filename=filename, file_id=file_id)
-            self.stream()
-
+        
         def stream(self) -> None:
-            """Renders the section content using Streamlit's delta generator."""
+            """Render this section and all its blocks to the Streamlit interface."""
+            avatar = (self.chat.config.user_avatar if self.role == "user" 
+                     else self.chat.config.assistant_avatar)
             with self.delta_generator:
-                with st.chat_message(self.role, avatar=self.chat.config.user_avatar if self.role == "user" else self.chat.config.assistant_avatar):
+                with st.chat_message(self.role, avatar=avatar):
+                    # Render all blocks
                     for block in self.blocks:
                         block.write()
+                    # Show agent name if available
                     if hasattr(self, '_agent_info') and "agent" in self._agent_info:
                         st.caption(f"Agent: {self._agent_info['agent']}")
-    
+        
     def __init__(
         self,
         workflow=None,
         agents: Optional[List[Agent]] = None,
         config: Optional[UIConfig] = None,
-        custom_tools: Optional[List[CustomTool]] = None,
-    ):
+        custom_tools: Optional[List[CustomTool]] = None):
         """
         Initialize the LangGraph Chat interface.
 
@@ -141,10 +161,16 @@ class LangGraphChat:
         self.agent_manager = AgentManager()
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor() if workflow else None
+        
         # Initialize agents
         if agents:
+            if not workflow and len(agents) > 1:
+                raise ValueError(
+                    "Multiple agents require a workflow. "
+                    "Either provide a workflow parameter or use a single agent."
+                )
             for agent in agents:
-                if agent.human_in_loop and not workflow: # Validate HITL
+                if agent.human_in_loop and not workflow:
                     raise ValueError("Human-in-the-loop is only available for multiagent workflows.")
                 self.agent_manager.add_agent(agent)
         # Register custom tools
@@ -154,11 +180,18 @@ class LangGraphChat:
                     tool.name, tool.description, tool.function, 
                     parameters=tool.parameters, return_direct=tool.return_direct
                 )
-        self.llm = self._initialize_llm()
+        # Initialize LLM client from first agent
+        first_agent = next(iter(self.agent_manager.agents.values()))
+        self.llm = AgentManager.get_llm_client(first_agent)
         openai_client = self.llm if hasattr(self.llm, 'files') else None
         self.file_handler = FileHandler(openai_client=openai_client)
-        self.hitl_handler = HITLHandler(self.agent_manager, self.config)
+        
+        # Initialize Streamlit session state
         self._init_session_state()
+        # Initialize state coordinator
+        self.state_coordinator = StateCoordinator()
+        
+        self.hitl_handler = HITLHandler(self.agent_manager, self.config, self.state_coordinator)
         self._sections = []
         self._download_button_key = 0
     
@@ -170,81 +203,19 @@ class LangGraphChat:
         self._sections.append(section)
         return section
     
-    def _initialize_llm(self):
-        """
-        Initialize an LLM client based on the first agent's configuration.
-        
-        Note: Currently uses the first agent's provider/model/type for the entire chat session.
-        """
-        first_agent = next(iter(self.agent_manager.agents.values()))
-        return get_llm_client(first_agent)
-
     def _init_session_state(self):
-        """Initialize Streamlit session state."""
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        
-        if "current_agent" not in st.session_state:
-            st.session_state.current_agent = None
+        """Initialize Streamlit session state with required keys."""
         
         if "workflow_state" not in st.session_state:
-            st.session_state.workflow_state = create_initial_state()
-        
-        if "uploaded_files" not in st.session_state:
-            st.session_state.uploaded_files = []
-        
-        # Initialize HITL-related session state
-        if "workflow_displayed_count" not in st.session_state:
-            st.session_state.workflow_displayed_count = 0
+            st.session_state.workflow_state = WorkflowStateManager.create_initial_state()
         if "agent_executors" not in st.session_state:
-            st.session_state.agent_executors = {}
-    
-    def _sync_session_state_from_workflow_state(self, workflow_state: Dict[str, Any]) -> None:
-        """
-        Sync session_state from workflow_state.
-        
-        WorkflowState is the single source of truth for all agent-processed information.
-        This method syncs session_state for UI rendering purposes.
-        
-        Args:
-            workflow_state: The WorkflowState to sync from
-        """
-        if not workflow_state:
-            return
-        
-        # Sync messages from workflow_state to session_state
-        # Only sync assistant messages that aren't already in session_state
-        workflow_messages = workflow_state.get("messages", [])
-        
-        # Find new messages from workflow_state that aren't in session_state
-        new_messages = []
-        for msg in workflow_messages:
-            # Skip system messages and messages already in session_state
-            if msg.get("role") == "system":
-                continue
-            
-            # Check for duplicate messages in session_state by comparing content and agent
-            is_duplicate = False
-            for existing_msg in st.session_state.messages:
-                if (existing_msg.get("content") == msg.get("content") and 
-                    existing_msg.get("role") == msg.get("role") and
-                    existing_msg.get("agent") == msg.get("agent")):
-                    is_duplicate = True
-                    break
-            if not is_duplicate:
-                new_messages.append(msg)
-        
-        # Add new messages to session_state
-        for msg in new_messages:
-            # Convert workflow message format to session_state format
-            session_msg = {"role": msg.get("role"), "content": msg.get("content", "")}
-            if "agent" in msg:
-                session_msg["agent"] = msg["agent"]
-            st.session_state.messages.append(session_msg)
-        
-        # Sync current_agent
-        if "current_agent" in workflow_state:
-            st.session_state.current_agent = workflow_state["current_agent"]
+            st.session_state.agent_executors = {}  # Executor objects (not data)
+        if "workflow_displayed_count" not in st.session_state:
+            st.session_state.workflow_displayed_count = 0  # UI counter
+        if "messages" not in st.session_state:
+            st.session_state.messages = []  # Performance cache for rendering
+        if "uploaded_files" not in st.session_state:
+            st.session_state.uploaded_files = []  # File objects (not in workflow_state)
     
     def run(self):
         """Run the main chat interface."""
@@ -255,10 +226,11 @@ class LangGraphChat:
         )
         st.title(self.config.title)
         
-        if self.config.info_message:
-            st.info(self.config.info_message)
-        
-        self._render_sidebar()
+        # Render default sidebar if enabled in config
+        # To customize: set show_sidebar=False and define custom sidebar content
+        # Advanced: inherit LangGraphChat and override _render_sidebar() method
+        if self.config.show_sidebar:
+            self._render_sidebar()
         self._render_chat_interface()
     
     def _render_sidebar(self):
@@ -276,10 +248,10 @@ class LangGraphChat:
                         capabilities = []
                         if hasattr(agent, 'allow_file_search') and agent.allow_file_search:
                             capabilities.append("📁 File Search")
-                        if hasattr(agent, 'allow_web_search') and agent.allow_web_search:
-                            capabilities.append("🌐 Web Search")
                         if hasattr(agent, 'allow_code_interpreter') and agent.allow_code_interpreter:
                             capabilities.append("💻 Code Interpreter")
+                        if hasattr(agent, 'allow_web_search') and agent.allow_web_search:
+                            capabilities.append("🌐 Web Search")
                         if hasattr(agent, 'tools') and agent.tools:
                             capabilities.append(f"🛠️ {len(agent.tools)} Custom Tools")
                         if capabilities:
@@ -294,10 +266,8 @@ class LangGraphChat:
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
-        # Sync session_state from workflow_state first
-        workflow_state = st.session_state.get("workflow_state")
-        if workflow_state:
-            self._sync_session_state_from_workflow_state(workflow_state)
+        # Sync at the START of rendering
+        self.state_coordinator.sync_to_session_state()
         
         # Display welcome message
         if self.config.welcome_message and not st.session_state.messages:
@@ -305,13 +275,15 @@ class LangGraphChat:
                 st.markdown(self.config.welcome_message)
 
         # Check for pending interrupts FIRST - workflow_state is the single source of truth
+        workflow_state = st.session_state.workflow_state
         if HITLUtils.has_pending_interrupts(workflow_state):
             interrupt_handled = self.hitl_handler.handle_pending_interrupts(workflow_state)
             if interrupt_handled:
                 return  # Don't process messages or show input while handling interrupts
 
-        # Render chat messages
+        # Render message history
         for message in st.session_state.messages:
+            # Skip system messages (assistant) and workflow completion messages (END or None)
             if message.get("role") == "assistant" and (message.get("agent") == "END" or message.get("agent") is None):
                 continue
             avatar = self.config.user_avatar if message["role"] == "user" else self.config.assistant_avatar
@@ -320,51 +292,44 @@ class LangGraphChat:
                 if message["role"] == "assistant" and "agent" in message:
                     st.caption(f"Agent: {message['agent']}")
 
+        # Render user input
         if prompt := st.chat_input(
-            self.config.placeholder, 
-            accept_file=self.config.enable_file_upload
+            self.config.placeholder, accept_file=self.config.enable_file_upload
         ):
             self._handle_user_input(prompt)
     
     def _handle_user_input(self, chat_input):
         """Handle user input and generate responses."""
-        if hasattr(chat_input, 'text'):
+        if self.config.enable_file_upload: # File upload enabled; it has text and files attribute
             prompt = chat_input.text
             files = getattr(chat_input, 'files', [])
-        else:
+        else: # File upload disabled (plain string)  
             prompt = str(chat_input)
             files = []
-        
+
         if files:
             self._process_file_uploads(files)
         
-        # Update workflow_state first
-        user_message = {"role": "user", "content": prompt, "agent": None}
-        st.session_state.workflow_state["messages"].append(user_message)
-        # Sync to session_state for UI rendering
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        # Display user message and attached files in the chat
-        with st.chat_message("user", avatar=self.config.user_avatar):
-            st.markdown(prompt)
-            if files:
-                for uploaded_file in files:
-                    st.markdown(f":material/attach_file: `{uploaded_file.name}`")
-
-        # Clear HITL-related session state 
-        if "metadata" in st.session_state.workflow_state:
-            if "pending_interrupts" in st.session_state.workflow_state["metadata"]:
-                st.session_state.workflow_state["metadata"]["pending_interrupts"] = {}
-            if "hitl_decisions" in st.session_state.workflow_state["metadata"]:
-                st.session_state.workflow_state["metadata"]["hitl_decisions"] = {}
-        # Clear agent executors to prevent reuse of old checkpointer data
-        st.session_state.agent_executors = {}
+        # Use state coordinator to add user message
+        self.state_coordinator.add_user_message(prompt)
         
+        # Display a new user message section
+        section = self.add_section("user")
+        section.update("text", prompt)
+        for uploaded_file in files:
+            section.update("text", f"\n:material/attach_file: `{uploaded_file.name}`")
+        section.stream()
+
+        # Clear HITL state before new request
+        self.state_coordinator.clear_hitl_state()
+        
+        # Generate response
         with st.spinner("Thinking..."):
             response = self._generate_response(prompt)
 
+        # Handle workflow completion
         if response.get("agent") == "workflow-completed":
             return
-        
         # Handle interrupts from human-in-the-loop
         if response.get("__interrupt__"):
             st.rerun()
@@ -384,22 +349,16 @@ class LangGraphChat:
             # Handle non-streaming response from agent
             section = self.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
-            section.update_and_stream("text", response["content"])
+            section.update("text", response["content"])
+            section.stream()
 
-        # This handles streaming responses that might not have been synced yet.
+        # Add assistant response to state if not a workflow control message
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
-            # Check if message already exists in session_state
-            message_exists = False
-            for msg in st.session_state.messages:
-                if (msg.get("content") == response.get("content") and 
-                    msg.get("role") == response.get("role") and
-                    msg.get("agent") == response.get("agent")):
-                    message_exists = True
-                    break
-            
-            if not message_exists:
-                st.session_state.messages.append(response)
+            self.state_coordinator.add_assistant_message(
+                response["content"], 
+                response["agent"]
+            )
     
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
@@ -407,10 +366,10 @@ class LangGraphChat:
             if uploaded_file not in st.session_state.uploaded_files:
                 file_info = self.file_handler.save_uploaded_file(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
-                if "files" in st.session_state.workflow_state:
-                    st.session_state.workflow_state["files"].append({
-                        k: v for k, v in file_info.__dict__.items() if k != "content"
-                    })
+                # Add file metadata to workflow state (not content)
+                self.state_coordinator.update_workflow_state({
+                    "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
+                }, auto_sync=False)
     
     def _process_stream_event(self, event, section) -> str:
         """
@@ -420,14 +379,17 @@ class LangGraphChat:
         image generation, and file citations.
         """
         if event.type == "response.output_text.delta":
-            section.update_and_stream("text", event.delta)
+            section.update("text", event.delta)
+            section.stream()
             return event.delta
         elif event.type == "response.code_interpreter_call_code.delta":
-            section.update_and_stream("code", event.delta)
+            section.update("code", event.delta)
+            section.stream()
         elif event.type == "response.image_generation_call.partial_image":
             image_bytes = base64.b64decode(event.partial_image_b64)
             filename = f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}"
-            section.update_and_stream("image", image_bytes, filename=filename, file_id=getattr(event, 'item_id', None))
+            section.update("image", image_bytes, filename=filename, file_id=getattr(event, 'item_id', None))
+            section.stream()
         elif event.type == "response.output_text.annotation.added":
             annotation = event.annotation
             if annotation["type"] == "container_file_citation":
@@ -442,10 +404,12 @@ class LangGraphChat:
                     file_bytes = file_content.read()
                     
                 if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                    section.update_and_stream("image", file_bytes, filename=filename, file_id=file_id)
-                    section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
+                    section.update("image", file_bytes, filename=filename, file_id=file_id)
+                    section.update("download", file_bytes, filename=filename, file_id=file_id)
+                    section.stream()
                 else:
-                    section.update_and_stream("download", file_bytes, filename=filename, file_id=file_id)
+                    section.update("download", file_bytes, filename=filename, file_id=file_id)
+                    section.stream()
         return ""
     
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
@@ -453,26 +417,24 @@ class LangGraphChat:
         try:
             if self.workflow_executor:
                 # Use workflow execution
-                return self._execute_workflow(prompt)
+                return self._run_workflow(prompt)
             elif self.agent_manager.agents:
-                # Use simple agent selection - first available agent
-                agent = next(iter(self.agent_manager.agents.values()))
-                return self._execute_agent(prompt, agent)
+                # Single agent mode (validated to be exactly 1 agent in __init__)
+                agent = list(self.agent_manager.agents.values())[0]
+                return self._run_agent(prompt, agent)
         except Exception as e:
-            traceback.print_exc()
-            return {
-                "role": "assistant",
-                "content": f"I encountered an error: {str(e)}",
-                "agent": "system"
-            }
+            # Show error to user 
+            st.error(f"**Error**: {str(e)}")
+            # Return empty response to prevent further processing
+            return {"role": "assistant", "content": "", "agent": "system"}
     
-    def _execute_workflow(self, prompt: str) -> Dict[str, Any]:
+    def _run_workflow(self, prompt: str) -> Dict[str, Any]:
         """
-        Execute the LangGraph workflow with sequential agent display.
+        Run the multiagent workflow and orchestrate UI updates.
         
-        Uses a display callback to show agent responses as they complete during
-        workflow execution. This provides real-time feedback in the Streamlit UI.
-        Also handles human-in-the-loop interrupts from workflow execution.
+        Coordinates workflow execution with display callbacks, HITL handling,
+        and state synchronization. This is the high-level orchestrator that uses
+        WorkflowExecutor.execute_workflow() for the actual graph execution.
         
         All agent-processed information is stored in WorkflowState first,
         then synced to session_state for UI rendering.
@@ -483,8 +445,8 @@ class LangGraphChat:
             """
             Callback to display agent responses as they complete during workflow execution.
             
-            Note: Messages are already in WorkflowState. We just sync them to session_state
-            for UI display purposes. WorkflowState remains the source of truth.
+            Note: Messages are already in WorkflowState. We just display them.
+            Syncing happens centrally via state_coordinator.
             """
             if state and "messages" in state:
                 assistant_messages = [
@@ -498,85 +460,49 @@ class LangGraphChat:
                         agent_name = new_msg.get("agent", "Assistant")
                         section = self.add_section("assistant")
                         section._agent_info = {"agent": agent_name}
-                        section.update_and_stream("text", new_msg['content'])
+                        section.update("text", new_msg['content'])
+                        section.stream()
                         
-                        # Sync to session_state for UI (but workflow_state is source of truth)
-                        session_msg = {"role": "assistant", "content": new_msg.get("content", ""), "agent": agent_name}
-                        st.session_state.messages.append(session_msg)
                         st.session_state.workflow_displayed_count += 1
         
-        try:
-            result_state = self.workflow_executor.execute_workflow(
-                self.workflow, prompt, display_callback=display_agent_response
-            )
-        except Exception as e:
-            # Update workflow_state with error message
-            error_message = {
-                "role": "assistant",
-                "content": f"❌ **Error executing workflow: {str(e)}**",
-                "agent": "workflow",
-            }
-            st.session_state.workflow_state["messages"].append(error_message)
-            st.session_state.workflow_state["agent_outputs"]["workflow"] = error_message["content"]
-            
-            # Sync to session_state
-            self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+        result_state = self.workflow_executor.execute_workflow(
+            self.workflow, prompt, display_callback=display_agent_response
+        )
 
-            return {
-                "role": "assistant",
-                "content": error_message["content"],
-                "agent": "workflow"
-            }
+        # # Check for interrupt state - if found, trigger rerun to show UI
+        # if HITLUtils.has_pending_interrupts(result_state):
+        #     # Store workflow state and trigger rerun
+        #     st.session_state.workflow_state = result_state
+        #     self.state_coordinator.sync_to_session_state()
+        #     st.rerun()
+        # # Clear HITL state when workflow completes without pending interrupts
+        # # if result_state and not HITLUtils.has_pending_interrupts(result_state):
+        # if not HITLUtils.has_pending_interrupts(result_state):
+        #     self.state_coordinator.clear_hitl_state()
         
-        # Check for interrupts in final state - if found, trigger rerun to show UI
+        # Check for pending interrupts - if found, trigger rerun to show UI
         if HITLUtils.has_pending_interrupts(result_state):
-            # Store workflow state and trigger rerun
             st.session_state.workflow_state = result_state
-            # Sync session_state from workflow_state before rerun
-            self._sync_session_state_from_workflow_state(result_state)
+            self.state_coordinator.sync_to_session_state()
             st.rerun()
-        
-        # Clear HITL state when workflow completes without pending interrupts
-        if result_state and not HITLUtils.has_pending_interrupts(result_state):
-            # Clear HITL state when workflow completes successfully
-            if "metadata" in result_state:
-                if "pending_interrupts" in result_state["metadata"]:
-                    result_state["metadata"]["pending_interrupts"] = {}
-                if "hitl_decisions" in result_state["metadata"]:
-                    result_state["metadata"]["hitl_decisions"] = {}
-            st.session_state.agent_executors = {}
-        
+        else:
+            self.state_coordinator.clear_hitl_state()  # Only runs if no interrupts
+
         # Update workflow_state 
         st.session_state.workflow_state = result_state
-        # Sync session_state from workflow_state after workflow completion
-        self._sync_session_state_from_workflow_state(result_state)
+        self.state_coordinator.sync_to_session_state()
         
         return {
             "role": "assistant",
             "content": "",
             "agent": "workflow-completed"
         }
-
-    def _build_context(self) -> str:
-        """Build context string from recent conversation history and uploaded files."""
-        context_parts = []
-        recent_messages = st.session_state.messages[-5:] if st.session_state.messages else []
-        
-        for msg in recent_messages:
-            role = msg["role"].title()
-            content = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
-            context_parts.append(f"{role}: {content}")
-        
-        if st.session_state.uploaded_files:
-            file_context = self.file_handler.get_file_context_summary()
-            context_parts.append(f"\n--- Uploaded Files ---\n{file_context}")
-        
-        return "\n".join(context_parts) if context_parts else "No previous context"
     
-    def _execute_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
+    def _run_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
         """
-        Execute prompt with a specific agent for single-agent responses.
+        Run a single agent (non-workflow mode) and orchestrate UI updates.
         
+        Coordinates agent execution with HITL handling and state synchronization.
         All agent outputs are stored in WorkflowState first, then synced to session_state.
         """
         file_messages = self.file_handler.get_openai_input_messages()
@@ -596,50 +522,31 @@ class LangGraphChat:
                 
                 thread_id = executor.thread_id
                 config = {"configurable": {"thread_id": thread_id}}
-                response = executor.execute(self.llm, prompt, stream=False, file_messages=file_messages, config=config)
+                conversation_messages = st.session_state.workflow_state.get("messages", [])
+                response = executor.execute(self.llm, prompt, stream=False, file_messages=file_messages, config=config, messages=conversation_messages)
             else:
                 executor = ResponseAPIExecutor(agent)
-                response = executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages)
+                conversation_messages = st.session_state.workflow_state.get("messages", [])
+                response = executor.execute(self.llm, prompt, stream=self.config.stream, file_messages=file_messages, messages=conversation_messages)
             
             # Handle interrupts from ResponseAPIExecutor
             if response.get("__interrupt__"):
-                # Store interrupt in workflow state for consistency
-                if "workflow_state" not in st.session_state:
-                    st.session_state.workflow_state = create_initial_state()
-                interrupt_data = {
-                    "__interrupt__": response["__interrupt__"],
-                    "thread_id": response.get("thread_id"),
-                    "config": response.get("config"),
-                    "agent": response.get("agent"),
-                    "executor_key": "single_agent_executor"
-                }
-                set_pending_interrupt(
-                    st.session_state.workflow_state,
+                self.state_coordinator.set_pending_interrupt(
                     agent.name,
-                    interrupt_data,
+                    response,
                     "single_agent_executor"
                 )
                 if "agent_executors" not in st.session_state:
                     st.session_state.agent_executors = {}
                 st.session_state.agent_executors["single_agent_executor"] = executor
-                
-                # Sync to session_state
-                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
                 return response
             
-            # Update workflow_state with agent response (single source of truth)
+            # Update workflow_state with agent response using coordinator
             if response.get("content"):
-                assistant_message = {
-                    "role": "assistant",
-                    "content": response.get("content", ""),
-                    "agent": response.get("agent", agent.name),
-                }
-                st.session_state.workflow_state["messages"].append(assistant_message)
-                st.session_state.workflow_state["agent_outputs"][agent.name] = response.get("content", "")
-                st.session_state.workflow_state["current_agent"] = agent.name
-                
-                # Sync to session_state
-                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+                self.state_coordinator.add_assistant_message(
+                    response.get("content", ""),
+                    response.get("agent", agent.name)
+                )
             
             return response
         else:
@@ -647,41 +554,20 @@ class LangGraphChat:
             executor = CreateAgentExecutor(agent)
             response = executor.execute(self.llm, prompt, stream=False)
             
-            # Update workflow_state with agent response (single source of truth)
+            # Update workflow_state with agent response using coordinator
             if response.get("content"):
-                assistant_message = {
-                    "role": "assistant",
-                    "content": response.get("content", ""),
-                    "agent": agent.name,
-                }
-                st.session_state.workflow_state["messages"].append(assistant_message)
-                st.session_state.workflow_state["agent_outputs"][agent.name] = response.get("content", "")
-                st.session_state.workflow_state["current_agent"] = agent.name
-                
-                # Sync to session_state
-                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
+                self.state_coordinator.add_assistant_message(
+                    response.get("content", ""),
+                    agent.name
+                )
             
             if response.get("__interrupt__"):
-                # Store interrupt in workflow state for consistency
-                if "workflow_state" not in st.session_state:
-                    st.session_state.workflow_state = create_initial_state()
-                interrupt_data = {
-                    "__interrupt__": response["__interrupt__"],
-                    "thread_id": response.get("thread_id"),
-                    "config": response.get("config"),
-                    "agent": response.get("agent"),
-                    "executor_key": "single_agent_executor"
-                }
-                set_pending_interrupt(
-                    st.session_state.workflow_state,
+                self.state_coordinator.set_pending_interrupt(
                     agent.name,
-                    interrupt_data,
+                    response,
                     "single_agent_executor"
                 )
                 st.session_state.agent_executors["single_agent_executor"] = executor
-                
-                # Sync to session_state
-                self._sync_session_state_from_workflow_state(st.session_state.workflow_state)
             
             return response
     
