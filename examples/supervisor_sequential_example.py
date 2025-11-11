@@ -1,12 +1,12 @@
 import os
 
-from streamlit_langgraph import AgentManager, UIConfig, LangGraphChat, WorkflowBuilder
+import streamlit_langgraph as slg
 
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_sequential.yaml")
-    agents = AgentManager.load_from_yaml(config_path)
+    agents = slg.AgentManager.load_from_yaml(config_path)
 
     supervisor = agents[0]
     workers = agents[1:]
@@ -19,7 +19,7 @@ def main():
     # Create a supervisor and workers
     supervisor, workers = create_supervisor_workflow_example()
     # Create a workflow
-    builder = WorkflowBuilder()
+    builder = slg.WorkflowBuilder()
     supervisor_workflow = builder.create_supervisor_workflow(
         supervisor=supervisor,
         workers=workers,
@@ -27,7 +27,7 @@ def main():
         delegation_mode="handoff"
     )
     
-    config = UIConfig(
+    config = slg.UIConfig(
         title="Supervised Research Team",
         page_icon="🎓",
         stream=True,
@@ -58,7 +58,7 @@ def main():
         placeholder="Describe your research project or proposal needs..."
     )
     
-    chat = LangGraphChat(
+    chat = slg.LangGraphChat(
         workflow=supervisor_workflow,
         agents=[supervisor] + workers, # Might update later to not pass agents
         config=config

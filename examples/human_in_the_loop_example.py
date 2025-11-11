@@ -1,4 +1,4 @@
-from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, AgentManager, WorkflowBuilder
+import streamlit_langgraph as slg
 
 def analyze_sentiment(text: str, context: str = None) -> str:
     """
@@ -113,7 +113,7 @@ def escalate_negative_sentiment(text: str, sentiment_score: float, source: str, 
 
 def main():
     # Register tools
-    CustomTool.register_tool(
+    slg.CustomTool.register_tool(
         name="analyze_sentiment",
         description=(
             "Analyze the sentiment of text content. Use this tool when you need to: "
@@ -127,7 +127,7 @@ def main():
         ),
         function=analyze_sentiment
     )
-    CustomTool.register_tool(
+    slg.CustomTool.register_tool(
         name="escalate_negative_sentiment",
         description=(
             "Escalate cases with negative sentiment for human review. Use this tool when you need to: "
@@ -143,12 +143,12 @@ def main():
     )
     
     # Load agents from config file
-    agents = AgentManager.load_from_yaml("examples/configs/human_in_the_loop.yaml")
+    agents = slg.AgentManager.load_from_yaml("examples/configs/human_in_the_loop.yaml")
     # Separate supervisor and workers
     supervisor = next(agent for agent in agents if agent.name == "supervisor")
     workers = [agent for agent in agents if agent.name != "supervisor"]
     # Create a multiagent workflow
-    builder = WorkflowBuilder()
+    builder = slg.WorkflowBuilder()
     workflow = builder.create_supervisor_workflow(
         supervisor=supervisor,
         workers=workers,
@@ -157,7 +157,7 @@ def main():
     )
 
     executor_name = "ResponseAPIExecutor" if supervisor.type == "response" else "CreateAgentExecutor"
-    config = UIConfig(
+    config = slg.UIConfig(
         title=f"Human-in-the-Loop Multiagent Workflow ({executor_name})",
         welcome_message=(
             f"This workflow uses **{executor_name}** with human-in-the-loop approval for tool execution.\n"
@@ -170,7 +170,7 @@ def main():
         stream=False
     )
     
-    chat = LangGraphChat(
+    chat = slg.LangGraphChat(
         workflow=workflow,
         agents=agents,
         config=config

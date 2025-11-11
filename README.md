@@ -74,10 +74,10 @@ pip install streamlit-langgraph
 ### Single Agent (Simple)
 
 ```python
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat
+import streamlit_langgraph as slg
 
 # Define your agent
-assistant = Agent(
+assistant = slg.Agent(
     name="assistant",
     role="AI Assistant",
     instructions="You are a helpful AI assistant.",
@@ -87,13 +87,13 @@ assistant = Agent(
 )
 
 # Configure UI
-config = UIConfig(
+config = slg.UIConfig(
     title="My AI Assistant",
     welcome_message="Hello! How can I help you today?"
 )
 
 # Create and run chat interface
-chat = LangGraphChat(agents=[assistant], config=config)
+chat = slg.LangGraphChat(agents=[assistant], config=config)
 chat.run()
 ```
 
@@ -102,17 +102,16 @@ Run with: `streamlit run your_app.py`
 ### Multi-Agent Workflow
 
 ```python
-from streamlit_langgraph import AgentManager, UIConfig, LangGraphChat
-from streamlit_langgraph.workflow import WorkflowBuilder
+import streamlit_langgraph as slg
 
 # Load agents from YAML
-agents = AgentManager.load_from_yaml("configs/my_agents.yaml")
+agents = slg.AgentManager.load_from_yaml("configs/my_agents.yaml")
 
 # Create workflow
 supervisor = agents[0]
 workers = agents[1:]
 
-builder = WorkflowBuilder()
+builder = slg.WorkflowBuilder()
 workflow = builder.create_supervisor_workflow(
     supervisor=supervisor,
     workers=workers,
@@ -121,7 +120,7 @@ workflow = builder.create_supervisor_workflow(
 )
 
 # Create chat with workflow
-chat = LangGraphChat(workflow=workflow, agents=agents)
+chat = slg.LangGraphChat(workflow=workflow, agents=agents)
 chat.run()
 ```
 
@@ -132,7 +131,9 @@ chat.run()
 Agents are configured with:
 
 ```python
-Agent(
+import streamlit_langgraph as slg
+
+agent = slg.Agent(
     name="analyst",              # Unique identifier
     role="Data Analyst",         # Agent's role description
     instructions="...",          # Detailed task instructions
@@ -196,7 +197,9 @@ Control how much context each agent receives:
 - Use case: Specialized computations, API calls
 
 ```python
-Agent(
+import streamlit_langgraph as slg
+
+analyst = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Analyze the provided data",
@@ -221,7 +224,9 @@ Enable human approval for critical agent actions:
 - Compliance requirements
 
 ```python
-Agent(
+import streamlit_langgraph as slg
+
+executor = slg.Agent(
     name="executor",
     role="Action Executor",
     instructions="Execute approved actions",
@@ -252,7 +257,7 @@ Extend agent capabilities by registering custom functions as tools:
 #### **Creating a Custom Tool**
 
 ```python
-from streamlit_langgraph import CustomTool
+import streamlit_langgraph as slg
 
 def analyze_data(data: str, method: str = "standard") -> str:
     """
@@ -275,7 +280,7 @@ def analyze_data(data: str, method: str = "standard") -> str:
     return result
 
 # Register the tool
-CustomTool.register_tool(
+slg.CustomTool.register_tool(
     name="analyze_data",
     description=(
         "Analyze structured data using various methods. "
@@ -289,8 +294,10 @@ CustomTool.register_tool(
 #### **Using Tools in Agents**
 
 ```python
+import streamlit_langgraph as slg
+
 # Reference registered tools by name
-agent = Agent(
+agent = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Use analyze_data tool to process user data",
@@ -310,6 +317,8 @@ agent = Agent(
 #### **Tool with HITL**
 
 ```python
+import streamlit_langgraph as slg
+
 def delete_records(record_ids: str, reason: str) -> str:
     """
     Delete records from database. REQUIRES APPROVAL.
@@ -324,14 +333,14 @@ def delete_records(record_ids: str, reason: str) -> str:
     ids = record_ids.split(",")
     return f"Deleted {len(ids)} records. Reason: {reason}"
 
-CustomTool.register_tool(
+slg.CustomTool.register_tool(
     name="delete_records",
     description="Delete database records (requires human approval)",
     function=delete_records
 )
 
 # Agent with HITL for this tool
-agent = Agent(
+agent = slg.Agent(
     name="admin",
     role="Database Administrator",
     instructions="Manage database operations",
@@ -396,9 +405,9 @@ Agents can be configured using YAML files:
 ## UI Customization
 
 ```python
-from streamlit_langgraph import UIConfig
+import streamlit_langgraph as slg
 
-config = UIConfig(
+config = slg.UIConfig(
     title="My Multiagent App",
     welcome_message="Welcome! Ask me anything.",
     user_avatar="👤",
@@ -409,7 +418,7 @@ config = UIConfig(
     stream=True
 )
 
-chat = LangGraphChat(workflow=workflow, agents=agents, config=config)
+chat = slg.LangGraphChat(workflow=workflow, agents=agents, config=config)
 chat.run()
 ```
 
@@ -417,9 +426,10 @@ chat.run()
 
 ```python
 import streamlit as st
+import streamlit_langgraph as slg
 
-config = UIConfig(show_sidebar=False)  # Disable default sidebar
-chat = LangGraphChat(workflow=workflow, agents=agents, config=config)
+config = slg.UIConfig(show_sidebar=False)  # Disable default sidebar
+chat = slg.LangGraphChat(workflow=workflow, agents=agents, config=config)
 
 # Define your own sidebar
 with st.sidebar:

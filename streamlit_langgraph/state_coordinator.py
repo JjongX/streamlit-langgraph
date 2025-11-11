@@ -163,4 +163,3 @@ class StateCoordinator:
                 workflow_state["metadata"]["hitl_decisions"] = {}
         st.session_state.agent_executors = {}
 
-
