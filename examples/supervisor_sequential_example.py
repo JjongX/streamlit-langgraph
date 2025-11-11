@@ -1,7 +1,6 @@
 import os
 
-from streamlit_langgraph import AgentManager, UIConfig, LangGraphChat
-from streamlit_langgraph.workflow import WorkflowBuilder
+from streamlit_langgraph import AgentManager, UIConfig, LangGraphChat, WorkflowBuilder
 
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""

@@ -1,7 +1,6 @@
 import os
 
-from streamlit_langgraph import AgentManager, UIConfig, LangGraphChat
-from streamlit_langgraph.workflow import WorkflowBuilder, SupervisorTeam
+from streamlit_langgraph import AgentManager, UIConfig, LangGraphChat, WorkflowBuilder
 
 def create_hierarchical_workflow_example():
     """Create a hierarchical workflow with multiple supervisor teams."""
@@ -19,12 +18,12 @@ def create_hierarchical_workflow_example():
     content_editor = agents[6]
     
     # Create supervisor teams
-    research_team = SupervisorTeam(
+    research_team = WorkflowBuilder.SupervisorTeam(
         supervisor=research_team_lead,
         workers=[data_researcher, literature_researcher],
         team_name="research_team"
     )
-    content_team = SupervisorTeam(
+    content_team = WorkflowBuilder.SupervisorTeam(
         supervisor=content_team_lead,
         workers=[draft_writer, content_editor],
         team_name="content_team"

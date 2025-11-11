@@ -5,6 +5,7 @@ from langgraph.graph import StateGraph
 from ..agent import Agent
 from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 
+
 class WorkflowBuilder:
     """
     Workflow builder that delegates to specialized pattern classes.
@@ -12,6 +13,9 @@ class WorkflowBuilder:
     Provides a clean interface for creating handoff, hierarchical, and tool calling workflows.
     """
     
+    # Make SupervisorTeam accessible for Public API exposure 
+    SupervisorTeam = SupervisorTeam
+
     def create_supervisor_workflow(self, supervisor: Agent, workers: List[Agent], 
                                 execution_mode: str = "sequential", 
                                 delegation_mode: str = "handoff") -> StateGraph:

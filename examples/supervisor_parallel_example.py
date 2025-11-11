@@ -1,7 +1,6 @@
 import os
 
-from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, AgentManager
-from streamlit_langgraph.workflow import WorkflowBuilder
+from streamlit_langgraph import UIConfig, LangGraphChat, CustomTool, AgentManager, WorkflowBuilder
 
 def analyze_sentiment(text: str) -> str:
     """Simple sentiment analysis placeholder."""
