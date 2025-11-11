@@ -29,13 +29,13 @@ SEQUENTIAL_ROUTE_GUIDANCE = """When delegating sequentially:
 """
 
 # Tool Calling Prompt Templates
-TOOL_CALLING_AGENT_PROMPT_TEMPLATE = """You are {role}. {instructions}
+ORCHESTRATOR_TOOL_PROMPT_TEMPLATE = """You are {role}. {instructions}
 
 You have access to specialized agents that can help you. When you need their expertise, call them as tools.
 After they complete their task, they will return results to you, and you should synthesize the final response.
 """
 
-TOOL_AGENT_PROMPT_TEMPLATE = """Task: {task}
+WORKER_TOOL_PROMPT_TEMPLATE = """Task: {task}
 
 Your role: {role}
 Your instructions: {instructions}
@@ -99,21 +99,21 @@ class ToolCallingPromptBuilder:
     """Builder class for creating tool calling agent prompts."""
     
     @staticmethod
-    def get_tool_calling_agent_instructions(role: str, instructions: str) -> str:
+    def get_orchestrator_tool_instructions(role: str, instructions: str) -> str:
         """
-        Get instructions for agents that can call other agents as tools.
+        Get instructions for orchestrator agent that calls workers as tools.
         """
-        return TOOL_CALLING_AGENT_PROMPT_TEMPLATE.format(
+        return ORCHESTRATOR_TOOL_PROMPT_TEMPLATE.format(
             role=role,
             instructions=instructions
         )
     
     @staticmethod
-    def get_tool_agent_instructions(role: str, instructions: str, task: str) -> str:
+    def get_worker_tool_instructions(role: str, instructions: str, task: str) -> str:
         """
-        Get instructions for agents that are invoked as tools.
+        Get instructions for worker agent invoked as a tool.
         """
-        return TOOL_AGENT_PROMPT_TEMPLATE.format(
+        return WORKER_TOOL_PROMPT_TEMPLATE.format(
             role=role,
             instructions=instructions,
             task=task
