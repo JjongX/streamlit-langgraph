@@ -34,7 +34,7 @@ class WorkflowBuilder:
             workers (List[Agent]): Worker agents that execute tasks
             execution_mode (str): "sequential" or "parallel" execution of workers (only for handoff mode)
             delegation_mode (str): "handoff" or "tool_calling" delegation mode
-            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel)
+            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel).
             
         Returns:
             StateGraph: Compiled workflow graph
@@ -57,7 +57,7 @@ class WorkflowBuilder:
             supervisor_teams (List[SupervisorTeam]): List of supervisor teams, each containing
                                                      a supervisor and their workers
             execution_mode (str): "sequential" execution (default and only supported mode)
-            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel)
+            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel).
             
         Returns:
             StateGraph: Compiled hierarchical workflow graph

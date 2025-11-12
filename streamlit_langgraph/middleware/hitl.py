@@ -256,14 +256,13 @@ class HITLHandler:
         agent_name = interrupt_data.get("agent", "Unknown")
         interrupt_raw = interrupt_data.get("__interrupt__", [])
         original_config = interrupt_data.get("config", {})
-        thread_id = interrupt_data.get("thread_id")
         
         interrupt_info = HITLUtils.extract_action_requests_from_interrupt(interrupt_raw)
         if not interrupt_info:
             st.error("⚠️ Error: Could not extract action details from interrupt.")
             return False
         
-        executor = self.get_or_create_executor(executor_key, agent_name, thread_id, workflow_state)
+        executor = self.get_or_create_executor(executor_key, agent_name, workflow_state)
         if executor is None:
             return False
         
@@ -272,14 +271,14 @@ class HITLHandler:
         
         if pending_action_index is None:
             return self.resume_with_decisions(workflow_state, executor_key, executor, agent_name, 
-                                             decisions, original_config, thread_id)
+                                             decisions, original_config)
         
         self.display_action_approval_ui(executor_key, executor, agent_name, interrupt_info, 
                                         pending_action_index, decisions, workflow_state)
         return True
     
     def get_or_create_executor(self, executor_key: str, agent_name: str, 
-                               thread_id: str, workflow_state: Dict[str, Any]):
+                               workflow_state: Dict[str, Any]):
         """
         Get existing executor or create a new one.
         
@@ -288,7 +287,6 @@ class HITLHandler:
         Args:
             executor_key: Key identifying the executor
             agent_name: Name of the agent
-            thread_id: Thread ID for the executor
             workflow_state: Current workflow state
             
         Returns:
@@ -298,8 +296,8 @@ class HITLHandler:
         executor = registry.get(agent_name, executor_type="workflow")
         if executor is None:
             agent = self.agent_manager.agents.get(agent_name)
-            if agent and thread_id:
-                executor = registry.create_for_hitl(agent, thread_id, executor_key)
+            if agent:
+                executor = registry.create_for_hitl(agent, executor_key)
         
         if executor is None:
             # Clear invalid interrupt
@@ -310,8 +308,7 @@ class HITLHandler:
     
     def resume_with_decisions(self, workflow_state: Dict[str, Any], executor_key: str,
                                executor, agent_name: str,
-                               decisions: List[Dict[str, Any]], original_config: Dict[str, Any],
-                               thread_id: str) -> bool:
+                               decisions: List[Dict[str, Any]], original_config: Dict[str, Any]) -> bool:
         """
         Resume execution with all decisions made.
         
@@ -321,8 +318,7 @@ class HITLHandler:
             executor: CreateAgentExecutor or ResponseAPIExecutor instance
             agent_name: Name of the agent
             decisions: List of user decisions
-            original_config: Original execution config
-            thread_id: Thread ID for the executor
+            original_config: Original execution config (should contain thread_id)
             
         Returns:
             True if execution was resumed
@@ -337,7 +333,17 @@ class HITLHandler:
             llm_client = AgentManager.get_llm_client(executor.agent)
             executor._build_agent(llm_client)
         
-        resume_config = original_config or {"configurable": {"thread_id": thread_id}}
+        # Always use workflow_thread_id from workflow_state metadata (single source of truth)
+        workflow_thread_id = workflow_state.get("metadata", {}).get("workflow_thread_id")
+        if not workflow_thread_id:
+            st.error("⚠️ Error: Could not find thread_id for resume.")
+            return False
+        
+        # Build resume config
+        resume_config = original_config.copy() if original_config else {}
+        if "configurable" not in resume_config:
+            resume_config["configurable"] = {}
+        resume_config["configurable"]["thread_id"] = workflow_thread_id
         
         # Get messages from workflow_state for resume
         conversation_messages = workflow_state.get("messages", [])

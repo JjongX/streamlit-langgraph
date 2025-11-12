@@ -6,13 +6,12 @@ from typing import Any, Dict, List
 import streamlit as st
 
 from ...agent import Agent, AgentManager
-from ...state import WorkflowState
 from .base import AgentNodeBase
+from ...state.state_schema import WorkflowState
 from ..prompts import ToolCallingPromptBuilder
 
 
 class ToolCallingDelegation:
-    """Tool calling delegation pattern where agents are exposed as tools."""
     
     @staticmethod
     def _create_agent_tools(tool_agents: List[Agent], state: WorkflowState) -> List[Dict[str, Any]]:

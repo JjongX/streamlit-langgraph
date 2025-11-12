@@ -33,9 +33,9 @@ class WorkflowExecutor:
         
         # Deep copy to avoid modifying the original workflow_state
         initial_state = copy.deepcopy(initial_state)
+        if "metadata" not in initial_state:
+            initial_state["metadata"] = {}
         if config:
-            if "metadata" not in initial_state:
-                initial_state["metadata"] = {}
             initial_state["metadata"].update(config)
 
         # Build workflow configuration with thread_id for checkpointing
@@ -44,6 +44,10 @@ class WorkflowExecutor:
             configurable.update(config["configurable"])
         if "thread_id" not in configurable:
             configurable["thread_id"] = str(uuid.uuid4())
+        
+        # Store workflow thread_id in state metadata so nodes can access it
+        initial_state["metadata"]["workflow_thread_id"] = configurable["thread_id"]
+        
         workflow_config = {"configurable": configurable}
         
         if display_callback:

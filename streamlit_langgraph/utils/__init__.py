@@ -14,6 +14,3 @@ __all__ = [
     "HITLUtils",
     "HITLHandler",
 ]
-
-
-

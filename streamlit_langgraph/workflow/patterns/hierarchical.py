@@ -1,6 +1,10 @@
+# Hierarchical workflow pattern - a top supervisor delegates to sub-supervisors,
+# each managing their own team of workers.
+
 from dataclasses import dataclass
 from typing import List, Optional, Any
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
@@ -46,7 +50,7 @@ class HierarchicalPattern:
             top_supervisor: The top-level supervisor that coordinates sub-supervisors
             supervisor_teams: List of SupervisorTeam objects, each with a supervisor and workers
             execution_mode: "sequential" execution (parallel not yet supported for hierarchical)
-            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel)
+            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel).
             
         Returns:
             StateGraph: Compiled hierarchical workflow graph
@@ -56,6 +60,8 @@ class HierarchicalPattern:
         
         if execution_mode != "sequential":
             raise NotImplementedError("Only sequential mode is currently supported for hierarchical workflows")
+        if checkpointer is None:
+            checkpointer = MemorySaver()
         
         graph = StateGraph(WorkflowState)
         

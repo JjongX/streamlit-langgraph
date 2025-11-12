@@ -15,7 +15,6 @@ from ..prompts import SupervisorPromptBuilder
 
 
 class HandoffDelegation:
-    """Handoff delegation pattern where agents transfer control between nodes."""
     
     @staticmethod
     def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
@@ -199,11 +198,19 @@ class HandoffDelegation:
         if "executors" not in state.get("metadata", {}):
             state["metadata"]["executors"] = {}
             executor_key = ExecutorRegistry()._get_executor_key(agent.name, "workflow")
-        state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
+        
+        # Use workflow's thread_id (from state metadata) to match checkpointer
+        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
+        if not workflow_thread_id:
+            import uuid
+            workflow_thread_id = str(uuid.uuid4())
+            state["metadata"]["workflow_thread_id"] = workflow_thread_id
+        
+        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
         
         # Execute with enhanced instructions
         enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-        config = {"configurable": {"thread_id": executor.thread_id}}
+        config = {"configurable": {"thread_id": workflow_thread_id}}
         
         with st.spinner(f"🤖 {agent.name} is working..."):
             if executor.agent_obj is None:
@@ -212,7 +219,7 @@ class HandoffDelegation:
             # Check for interrupts first via streaming
             interrupt_data = executor._detect_interrupt_in_stream(config, enhanced_instructions)
             if interrupt_data:
-                result = executor._create_interrupt_response(interrupt_data, executor.thread_id, config)
+                result = executor._create_interrupt_response(interrupt_data, workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
@@ -222,7 +229,7 @@ class HandoffDelegation:
             )
             # Check for interrupts in output
             if isinstance(out, dict) and "__interrupt__" in out:
-                result = executor._create_interrupt_response(out["__interrupt__"], executor.thread_id, config)
+                result = executor._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}

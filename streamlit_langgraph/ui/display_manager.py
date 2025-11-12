@@ -159,17 +159,7 @@ class DisplayManager:
                 st.markdown(self.config.welcome_message)
     
     def render_workflow_message(self, message: Dict[str, Any]) -> bool:
-        """
-        Render a single workflow message.
-        
-        Checks if message is already displayed and renders it if not.
-        
-        Args:
-            message: Message dictionary with 'role', 'content', 'agent', and 'id'
-            
-        Returns:
-            True if message was rendered, False if already displayed
-        """
+        """Render a single workflow message."""
         msg_id = message.get("id")
         if not msg_id:
             return False

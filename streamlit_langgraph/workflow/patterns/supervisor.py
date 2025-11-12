@@ -1,5 +1,8 @@
+# Supervisor workflow pattern.
+
 from typing import List, Optional, Any
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
@@ -29,7 +32,7 @@ class SupervisorPattern:
             worker_agents (List[Agent]): List of worker agents with specialized capabilities
             execution_mode (str): "sequential" or "parallel" execution of workers
             delegation_mode (str): "handoff" or "tool_calling" delegation mode
-            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel)
+            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel).
             
         Returns:
             StateGraph: Compiled workflow graph
@@ -38,6 +41,8 @@ class SupervisorPattern:
             raise ValueError("At least one supervisor agent and one worker agent are required")
         if delegation_mode not in ("handoff", "tool_calling"):
             raise ValueError(f"delegation_mode must be 'handoff' or 'tool_calling', got '{delegation_mode}'")
+        if checkpointer is None:
+            checkpointer = MemorySaver()
     
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":

@@ -4,30 +4,24 @@ import json
 from typing import Any, Dict, List, Optional
 
 from ...agent import AgentManager
-from .base import BaseExecutor
+from .registry import BaseExecutor
 
 
 class ResponseAPIExecutor(BaseExecutor):
     
-    def execute(self, llm_client: Any, prompt: str, stream: bool = False,
-        file_messages: Optional[List] = None,
-        config: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    def _build_input_messages(self, prompt: str, file_messages: Optional[List] = None,
+                              messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """
-        Execute prompt using the Responses API client.
+        Build input messages for Responses API from conversation history.
         
-        Supports file messages, code interpreter, web search, and image generation tools.
-        When human_in_loop is enabled, uses Chat Completions API to intercept tool calls.
+        Args:
+            prompt: Current user prompt
+            file_messages: Optional file messages
+            messages: Conversation history from workflow_state
+            
+        Returns:
+            List of input messages in Responses API format
         """
-        config = self._prepare_config(config)
-        thread_id = self.get_thread_id(config)
-        
-        # If HITL is enabled, use Chat Completions API for tool interception
-        if self.agent.human_in_loop and self.agent.interrupt_on:
-            return self._execute_with_hitl(llm_client, prompt, stream, file_messages, thread_id, config, messages)
-        
-        # Normal execution using Responses API
-        # Build input messages from conversation history
         input_messages = []
         
         # Add conversation history from workflow_state
@@ -50,7 +44,22 @@ class ResponseAPIExecutor(BaseExecutor):
         # Add current user prompt
         if not input_messages or input_messages[-1].get("content") != prompt:
             input_messages.append({"role": "user", "content": prompt})
-
+        
+        return input_messages
+    
+    def _call_responses_api(self, llm_client: Any, input_messages: List[Dict[str, Any]], 
+                           stream: bool = False) -> Dict[str, Any]:
+        """
+        Call OpenAI Responses API with prepared input messages.
+        
+        Args:
+            llm_client: OpenAI client
+            input_messages: Prepared input messages
+            stream: Whether to stream the response
+            
+        Returns:
+            Dict with 'role', 'content', 'agent', and optionally 'stream'
+        """
         tools = self._build_tools_config(llm_client)
         api_params = {
             "model": self.agent.model,
@@ -71,6 +80,58 @@ class ResponseAPIExecutor(BaseExecutor):
                 return {"role": "assistant", "content": response_content, "agent": self.agent.name}
         except Exception as e:
             return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
+    
+    def execute_single_agent(self, llm_client: Any, prompt: str, stream: bool = False,
+        file_messages: Optional[List] = None,
+        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """
+        Execute prompt for single-agent mode (non-workflow).
+        
+        Single-agent mode: no checkpointer, no HITL, no thread_id needed.
+        
+        Args:
+            llm_client: OpenAI client
+            prompt: User's prompt
+            stream: Whether to stream the response
+            file_messages: Optional file messages
+            messages: Conversation history from workflow_state
+            
+        Returns:
+            Dict with 'role', 'content', 'agent', and optionally 'stream'
+        """
+        input_messages = self._build_input_messages(prompt, file_messages, messages)
+        return self._call_responses_api(llm_client, input_messages, stream)
+    
+    def execute_workflow(self, llm_client: Any, prompt: str, stream: bool = False,
+        file_messages: Optional[List] = None,
+        config: Optional[Dict[str, Any]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """
+        Execute prompt for workflow mode (requires config with thread_id).
+        
+        Supports file messages, code interpreter, web search, and image generation tools.
+        When human_in_loop is enabled, uses Chat Completions API to intercept tool calls.
+        
+        Args:
+            llm_client: OpenAI client
+            prompt: User's prompt
+            stream: Whether to stream the response
+            file_messages: Optional file messages
+            config: Execution config with thread_id (required for workflows)
+            messages: Conversation history from workflow_state
+            
+        Returns:
+            Dict with 'role', 'content', 'agent', and optionally '__interrupt__' or 'stream'
+        """
+        config, thread_id = self._prepare_workflow_config(config)
+        
+        # If HITL is enabled, use Chat Completions API for tool interception
+        if self.agent.human_in_loop and self.agent.interrupt_on:
+            return self._execute_with_hitl(llm_client, prompt, stream, file_messages, thread_id, config, messages)
+        
+        # Normal execution using Responses API (workflow mode)
+        input_messages = self._build_input_messages(prompt, file_messages, messages)
+        return self._call_responses_api(llm_client, input_messages, stream)
     
     def resume(self,
         decisions: List[Dict[str, Any]],
@@ -201,7 +262,6 @@ class ResponseAPIExecutor(BaseExecutor):
         content = message.content or ""
         return {"role": "assistant", "content": content, "agent": self.agent.name}
     
-    
     def _execute_with_hitl(self, llm_client,
         prompt: str, stream: bool, file_messages: Optional[List],
         thread_id: str, config: Dict[str, Any],
@@ -219,7 +279,8 @@ class ResponseAPIExecutor(BaseExecutor):
             messages.extend(file_messages)
         
         # Add user prompt
-        messages.append({"role": "user", "content": prompt})
+        if not messages or messages[-1].get("content") != prompt:
+            messages.append({"role": "user", "content": prompt})
         
         from ...utils import CustomTool  # lazy import to avoid circular import
         custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []

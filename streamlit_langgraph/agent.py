@@ -79,10 +79,7 @@ class Agent:
 
 
 class AgentManager:
-    """
-    Manager class for handling multiple agents and their interactions.
-    Provides utilities for loading agents and creating LLM clients.
-    """
+    """Manager class for handling multiple agents and their interactions."""
     
     def __init__(self):
         self.agents: Dict[str, Agent] = {}

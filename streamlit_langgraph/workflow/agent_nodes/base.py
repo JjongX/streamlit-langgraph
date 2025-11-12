@@ -86,12 +86,15 @@ class AgentNodeBase:
         """
         Prepare execution configuration with thread ID and metadata.
         
+        Uses the workflow's thread_id (from state metadata) to ensure consistency
+        with the checkpointer. The checkpointer uses thread_id from workflow config.
+        
         Args:
             executor: Executor instance
             state: Current workflow state
             
         Returns:
-            Configuration dictionary
+            Configuration dictionary with workflow's thread_id
         """
         # Ensure metadata structure exists
         if "metadata" not in state:
@@ -99,12 +102,20 @@ class AgentNodeBase:
         if "executors" not in state["metadata"]:
             state["metadata"]["executors"] = {}
         
+        # Use workflow's thread_id (set by WorkflowExecutor) - this matches the checkpointer
+        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
+        if not workflow_thread_id:
+            # Fallback: generate one (shouldn't happen in normal workflow execution)
+            import uuid
+            workflow_thread_id = str(uuid.uuid4())
+            state["metadata"]["workflow_thread_id"] = workflow_thread_id
+        
         # Store executor metadata
         executor_key = f"workflow_executor_{executor.agent.name}"
-        state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
+        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
         
-        # Return execution config
-        return {"configurable": {"thread_id": executor.thread_id}}
+        # Return execution config with workflow's thread_id (matches checkpointer)
+        return {"configurable": {"thread_id": workflow_thread_id}}
     
     @staticmethod
     def _invoke_executor(executor, agent: Agent, input_message: str, 
@@ -128,7 +139,7 @@ class AgentNodeBase:
         # For ResponseAPIExecutor
         if hasattr(executor, '_execute_with_hitl'):
             enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-            return executor.execute(
+            return executor.execute_workflow(
                 llm_client=llm_client,
                 prompt=enhanced_instructions,
                 stream=False,
@@ -136,7 +147,7 @@ class AgentNodeBase:
                 messages=conversation_messages
             )
         else:  # CreateAgentExecutor
-            return executor.execute(
+            return executor.execute_workflow(
                 llm_client=llm_client,
                 prompt=input_message,
                 config=config,

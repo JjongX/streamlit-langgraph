@@ -110,18 +110,23 @@ class WorkflowOrchestrator:
         
         Note: HITL is not supported for single agents.
         """
+        conversation_messages = st.session_state.workflow_state.get("messages", [])
+        
         if agent.type == "response":
             executor = ResponseAPIExecutor(agent)
-            conversation_messages = st.session_state.workflow_state.get("messages", [])
-            response = executor.execute(
-                self.llm_client, prompt, stream=self.config.stream if self.config else True,
-                file_messages=file_messages, messages=conversation_messages
+            response = executor.execute_single_agent(
+                self.llm_client, prompt, 
+                stream=self.config.stream if self.config else True,
+                file_messages=file_messages, 
+                messages=conversation_messages
             )
             return response
         else:
             # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
             executor = CreateAgentExecutor(agent)
-            conversation_messages = st.session_state.workflow_state.get("messages", [])
-            response = executor.execute(self.llm_client, prompt, messages=conversation_messages)
+            response = executor.execute_single_agent(
+                self.llm_client, prompt, 
+                messages=conversation_messages
+            )
             return response
 
