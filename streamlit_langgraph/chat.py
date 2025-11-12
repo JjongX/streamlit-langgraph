@@ -1,4 +1,4 @@
-# Main chat interface for Streamlit and LangGraph.
+# Main chat interface.
 
 import base64
 from dataclasses import dataclass
@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from .agent import Agent, AgentManager
-from .core.execution_coordinator import ExecutionCoordinator
+from .core.execution_coordinator import WorkflowOrchestrator
 from .core.executor import WorkflowExecutor
-from .state import StateCoordinator, WorkflowStateManager
+from .state import StateManager, WorkflowStateManager
 from .ui import DisplayManager
 from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils
 
@@ -80,21 +80,21 @@ class LangGraphChat:
         
         # Initialize Streamlit session state
         self._init_session_state()
-        # Initialize state coordinator
-        self.state_coordinator = StateCoordinator()
+        # Initialize state manager
+        self.state_manager = StateManager()
         
         # Initialize display manager
         self.display_manager = DisplayManager(self.config)
         
-        # Initialize execution coordinator
-        self.execution_coordinator = ExecutionCoordinator(
+        # Initialize workflow orchestrator
+        self.workflow_orchestrator = WorkflowOrchestrator(
             workflow_executor=self.workflow_executor,
             agent_manager=self.agent_manager,
             llm_client=self.llm,
             config=self.config
         )
         
-        self.hitl_handler = HITLHandler(self.agent_manager, self.config, self.state_coordinator)
+        self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager)
     
     def create_block(self, category, content=None, filename=None, file_id=None):
         """Create a new Block instance."""
@@ -164,7 +164,7 @@ class LangGraphChat:
     def _render_chat_interface(self):
         """Render the main chat interface."""
         # Sync at the START of rendering
-        self.state_coordinator.sync_to_session_state()
+        self.state_manager.sync_to_session_state()
         
         # Display welcome message
         if not st.session_state.messages:
@@ -173,7 +173,7 @@ class LangGraphChat:
         # Check for pending interrupts FIRST - workflow_state is the single source of truth
         workflow_state = st.session_state.workflow_state
         if HITLUtils.has_pending_interrupts(workflow_state):
-            interrupt_handled = self.hitl_handler.handle_pending_interrupts(workflow_state)
+            interrupt_handled = self.interrupt_handler.handle_pending_interrupts(workflow_state)
             if interrupt_handled:
                 return  # Don't process messages or show input while handling interrupts
 
@@ -202,7 +202,7 @@ class LangGraphChat:
         if "metadata" not in workflow_state:
             workflow_state["metadata"] = {}
         
-        self.state_coordinator.add_user_message(prompt)
+        self.state_manager.add_user_message(prompt)
         
         section = self.add_section("user")
         section.update("text", prompt)
@@ -211,7 +211,7 @@ class LangGraphChat:
         section.stream()
 
         # Clear HITL state before new request
-        self.state_coordinator.clear_hitl_state()
+        self.state_manager.clear_hitl_state()
         
         # Generate response
         with st.spinner("Thinking..."):
@@ -245,7 +245,7 @@ class LangGraphChat:
         # Add assistant response to state if not a workflow control message
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
-            self.state_coordinator.add_assistant_message(
+            self.state_manager.add_assistant_message(
                 response["content"], 
                 response["agent"]
             )
@@ -257,7 +257,7 @@ class LangGraphChat:
                 file_info = self.file_handler.save_uploaded_file(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
                 # Add file metadata to workflow state (not content)
-                self.state_coordinator.update_workflow_state({
+                self.state_manager.update_workflow_state({
                     "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
                 }, auto_sync=False)
     
@@ -329,20 +329,20 @@ class LangGraphChat:
             """Callback to display agent responses as they complete during workflow execution."""
             self.display_manager.render_workflow_message(msg)
         
-        # Use execution coordinator for workflow execution
-        result_state = self.execution_coordinator.execute_workflow(
+        # Use workflow orchestrator for workflow execution
+        result_state = self.workflow_orchestrator.execute_workflow(
             self.workflow, prompt, display_callback=display_callback
         )
 
         if HITLUtils.has_pending_interrupts(result_state):
             st.session_state.workflow_state = result_state
-            self.state_coordinator.sync_to_session_state()
+            self.state_manager.sync_to_session_state()
             st.rerun()
         else:
-            self.state_coordinator.clear_hitl_state()
+            self.state_manager.clear_hitl_state()
 
         st.session_state.workflow_state = result_state
-        self.state_coordinator.sync_to_session_state()
+        self.state_manager.sync_to_session_state()
         
         return {
             "role": "assistant",
@@ -358,14 +358,14 @@ class LangGraphChat:
         """
         file_messages = self.file_handler.get_openai_input_messages()
         
-        # Use execution coordinator for single agent execution
-        response = self.execution_coordinator.execute_single_agent(
+        # Use workflow orchestrator for single agent execution
+        response = self.workflow_orchestrator.execute_single_agent(
             agent, prompt, file_messages=file_messages
         )
         
-        # Update workflow_state with agent response using coordinator
+        # Update workflow_state with agent response using state manager
         if response.get("content"):
-            self.state_coordinator.add_assistant_message(
+            self.state_manager.add_assistant_message(
                 response.get("content", ""),
                 response.get("agent", agent.name)
             )

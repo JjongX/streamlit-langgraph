@@ -7,9 +7,9 @@ import streamlit as st
 
 from .workflow_state import WorkflowStateManager
 
-class StateCoordinator:
+class StateManager:
     """
-    Centralized coordinator for managing WorkflowState and session_state synchronization.
+    Centralized manager for WorkflowState and session_state synchronization.
     
     This class ensures that WorkflowState remains the single source of truth while
     session_state is kept in sync for UI rendering purposes.
@@ -18,7 +18,7 @@ class StateCoordinator:
     """
     
     def __init__(self):
-        """Initialize the coordinator."""
+        """Initialize the state manager."""
         pass
     
     def update_workflow_state(self, updates: Dict[str, Any], auto_sync: bool = True) -> None:

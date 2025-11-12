@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from ...agent import Agent, AgentManager
 from ...core.executor_registry import ExecutorRegistry
-from ...hitl import InterruptManager
+from ...middleware.interrupts import InterruptManager
 from ...state import WorkflowState
 
 

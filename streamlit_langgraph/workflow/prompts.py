@@ -1,3 +1,5 @@
+# Prompt templates.
+
 from typing import List, Optional
 
 # Common prompt fragments
