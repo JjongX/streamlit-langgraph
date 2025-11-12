@@ -1,3 +1,5 @@
+# Workflow executor for compiled workflows.
+
 import copy
 import uuid
 from typing import Any, Callable, Dict, Optional
@@ -8,9 +10,6 @@ from ...state import WorkflowState, WorkflowStateManager
 
 
 class WorkflowExecutor:
-    """
-    Handles execution of compiled workflows with Streamlit integration.
-    """
     
     def execute_workflow(self, workflow: StateGraph, user_input: str, 
                         display_callback: Optional[Callable] = None,

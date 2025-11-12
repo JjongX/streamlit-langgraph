@@ -1,4 +1,4 @@
-"""ResponseAPIExecutor for OpenAI Responses API with HITL support."""
+# ResponseAPIExecutor for OpenAI Responses API.
 
 import json
 from typing import Any, Dict, List, Optional
@@ -8,22 +8,11 @@ from .base import BaseExecutor
 
 
 class ResponseAPIExecutor(BaseExecutor):
-    """
-    Executor for OpenAI Responses API generation.
     
-    Supports human-in-the-loop approval when enabled via agent configuration.
-    When HITL is enabled, uses Chat Completions API with function calling for tool interception.
-    """
-    
-    def execute(
-        self,
-        llm_client: Any,
-        prompt: str,
-        stream: bool = False,
+    def execute(self, llm_client: Any, prompt: str, stream: bool = False,
         file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Execute prompt using the Responses API client.
         
@@ -64,12 +53,10 @@ class ResponseAPIExecutor(BaseExecutor):
         except Exception as e:
             return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
     
-    def resume(
-        self,
+    def resume(self,
         decisions: List[Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Resume execution after human approval/rejection.
         

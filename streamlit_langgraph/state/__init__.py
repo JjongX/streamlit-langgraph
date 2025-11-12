@@ -1,11 +1,11 @@
 """State management module for streamlit-langgraph."""
 
-from .coordinator import StateManager
-from .workflow_state import WorkflowState, WorkflowStateManager
+from .state_schema import WorkflowState, WorkflowStateManager
+from .state_sync import StateSynchronizer
 
 __all__ = [
-    "StateManager",
     "WorkflowState",
     "WorkflowStateManager",
+    "StateSynchronizer",
 ]
 

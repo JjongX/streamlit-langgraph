@@ -1,25 +1,13 @@
-# Centralized state coordinator for managing WorkflowState and session_state synchronization
-
+# Synchronizes between WorkflowState and Streamlit's session_state for UI rendering.
 
 import uuid
 from typing import Any, Dict, List
 import streamlit as st
 
-from .workflow_state import WorkflowStateManager
+from .state_schema import WorkflowStateManager
 
-class StateManager:
-    """
-    Centralized manager for WorkflowState and session_state synchronization.
-    
-    This class ensures that WorkflowState remains the single source of truth while
-    session_state is kept in sync for UI rendering purposes.
-    
-    Note: This class assumes session_state has been initialized (typically by LangGraphChat).
-    """
-    
-    def __init__(self):
-        """Initialize the state manager."""
-        pass
+
+class StateSynchronizer:
     
     def update_workflow_state(self, updates: Dict[str, Any], auto_sync: bool = True) -> None:
         """
@@ -81,11 +69,9 @@ class StateManager:
         new_messages = self._find_new_messages(workflow_messages, session_messages)
         st.session_state.messages.extend(new_messages)
     
-    def _find_new_messages(
-        self,
+    def _find_new_messages(self, 
         workflow_messages: List[Dict[str, Any]],
-        session_messages: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        session_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Find messages in workflow_messages that aren't in session_messages.
         

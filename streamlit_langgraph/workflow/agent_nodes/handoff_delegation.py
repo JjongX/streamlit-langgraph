@@ -8,7 +8,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from ...agent import Agent, AgentManager
-from ...core.executor_registry import ExecutorRegistry
+from ...core.executor.registry import ExecutorRegistry
 from ...state import WorkflowState, WorkflowStateManager
 from .base import AgentNodeBase, create_message_with_id
 from ..prompts import SupervisorPromptBuilder

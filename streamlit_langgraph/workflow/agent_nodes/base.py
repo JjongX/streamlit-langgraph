@@ -4,7 +4,7 @@ import uuid
 from typing import Any, Dict, List
 
 from ...agent import Agent, AgentManager
-from ...core.executor_registry import ExecutorRegistry
+from ...core.executor.registry import ExecutorRegistry
 from ...middleware.interrupts import InterruptManager
 from ...state import WorkflowState
 
@@ -164,7 +164,7 @@ class AgentNodeBase:
         """
         # Check for interrupt
         if InterruptManager.should_interrupt(result):
-            from ...core.executor_registry import ExecutorRegistry
+            from ...core.executor.registry import ExecutorRegistry
             executor_key = ExecutorRegistry._get_executor_key(agent.name, "workflow")
             interrupt_data = InterruptManager.extract_interrupt_data(result)
             

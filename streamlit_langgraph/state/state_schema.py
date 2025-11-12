@@ -1,6 +1,9 @@
+# Single source of truth for all agents and workflows.
+
 import operator
 from typing import Any, Dict, List, Optional, TypedDict
 from typing_extensions import Annotated
+
 
 class WorkflowStateManager:
     """Manager class for workflow state operations and HITL state management."""

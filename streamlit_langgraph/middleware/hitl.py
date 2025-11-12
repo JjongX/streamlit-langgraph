@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from ..agent import AgentManager
-from ..core.executor_registry import ExecutorRegistry
+from ..core.executor.registry import ExecutorRegistry
 from ..state import WorkflowStateManager
 from .interrupts import InterruptManager
 
@@ -205,7 +205,7 @@ class HITLHandler:
         Args:
             agent_manager: AgentManager instance for accessing agents
             config: UIConfig instance for UI settings
-            state_manager: StateManager instance for state management
+            state_manager: StateSynchronizer instance for state management
         """
         self.agent_manager = agent_manager
         self.config = config

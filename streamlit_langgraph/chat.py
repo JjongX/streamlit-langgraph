@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from .agent import Agent, AgentManager
-from .core.execution_coordinator import WorkflowOrchestrator
+from .core.orchestrator import WorkflowOrchestrator
 from .core.executor import WorkflowExecutor
-from .state import StateManager, WorkflowStateManager
+from .state import StateSynchronizer, WorkflowStateManager
 from .ui import DisplayManager
 from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils
 
@@ -81,7 +81,7 @@ class LangGraphChat:
         # Initialize Streamlit session state
         self._init_session_state()
         # Initialize state manager
-        self.state_manager = StateManager()
+        self.state_manager = StateSynchronizer()
         
         # Initialize display manager
         self.display_manager = DisplayManager(self.config)
