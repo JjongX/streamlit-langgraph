@@ -1,62 +1,38 @@
 import os
-import yaml
 
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat, CustomTool
-from streamlit_langgraph.workflow import WorkflowBuilder
+import streamlit_langgraph as slg
 
 def analyze_sentiment(text: str) -> str:
     """Simple sentiment analysis placeholder."""
-    try:
-        # In real implementation, this would use an NLP library
-        positive_words = ['good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic']
-        negative_words = ['bad', 'terrible', 'awful', 'poor', 'horrible', 'disappointing']
-        
-        text_lower = text.lower()
-        pos_count = sum(1 for word in positive_words if word in text_lower)
-        neg_count = sum(1 for word in negative_words if word in text_lower)
-        
-        if pos_count > neg_count:
-            return f"Sentiment: Positive (score: +{pos_count - neg_count})"
-        elif neg_count > pos_count:
-            return f"Sentiment: Negative (score: -{neg_count - pos_count})"
-        else:
-            return "Sentiment: Neutral"
-    except Exception as e:
-        return f"Analysis error: {str(e)}"
+    # In real implementation, this would use an NLP library
+    positive_words = ['good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic']
+    negative_words = ['bad', 'terrible', 'awful', 'poor', 'horrible', 'disappointing']
+    
+    text_lower = text.lower()
+    pos_count = sum(1 for word in positive_words if word in text_lower)
+    neg_count = sum(1 for word in negative_words if word in text_lower)
+    
+    if pos_count > neg_count:
+        return f"Sentiment: Positive (score: +{pos_count - neg_count})"
+    elif neg_count > pos_count:
+        return f"Sentiment: Negative (score: -{neg_count - pos_count})"
+    else:
+        return "Sentiment: Neutral"
 
 def create_parallel_supervisor_workflow():
     """Create a parallel supervisor workflow for comprehensive product analysis."""
     
-    # Register custom tool
-    CustomTool.register_tool(
+    # Register custom tool BEFORE loading agents
+    slg.CustomTool.register_tool(
         name="analyze_sentiment",
         description="Perform sentiment analysis on text",
         function=analyze_sentiment
     )
     
     # Load agent configurations from YAML
+    # Customer_Analyst agent has "analyze_sentiment" in its tools list (see config file)
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_configs = yaml.safe_load(f)
-    
-    # Set optional arguments for each agent
-    # Order: [supervisor, market_analyst, technical_analyst, customer_analyst]
-    optional_args = [
-        # Analysis_Supervisor
-        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Market_Analyst
-        dict(allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-        # Technical_Analyst
-        dict(allow_code_interpreter=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-        # Customer_Analyst
-        dict(tools=["analyze_sentiment"], allow_web_search=True, temperature=0.2, provider="openai", model="gpt-4.1"),
-    ]
-    
-    # Create agents from config
-    agents = []
-    for cfg, opts in zip(agent_configs, optional_args):
-        agent = Agent(**cfg, **opts)
-        agents.append(agent)
+    agents = slg.AgentManager.load_from_yaml(config_path)
     
     supervisor = agents[0]
     workers = agents[1:]
@@ -68,16 +44,16 @@ def main():
     
     # Create supervisor and workers
     supervisor, workers = create_parallel_supervisor_workflow()
-    
-    # Build parallel workflow
-    builder = WorkflowBuilder()
+    # Create a workflow
+    builder = slg.WorkflowBuilder()
     parallel_workflow = builder.create_supervisor_workflow(
         supervisor=supervisor,
         workers=workers,
-        execution_mode="parallel"  # Key difference: parallel execution!
+        execution_mode="parallel",
+        delegation_mode="handoff"
     )
     
-    config = UIConfig(
+    config = slg.UIConfig(
         title="Parallel Product Analysis Team",
         page_icon="📊",
         stream=True,
@@ -117,7 +93,7 @@ def main():
         placeholder="What product would you like our team to analyze?"
     )
     
-    chat = LangGraphChat(
+    chat = slg.LangGraphChat(
         workflow=parallel_workflow,
         agents=[supervisor] + workers,
         config=config

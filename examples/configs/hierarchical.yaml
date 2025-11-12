@@ -27,6 +27,11 @@
     - Deliver polished, comprehensive final results to users
     
     You manage the overall project flow and ensure all teams work together effectively.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.0
+  allow_web_search: true
+  allow_file_search: true
 
 - name: Research_Team_Lead
   role: Research Team Supervisor
@@ -52,6 +57,11 @@
     - Provide comprehensive research reports to the Project Manager
     
     You manage the research workflow and ensure thorough, high-quality research outputs.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.3
+  allow_web_search: true
+  allow_file_search: true
 
 - name: Data_Researcher
   role: Data & Statistics Research Specialist
@@ -73,6 +83,10 @@
     - Report findings clearly with sources to your supervisor
     
     Always work within your supervisor's guidance and provide detailed, well-sourced data.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.0
+  allow_web_search: true
 
 - name: Literature_Researcher
   role: Literature & Academic Research Specialist
@@ -94,6 +108,10 @@
     - Report findings clearly with citations to your supervisor
     
     Always work within your supervisor's guidance and provide comprehensive, well-cited research.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.0
+  allow_web_search: true
 
 - name: Content_Team_Lead
   role: Content Team Supervisor
@@ -120,6 +138,10 @@
     - Provide polished documents to the Project Manager
     
     You manage the writing workflow and ensure high-quality, professional content outputs.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.3
+  allow_file_search: true
 
 - name: Draft_Writer
   role: Content Drafting Specialist
@@ -141,6 +163,10 @@
     - Report completed drafts to your supervisor
     
     Always work within your supervisor's guidance and create thorough initial drafts.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.4
+  allow_code_interpreter: true
 
 - name: Content_Editor
   role: Content Editing & Refinement Specialist
@@ -162,4 +188,8 @@
     - Report polished content to your supervisor
     
     Always work within your supervisor's guidance and deliver publication-ready content.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.3
+  allow_code_interpreter: true
 

@@ -16,6 +16,10 @@
     3. You can delegate to PARALLEL multiple times if needed for different aspects
     
     IMPORTANT: To trigger parallel execution, set target_worker to "PARALLEL" in your delegation.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.0
+  allow_web_search: true
 
 - name: Market_Analyst
   role: Market Research Specialist
@@ -31,6 +35,10 @@
     - Market opportunities and threats
     
     Provide structured, data-driven insights.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.2
+  allow_web_search: true
 
 - name: Technical_Analyst
   role: Technical Specifications Expert
@@ -47,6 +55,10 @@
     - Technical advantages/disadvantages
     
     Provide detailed technical insights.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.2
+  allow_code_interpreter: true
 
 - name: Customer_Analyst
   role: Customer Insights Specialist
@@ -63,4 +75,10 @@
     - Customer needs and pain points
     
     Provide customer-centric insights.
+  provider: openai
+  model: gpt-4.1
+  temperature: 0.2
+  allow_web_search: true
+  tools:
+    - analyze_sentiment
 

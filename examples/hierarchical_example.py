@@ -1,38 +1,12 @@
 import os
-import yaml
 
-from streamlit_langgraph import Agent, UIConfig, LangGraphChat
-from streamlit_langgraph.workflow import WorkflowBuilder, SupervisorTeam
-
+import streamlit_langgraph as slg
 
 def create_hierarchical_workflow_example():
     """Create a hierarchical workflow with multiple supervisor teams."""
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/hierarchical.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_configs = yaml.safe_load(f)
-
-    optional_args = [
-        # Project_Manager (Top Supervisor)
-        dict(allow_web_search=True, allow_file_search=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Research_Team_Lead (Sub-Supervisor 1)
-        dict(allow_web_search=True, allow_file_search=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Data_Researcher (Worker for Research Team)
-        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Literature_Researcher (Worker for Research Team)
-        dict(allow_web_search=True, temperature=0.0, provider="openai", model="gpt-4.1"),
-        # Content_Team_Lead (Sub-Supervisor 2)
-        dict(allow_file_search=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-        # Draft_Writer (Worker for Content Team)
-        dict(allow_code_interpreter=True, temperature=0.4, provider="openai", model="gpt-4.1"),
-        # Content_Editor (Worker for Content Team)
-        dict(allow_code_interpreter=True, temperature=0.3, provider="openai", model="gpt-4.1"),
-    ]
-
-    agents = []
-    for cfg, opts in zip(agent_configs, optional_args):
-        agent = Agent(**cfg, **opts)
-        agents.append(agent)
+    agents = slg.AgentManager.load_from_yaml(config_path)
 
     # Unpack agents
     project_manager = agents[0]
@@ -44,13 +18,12 @@ def create_hierarchical_workflow_example():
     content_editor = agents[6]
     
     # Create supervisor teams
-    research_team = SupervisorTeam(
+    research_team = slg.WorkflowBuilder.SupervisorTeam(
         supervisor=research_team_lead,
         workers=[data_researcher, literature_researcher],
         team_name="research_team"
     )
-    
-    content_team = SupervisorTeam(
+    content_team = slg.WorkflowBuilder.SupervisorTeam(
         supervisor=content_team_lead,
         workers=[draft_writer, content_editor],
         team_name="content_team"
@@ -66,14 +39,14 @@ def main():
     top_supervisor, supervisor_teams, all_agents = create_hierarchical_workflow_example()
     
     # Create the hierarchical workflow
-    builder = WorkflowBuilder()
+    builder = slg.WorkflowBuilder()
     hierarchical_workflow = builder.create_hierarchical_workflow(
         top_supervisor=top_supervisor,
         supervisor_teams=supervisor_teams,
         execution_mode="sequential"
     )
     
-    config = UIConfig(
+    config = slg.UIConfig(
         title="Hierarchical Multi-Team Organization",
         page_icon="🏢",
         stream=True,
@@ -117,7 +90,7 @@ def main():
         placeholder="Describe your project that requires research and content creation..."
     )
     
-    chat = LangGraphChat(
+    chat = slg.LangGraphChat(
         workflow=hierarchical_workflow,
         agents=all_agents,
         config=config
