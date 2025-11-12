@@ -49,7 +49,8 @@ def main():
     parallel_workflow = builder.create_supervisor_workflow(
         supervisor=supervisor,
         workers=workers,
-        execution_mode="parallel"
+        execution_mode="parallel",
+        delegation_mode="handoff"
     )
     
     config = slg.UIConfig(

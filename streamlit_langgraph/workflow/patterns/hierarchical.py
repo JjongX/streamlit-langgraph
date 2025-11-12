@@ -4,8 +4,8 @@ from typing import List
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
-from ..agent_nodes import AgentNodeFactory
-from ..state import WorkflowState
+from ..agent_nodes.factory import AgentNodeFactory
+from ...state import WorkflowState
 
 
 @dataclass

@@ -1,9 +1,10 @@
+import copy
 import uuid
 from typing import Any, Callable, Dict, Optional
 
 from langgraph.graph import StateGraph
 
-from .state import WorkflowState, WorkflowStateManager
+from ...state import WorkflowState, WorkflowStateManager
 
 
 class WorkflowExecutor:
@@ -13,25 +14,37 @@ class WorkflowExecutor:
     
     def execute_workflow(self, workflow: StateGraph, user_input: str, 
                         display_callback: Optional[Callable] = None,
-                        config: Optional[Dict[str, Any]] = None) -> WorkflowState:
+                        config: Optional[Dict[str, Any]] = None,
+                        initial_state: Optional[WorkflowState] = None) -> WorkflowState:
         """
         Execute a compiled workflow with the given user input.
         
         Args:
             workflow: Compiled workflow graph
-            user_input: User's input/request
+            user_input: User's input/request (used only if initial_state is not provided)
             display_callback: Optional callback for displaying messages
             config: Optional configuration for workflow execution (may include thread_id for HITL)
+            initial_state: Optional existing workflow state to use (prevents duplicate user messages)
             
         Returns:
             Final state after workflow execution (may contain pending_interrupts in metadata)
         """
-        # Create and initialize workflow state
-        initial_state = WorkflowStateManager.create_initial_state(
-            messages=[{"role": "user", "content": user_input}]
-        )
-        if config:
-            initial_state["metadata"].update(config)
+        # Use provided initial_state if available (user message already added)
+        # Otherwise create new state (for backward compatibility)
+        if initial_state is not None:
+            # Deep copy to avoid modifying the original workflow_state
+            initial_state = copy.deepcopy(initial_state)
+            if config:
+                if "metadata" not in initial_state:
+                    initial_state["metadata"] = {}
+                initial_state["metadata"].update(config)
+        else:
+            # Create and initialize workflow state with message ID
+            initial_state = WorkflowStateManager.create_initial_state(
+                messages=[{"id": str(uuid.uuid4()), "role": "user", "content": user_input}]
+            )
+            if config:
+                initial_state["metadata"].update(config)
 
         # Build workflow configuration with thread_id for checkpointing
         configurable = {}
@@ -53,16 +66,6 @@ class WorkflowExecutor:
         # Preserve HITL metadata from initial state
         WorkflowStateManager.preserve_hitl_metadata(initial_state, final_state)
         
-        # Add completion message if workflow ended
-        if final_state.get("messages"):
-            last_agent = final_state["messages"][-1].get("agent")
-            if last_agent in ["END", "__end__"]:
-                final_state["messages"].append({
-                    "role": "system",
-                    "content": "Workflow completed successfully.",
-                    "agent": None,
-                })
-        
         return final_state
     
     def _execute_streaming(self, workflow: StateGraph, initial_state: WorkflowState, 
@@ -77,11 +80,7 @@ class WorkflowExecutor:
                     self._apply_state_update(accumulated_state, state_update)
                 
                 # Check if interrupt was detected AFTER applying update
-                has_pending_interrupts = "pending_interrupts" in accumulated_state.get("metadata", {})
-                is_interrupt_node = node_name == "__interrupt__"
-                has_interrupt_in_update = isinstance(state_update, dict) and "__interrupt__" in state_update
-                
-                if (is_interrupt_node or has_interrupt_in_update) and has_pending_interrupts:
+                if self._has_interrupt(accumulated_state, node_name, state_update):
                     return accumulated_state
                 
                 display_callback(accumulated_state)
@@ -89,16 +88,6 @@ class WorkflowExecutor:
         # Final check for interrupts before completing
         if "pending_interrupts" in accumulated_state.get("metadata", {}):
             return accumulated_state
-        
-        # Add completion message if workflow ended
-        if accumulated_state.get("messages"):
-            last_agent = accumulated_state["messages"][-1].get("agent")
-            if last_agent in ["END", "__end__"]:
-                accumulated_state["messages"].append({
-                    "role": "system",
-                    "content": "Workflow completed successfully.",
-                    "agent": None,
-                })
         
         return accumulated_state
     
@@ -119,3 +108,12 @@ class WorkflowExecutor:
         
         if "current_agent" in state_update and state_update["current_agent"] is not None:
             accumulated_state["current_agent"] = state_update["current_agent"]
+    
+    def _has_interrupt(self, accumulated_state: WorkflowState, node_name: str, state_update: Any) -> bool:
+        """Check if state contains interrupt."""
+        has_pending_interrupts = "pending_interrupts" in accumulated_state.get("metadata", {})
+        is_interrupt_node = node_name == "__interrupt__"
+        has_interrupt_in_update = isinstance(state_update, dict) and "__interrupt__" in state_update
+        
+        return (is_interrupt_node or has_interrupt_in_update) and has_pending_interrupts
+    

@@ -1,14 +1,22 @@
 from typing import List, Optional
 
+# Common prompt fragments
+_ROLE_INTRO = "You are {role}. {instructions}"
+_USER_QUERY_HEADER = "User's Request: {user_query}"
+_WORKER_LIST_HEADER = "You are supervising the following workers: {worker_list}"
+_WORKER_OUTPUTS_HEADER = "Worker Outputs So Far:\n{worker_outputs}"
+_TASK_HEADER = "Task: {task}"
+_ROLE_HEADER = "Your role: {role}"
+_INSTRUCTIONS_HEADER = "Your instructions: {instructions}"
+
 # Supervisor Prompt Templates
-SUPERVISOR_PROMPT_TEMPLATE = """You are {role}. {instructions}
+SUPERVISOR_PROMPT_TEMPLATE = f"""{_ROLE_INTRO}
 
-You are supervising the following workers: {worker_list}
+{_WORKER_LIST_HEADER}
 
-User's Request: {user_query}
+{_USER_QUERY_HEADER}
 
-Worker Outputs So Far:
-{worker_outputs}
+{_WORKER_OUTPUTS_HEADER}
 
 YOUR DECISION:
 - Analyze what work still needs to be done
@@ -29,16 +37,16 @@ SEQUENTIAL_ROUTE_GUIDANCE = """When delegating sequentially:
 """
 
 # Tool Calling Prompt Templates
-ORCHESTRATOR_TOOL_PROMPT_TEMPLATE = """You are {role}. {instructions}
+ORCHESTRATOR_TOOL_PROMPT_TEMPLATE = f"""{_ROLE_INTRO}
 
 You have access to specialized agents that can help you. When you need their expertise, call them as tools.
 After they complete their task, they will return results to you, and you should synthesize the final response.
 """
 
-WORKER_TOOL_PROMPT_TEMPLATE = """Task: {task}
+WORKER_TOOL_PROMPT_TEMPLATE = f"""{_TASK_HEADER}
 
-Your role: {role}
-Your instructions: {instructions}
+{_ROLE_HEADER}
+{_INSTRUCTIONS_HEADER}
 
 Complete this task and return the result. Be concise and focused on the specific task.
 """

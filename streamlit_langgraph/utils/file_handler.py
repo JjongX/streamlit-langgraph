@@ -1,4 +1,4 @@
-"""File handling utilities for OpenAI API integration."""
+# File handling utilities for OpenAI API integration.
 
 import os
 import tempfile

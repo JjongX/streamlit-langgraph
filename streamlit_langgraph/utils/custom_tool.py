@@ -1,22 +1,26 @@
-"""Custom tool creation and management utilities."""
+# Custom tool creation and management utilities.
 
 import inspect
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, ClassVar, Dict, List, Optional
 
 from langchain_core.tools import StructuredTool
 
 
+@dataclass
 class CustomTool:
     """
     A custom tool that can be used by agents in the multiagent system.
     """
+    # Class-level registry for storing all registered tools
+    # Using ClassVar to indicate this is a class variable, not an instance field
+    _registry: ClassVar[Dict[str, "CustomTool"]] = {}
+    
     name: str
     description: str
     function: Callable
     parameters: Optional[Dict[str, Any]] = None
     return_direct: bool = False
-
-    _registry = {}
 
     @classmethod
     def register_tool(cls, name: str, description: str, function: Callable, **kwargs) -> "CustomTool":
@@ -128,6 +132,4 @@ class CustomTool:
                 parameters["required"].append(param_name)
         
         return parameters
-
-
 
