@@ -354,7 +354,7 @@ class LangGraphChat:
         """
         Run a single agent (non-workflow mode) and orchestrate UI updates.
         
-        Coordinates agent execution with HITL handling and state synchronization.
+        Note: HITL is not supported for single agents. Use workflows for HITL functionality.
         """
         file_messages = self.file_handler.get_openai_input_messages()
         
@@ -362,15 +362,6 @@ class LangGraphChat:
         response = self.execution_coordinator.execute_single_agent(
             agent, prompt, file_messages=file_messages
         )
-        
-        # Handle interrupts from ResponseAPIExecutor
-        if response.get("__interrupt__"):
-            self.state_coordinator.set_pending_interrupt(
-                agent.name,
-                response,
-                "single_agent_executor"
-            )
-            return response
         
         # Update workflow_state with agent response using coordinator
         if response.get("content"):

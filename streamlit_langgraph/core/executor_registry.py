@@ -9,13 +9,7 @@ from .executor import ResponseAPIExecutor, CreateAgentExecutor
 
 
 class ExecutorRegistry:
-    """
-    Centralized registry for managing executor lifecycle.
-    
-    Provides consistent executor creation, retrieval, and key management
-    across the application.
-    """
-    
+
     @staticmethod
     def _get_executor_key(agent_name: str, executor_type: str = "workflow") -> str:
         """
@@ -39,12 +33,8 @@ class ExecutorRegistry:
             st.session_state.agent_executors = {}
     
     @staticmethod
-    def get_or_create(
-        agent: Agent,
-        executor_type: str = "workflow",
-        thread_id: Optional[str] = None,
-        tools: Optional[list] = None
-    ) -> Any:
+    def get_or_create(agent: Agent, executor_type: str = "workflow",
+        thread_id: Optional[str] = None, tools: Optional[list] = None) -> Any:
         """
         Get existing executor or create a new one.
         
@@ -77,27 +67,15 @@ class ExecutorRegistry:
     
     @staticmethod
     def get(agent_name: str, executor_type: str = "workflow") -> Optional[Any]:
-        """
-        Get existing executor by key.
-        
-        Args:
-            agent_name: Name of the agent
-            executor_type: Type of executor ("workflow" or "single_agent")
-            
-        Returns:
-            Executor instance or None if not found
-        """
+        """Get existing executor by key."""
         ExecutorRegistry._ensure_executors_dict()
         
         executor_key = ExecutorRegistry._get_executor_key(agent_name, executor_type)
         return st.session_state.agent_executors.get(executor_key)
     
     @staticmethod
-    def create_for_hitl(
-        agent: Agent,
-        thread_id: str,
-        executor_key: Optional[str] = None
-    ) -> Any:
+    def create_for_hitl(agent: Agent, thread_id: str,
+        executor_key: Optional[str] = None) -> Any:
         """
         Create executor for HITL scenarios.
         

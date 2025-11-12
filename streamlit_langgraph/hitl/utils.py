@@ -7,9 +7,6 @@ from ..state import WorkflowStateManager
 
 
 class HITLUtils:
-    """
-    Static utility operations for Human-in-the-Loop (HITL) functionality.
-    """
     
     @staticmethod
     def extract_action_requests_from_interrupt(interrupt_raw: Any) -> List[Dict[str, Any]]:

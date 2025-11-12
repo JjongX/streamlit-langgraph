@@ -6,20 +6,15 @@ import streamlit as st
 
 from ..agent import Agent, AgentManager
 from ..core.executor import ResponseAPIExecutor, CreateAgentExecutor, WorkflowExecutor
-from ..core.executor_registry import ExecutorRegistry
 from ..state import WorkflowState
 
 
 class ExecutionCoordinator:
-    """Coordinates workflow and single-agent execution."""
     
-    def __init__(
-        self,
-        workflow_executor: Optional[WorkflowExecutor] = None,
-        agent_manager: Optional[AgentManager] = None,
-        llm_client: Optional[Any] = None,
-        config: Optional[Any] = None,
-    ):
+    def __init__(self, workflow_executor: Optional[WorkflowExecutor] = None,
+                 agent_manager: Optional[AgentManager] = None,
+                 llm_client: Optional[Any] = None,
+                 config: Optional[Any] = None):
         """
         Initialize ExecutionCoordinator.
         
@@ -34,13 +29,9 @@ class ExecutionCoordinator:
         self.llm_client = llm_client
         self.config = config
     
-    def execute_workflow(
-        self,
-        workflow: Any,
-        prompt: str,
+    def execute_workflow(self, workflow: Any, prompt: str,
         display_callback: Optional[Callable] = None,
-        initial_state: Optional[WorkflowState] = None
-    ) -> WorkflowState:
+        initial_state: Optional[WorkflowState] = None) -> WorkflowState:
         """
         Execute a multiagent workflow.
         
@@ -113,57 +104,24 @@ class ExecutionCoordinator:
         
         return result_state
     
-    def execute_single_agent(
-        self,
-        agent: Agent,
-        prompt: str,
-        file_messages: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+    def execute_single_agent(self, agent: Agent, prompt: str,
+        file_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Execute a single agent (non-workflow mode).
         
-        Args:
-            agent: Agent to execute
-            prompt: User input/prompt
-            file_messages: Optional file messages for OpenAI Responses API
-            
-        Returns:
-            Execution result dictionary
+        Note: HITL is not supported for single agents.
         """
         if agent.type == "response":
-            # For HITL, persist executor in session_state
-            if agent.human_in_loop and agent.interrupt_on:
-                executor = ExecutorRegistry.get_or_create(agent, executor_type="single_agent")
-                thread_id = executor.thread_id
-                config = {"configurable": {"thread_id": thread_id}}
-                conversation_messages = st.session_state.workflow_state.get("messages", [])
-                response = executor.execute(
-                    self.llm_client, prompt, stream=False, 
-                    file_messages=file_messages, config=config, messages=conversation_messages
-                )
-            else:
-                executor = ResponseAPIExecutor(agent)
-                conversation_messages = st.session_state.workflow_state.get("messages", [])
-                response = executor.execute(
-                    self.llm_client, prompt, stream=self.config.stream if self.config else True,
-                    file_messages=file_messages, messages=conversation_messages
-                )
-            
-            # Handle interrupts from ResponseAPIExecutor
-            if response.get("__interrupt__"):
-                ExecutorRegistry._ensure_executors_dict()
-                st.session_state.agent_executors["single_agent_executor"] = executor
-                return response
-            
+            executor = ResponseAPIExecutor(agent)
+            conversation_messages = st.session_state.workflow_state.get("messages", [])
+            response = executor.execute(
+                self.llm_client, prompt, stream=self.config.stream if self.config else True,
+                file_messages=file_messages, messages=conversation_messages
+            )
             return response
         else:
             # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
             executor = CreateAgentExecutor(agent)
             response = executor.execute(self.llm_client, prompt, stream=False)
-            
-            if response.get("__interrupt__"):
-                ExecutorRegistry._ensure_executors_dict()
-                st.session_state.agent_executors["single_agent_executor"] = executor
-            
             return response
 

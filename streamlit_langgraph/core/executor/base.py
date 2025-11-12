@@ -21,22 +21,14 @@ class BaseExecutor:
         
         Args:
             agent: The agent configuration to execute
-            thread_id: Optional thread ID for conversation tracking (generated if not provided)
+            thread_id: Optional thread ID for conversation tracking
         """
         self.agent = agent
         self.thread_id = thread_id or str(uuid.uuid4())
         self.pending_tool_calls: List[Dict[str, Any]] = []
     
     def _prepare_config(self, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Prepare execution configuration with defaults.
-        
-        Args:
-            config: Optional configuration dict
-            
-        Returns:
-            Configuration dict with thread_id
-        """
+        """Prepare execution configuration with defaults."""
         if config is None:
             return {"configurable": {"thread_id": self.thread_id}}
         
@@ -49,27 +41,15 @@ class BaseExecutor:
         return config
     
     def get_thread_id(self, config: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Extract thread ID from config or return default.
-        
-        Args:
-            config: Optional execution config
-            
-        Returns:
-            Thread ID string
-        """
+        """Extract thread ID from config or return default."""
         if config and "configurable" in config:
             return config["configurable"].get("thread_id", self.thread_id)
         return self.thread_id
     
-    # ========== Common HITL Methods ==========
-    
     def _create_interrupt_response(self, interrupt_data: Any, thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create response dictionary for interrupt.
-        
-        Common method used by all executor types to format interrupt responses consistently.
-        
+                
         Args:
             interrupt_data: The interrupt data (format varies by executor type)
             thread_id: Thread ID for the conversation
