@@ -13,6 +13,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 - [Main Goal](#main-goal)
 - [Status](#status)
 - [Installation](#installation)
+- [API Key Configuration](#api-key-configuration)
 - [Quick Start](#quick-start)
 - [Examples](#examples)
   - [Simple Single Agent](#simple-single-agent)
@@ -74,6 +75,23 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 
 ```bash
 pip install streamlit-langgraph
+```
+
+## API Key Configuration
+
+Before running your application, you need to configure your API keys. Create a `.streamlit/config.toml` file in your project root directory:
+
+```toml
+OPENAI_API_KEY = "your-openai-api-key-here"
+```
+
+**File structure:**
+```
+your-project/
+├── .streamlit/
+│   └── config.toml
+├── your_app.py
+└── ...
 ```
 
 ## Quick Start
