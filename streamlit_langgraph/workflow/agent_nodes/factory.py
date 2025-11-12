@@ -11,7 +11,6 @@ from ..prompts import SupervisorPromptBuilder
 
 
 class AgentNodeFactory:
-    """Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes."""
 
     @staticmethod
     def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent], 

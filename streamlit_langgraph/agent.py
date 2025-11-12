@@ -77,6 +77,7 @@ class Agent:
         """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
 
+
 class AgentManager:
     """
     Manager class for handling multiple agents and their interactions.
@@ -145,15 +146,3 @@ class AgentManager:
             chat_model = init_chat_model(model=agent.model)
             setattr(chat_model, "_provider", agent.provider.lower())
             return chat_model
-
-class ExecutorFactory:
-    """Factory for creating appropriate executor based on agent configuration."""
-    
-    @staticmethod
-    def create(agent: "Agent", thread_id: Optional[str] = None, tools: Optional[list] = None):
-        """Create appropriate executor for the agent."""
-        from .core.executor import ResponseAPIExecutor, CreateAgentExecutor
-        
-        if agent.provider.lower() == "openai" and agent.type == "response":
-            return ResponseAPIExecutor(agent, thread_id=thread_id)
-        return CreateAgentExecutor(agent, tools=tools, thread_id=thread_id)

@@ -120,4 +120,3 @@ class ToolCallingPromptBuilder:
             instructions=instructions,
             task=task
         )
-

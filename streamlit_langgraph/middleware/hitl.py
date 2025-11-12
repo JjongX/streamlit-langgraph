@@ -294,11 +294,12 @@ class HITLHandler:
         Returns:
             CreateAgentExecutor or ResponseAPIExecutor instance or None
         """
-        executor = ExecutorRegistry.get(agent_name, executor_type="workflow")
+        registry = ExecutorRegistry()
+        executor = registry.get(agent_name, executor_type="workflow")
         if executor is None:
             agent = self.agent_manager.agents.get(agent_name)
             if agent and thread_id:
-                executor = ExecutorRegistry.create_for_hitl(agent, thread_id, executor_key)
+                executor = registry.create_for_hitl(agent, thread_id, executor_key)
         
         if executor is None:
             # Clear invalid interrupt

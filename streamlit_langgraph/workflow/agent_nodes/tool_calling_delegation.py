@@ -38,7 +38,10 @@ class ToolCallingDelegation:
                                   tool_agents_map: Dict[str, Agent]) -> str:
         """Execute an agent with access to tools (other agents wrapped as tools)."""
         if agent.provider.lower() != "openai":
-            return AgentNodeBase.execute_agent(agent, state, input_message, [], 0)
+            raise ValueError(
+                f"Tool calling delegation requires OpenAI provider. "
+                f"Agent '{agent.name}' uses provider '{agent.provider}'."
+            )
 
         client = AgentManager.get_llm_client(agent)
         enhanced_instructions = ToolCallingPromptBuilder.get_orchestrator_tool_instructions(
@@ -87,7 +90,7 @@ class ToolCallingDelegation:
                 instructions=tool_agent.instructions,
                 task=args.get("task", "")
             )
-            return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions, [], 0)
+            return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)
         except Exception as e:
             return f"Error executing {tool_name}: {str(e)}"
 

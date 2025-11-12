@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.types import Command
 
 from ...agent import Agent
@@ -31,12 +31,7 @@ class CreateAgentExecutor(BaseExecutor):
             thread_id: Optional thread ID for conversation tracking
         """
         super().__init__(agent, thread_id)
-        self.checkpointer = None
         self.agent_obj = None
-        
-        # Initialize checkpointer if human-in-the-loop is enabled
-        if self.agent.human_in_loop:
-            self.checkpointer = MemorySaver()
         
         # Build tools configuration from CustomTool registry if not explicitly provided
         if tools is not None:
@@ -49,8 +44,6 @@ class CreateAgentExecutor(BaseExecutor):
         self,
         llm_client: Any,
         prompt: str,
-        stream: bool = False,
-        file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None,
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -59,29 +52,30 @@ class CreateAgentExecutor(BaseExecutor):
         Args:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
-            stream: Streaming support (not currently implemented)
-            file_messages: Not used for LangChain agents
             config: Execution config with thread_id and interrupt handling
-            messages: Not used for LangChain agents (history managed by checkpointer)
+            messages: Conversation history from workflow_state (unified message-based approach)
 
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if HITL is active
         """
         try:
-            if self.agent_obj is None or (self.agent.human_in_loop and self.checkpointer is None):
+            if self.agent_obj is None:
                 self._build_agent(llm_client)
             
             config = self._prepare_config(config)
             thread_id = self.get_thread_id(config)
             
+            # Convert workflow_state messages to LangChain message format
+            langchain_messages = self._convert_to_langchain_messages(messages, prompt)
+            
             # Stream events to detect interrupts
-            interrupt_data = self._detect_interrupt_in_stream(config, prompt)
+            interrupt_data = self._detect_interrupt_in_stream(config, langchain_messages)
             if interrupt_data:
                 return self._create_interrupt_response(interrupt_data, thread_id, config)
             
             # Execute normally if no interrupt detected
             out = self.agent_obj.invoke(
-                {"messages": [{"role": "user", "content": prompt}]},
+                {"messages": langchain_messages},
                 config=config
             )
             
@@ -105,7 +99,7 @@ class CreateAgentExecutor(BaseExecutor):
         Args:
             decisions: List of decision dicts with 'type' ('approve', 'reject', 'edit') and optional 'edit' content
             config: Execution config with thread_id
-            messages: Not used for LangChain agents (history managed by checkpointer)
+            messages: Conversation history from workflow_state (unified message-based approach)
             
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if more approvals needed
@@ -116,6 +110,7 @@ class CreateAgentExecutor(BaseExecutor):
         config = self._prepare_config(config)
         thread_id = self.get_thread_id(config)
         
+        # The checkpointer should have the history, but we ensure consistency
         resume_command = Command(resume={"decisions": decisions})
         out = self.agent_obj.invoke(resume_command, config=config)
         
@@ -146,16 +141,16 @@ class CreateAgentExecutor(BaseExecutor):
         if middleware:
             agent_kwargs["middleware"] = middleware
         
-        if self.checkpointer:
-            agent_kwargs["checkpointer"] = self.checkpointer
+        # Note: Checkpointer is now handled at workflow level, not executor level
+        # The workflow checkpointer persists the entire workflow_state automatically
         
         self.agent_obj = create_agent(**agent_kwargs)
         return self.agent_obj
         
-    def _detect_interrupt_in_stream(self, execution_config: Dict[str, Any], prompt: str) -> Optional[Any]:
+    def _detect_interrupt_in_stream(self, execution_config: Dict[str, Any], messages: List[BaseMessage]) -> Optional[Any]:
         """Detect interrupt from agent stream events."""
         for event in self.agent_obj.stream(
-            {"messages": [{"role": "user", "content": prompt}]},
+            {"messages": messages},
             config=execution_config
         ):
             # Check for direct interrupt key
@@ -172,6 +167,49 @@ class CreateAgentExecutor(BaseExecutor):
         
         return None
     
+    
+    def _convert_to_langchain_messages(
+        self, 
+        messages: Optional[List[Dict[str, Any]]], 
+        current_prompt: str
+    ) -> List[BaseMessage]:
+        """
+        Convert workflow_state messages to LangChain message format.
+        
+        Args:
+            messages: List of message dicts from workflow_state
+            current_prompt: Current user prompt (will be added if not already in messages)
+            
+        Returns:
+            List of LangChain BaseMessage objects
+        """
+        langchain_messages: List[BaseMessage] = []
+        
+        # Convert existing messages from workflow_state
+        if messages:
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                
+                # Skip empty messages
+                if not content and role != "system":
+                    continue
+                
+                if role == "user":
+                    langchain_messages.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    langchain_messages.append(AIMessage(content=content))
+                elif role == "system":
+                    langchain_messages.append(SystemMessage(content=content))
+                # Note: tool messages are handled differently in LangChain
+                # They're typically added during tool execution
+        
+        # Add current prompt if it's not already the last message
+        # (This handles the case where prompt is new and not yet in workflow_state)
+        if not langchain_messages or not isinstance(langchain_messages[-1], HumanMessage) or langchain_messages[-1].content != current_prompt:
+            langchain_messages.append(HumanMessage(content=current_prompt))
+        
+        return langchain_messages
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""

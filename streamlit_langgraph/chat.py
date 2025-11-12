@@ -77,23 +77,18 @@ class LangGraphChat:
         self.llm = AgentManager.get_llm_client(first_agent)
         openai_client = self.llm if hasattr(self.llm, 'files') else None
         self.file_handler = FileHandler(openai_client=openai_client)
-        
+
         # Initialize Streamlit session state
         self._init_session_state()
         # Initialize state manager
         self.state_manager = StateSynchronizer()
-        
         # Initialize display manager
         self.display_manager = DisplayManager(self.config)
-        
         # Initialize workflow orchestrator
         self.workflow_orchestrator = WorkflowOrchestrator(
-            workflow_executor=self.workflow_executor,
-            agent_manager=self.agent_manager,
-            llm_client=self.llm,
-            config=self.config
+            workflow_executor=self.workflow_executor, agent_manager=self.agent_manager,
+            llm_client=self.llm, config=self.config
         )
-        
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager)
     
     def create_block(self, category, content=None, filename=None, file_id=None):
@@ -331,7 +326,7 @@ class LangGraphChat:
         
         # Use workflow orchestrator for workflow execution
         result_state = self.workflow_orchestrator.execute_workflow(
-            self.workflow, prompt, display_callback=display_callback
+            self.workflow, display_callback=display_callback
         )
 
         if HITLUtils.has_pending_interrupts(result_state):

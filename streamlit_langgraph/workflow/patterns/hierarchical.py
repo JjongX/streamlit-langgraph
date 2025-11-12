@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, Any
 
 from langgraph.graph import StateGraph, START, END
 
@@ -35,7 +35,8 @@ class HierarchicalPattern:
     def create_hierarchical_workflow(
         top_supervisor: Agent,
         supervisor_teams: List[SupervisorTeam],
-        execution_mode: str = "sequential"
+        execution_mode: str = "sequential",
+        checkpointer: Optional[Any] = None
     ) -> StateGraph:
         """
         Create a hierarchical workflow with a top supervisor coordinating multiple
@@ -45,6 +46,7 @@ class HierarchicalPattern:
             top_supervisor: The top-level supervisor that coordinates sub-supervisors
             supervisor_teams: List of SupervisorTeam objects, each with a supervisor and workers
             execution_mode: "sequential" execution (parallel not yet supported for hierarchical)
+            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel)
             
         Returns:
             StateGraph: Compiled hierarchical workflow graph
@@ -87,7 +89,7 @@ class HierarchicalPattern:
             graph, top_supervisor, supervisor_teams
         )
         
-        return graph.compile()
+        return graph.compile(checkpointer=checkpointer)
     
     @staticmethod
     def _add_hierarchical_routing(graph: StateGraph, top_supervisor: Agent, 

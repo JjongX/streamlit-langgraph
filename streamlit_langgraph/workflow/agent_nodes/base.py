@@ -1,7 +1,7 @@
 # Base classes and common utilities for agent node creation.
 
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
@@ -31,20 +31,17 @@ class AgentNodeBase:
         return ""
     
     @staticmethod
-    def execute_agent(agent: Agent, state: WorkflowState, input_message: str, 
-                     context_messages: List[str], agent_responses_count: int) -> str:
+    def execute_agent(agent: Agent, state: WorkflowState, input_message: str) -> str:
         """
         Execute an agent and return the response.
         
-        This method orchestrates agent execution using the ExecutorFactory and InterruptManager.
+        This method orchestrates agent execution using the ExecutorRegistry and InterruptManager.
         Broken down into smaller, testable methods for better maintainability.
         
         Args:
             agent: Agent to execute
             state: Current workflow state
             input_message: Input message/prompt for the agent
-            context_messages: Context messages (unused for now)
-            agent_responses_count: Number of agent responses (unused for now)
             
         Returns:
             Agent response content as string (empty string if interrupted)
@@ -76,7 +73,7 @@ class AgentNodeBase:
         from ...utils import CustomTool  # lazy import to avoid circular import
         
         # Get or create executor using registry
-        executor = ExecutorRegistry.get_or_create(agent, executor_type="workflow")
+        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
         # Update tools for CreateAgentExecutor if needed
         if hasattr(executor, 'tools') and agent.tools:
@@ -128,8 +125,8 @@ class AgentNodeBase:
         llm_client = AgentManager.get_llm_client(agent)
         conversation_messages = state.get("messages", [])
         
-        # For ResponseAPIExecutor, enhance instructions
-        if hasattr(executor, '_execute_with_hitl'):  # ResponseAPIExecutor
+        # For ResponseAPIExecutor
+        if hasattr(executor, '_execute_with_hitl'):
             enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
             return executor.execute(
                 llm_client=llm_client,
@@ -142,7 +139,6 @@ class AgentNodeBase:
             return executor.execute(
                 llm_client=llm_client,
                 prompt=input_message,
-                stream=False,
                 config=config,
                 messages=conversation_messages
             )
@@ -164,8 +160,7 @@ class AgentNodeBase:
         """
         # Check for interrupt
         if InterruptManager.should_interrupt(result):
-            from ...core.executor.registry import ExecutorRegistry
-            executor_key = ExecutorRegistry._get_executor_key(agent.name, "workflow")
+            executor_key = ExecutorRegistry()._get_executor_key(agent.name, "workflow")
             interrupt_data = InterruptManager.extract_interrupt_data(result)
             
             # If assistant_message is present (from ResponseAPIExecutor), add it to workflow_state

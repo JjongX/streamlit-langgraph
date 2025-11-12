@@ -29,7 +29,7 @@ class HandoffDelegation:
                 role=worker.role, instructions=worker.instructions, user_query=user_query,
                 supervisor_output=context_data, previous_worker_outputs=previous_worker_outputs
             )
-            response = AgentNodeBase.execute_agent(worker, state, worker_instructions, [], 0)
+            response = AgentNodeBase.execute_agent(worker, state, worker_instructions)
             
             executor_key = f"workflow_executor_{worker.name}"
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
@@ -173,13 +173,13 @@ class HandoffDelegation:
         """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
         # Check if we have workers to delegate to
         if not workers:
-            content = AgentNodeBase.execute_agent(agent, state, input_message, [], 0)
+            content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
         # Build delegation tool as LangChain StructuredTool
         delegation_tool = HandoffDelegation._build_langchain_delegation_tool(workers, allow_parallel)
         if not delegation_tool:
-            content = AgentNodeBase.execute_agent(agent, state, input_message, [], 0)
+            content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
         llm_client = AgentManager.get_llm_client(agent)
@@ -187,7 +187,7 @@ class HandoffDelegation:
         
         # Get or create executor with delegation tool temporarily added
         existing_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
-        executor = ExecutorRegistry.get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])
+        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])
         
         # Reuse existing executor but temporarily add delegation tool if needed
         if executor.tools and "delegate_task" not in [tool.name for tool in executor.tools]:
@@ -198,7 +198,7 @@ class HandoffDelegation:
         
         if "executors" not in state.get("metadata", {}):
             state["metadata"]["executors"] = {}
-        executor_key = ExecutorRegistry._get_executor_key(agent.name, "workflow")
+            executor_key = ExecutorRegistry()._get_executor_key(agent.name, "workflow")
         state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
         
         # Execute with enhanced instructions

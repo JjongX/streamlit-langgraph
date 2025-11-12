@@ -29,7 +29,7 @@ class WorkflowOrchestrator:
         self.llm_client = llm_client
         self.config = config
     
-    def execute_workflow(self, workflow: Any, prompt: str,
+    def execute_workflow(self, workflow: Any,
         display_callback: Optional[Callable] = None,
         initial_state: Optional[WorkflowState] = None) -> WorkflowState:
         """
@@ -37,7 +37,6 @@ class WorkflowOrchestrator:
         
         Args:
             workflow: Compiled LangGraph workflow
-            prompt: User input/prompt
             display_callback: Optional callback for displaying agent responses
             initial_state: Optional existing workflow state to use
             
@@ -98,7 +97,7 @@ class WorkflowOrchestrator:
         # Use existing workflow_state as initial state (user message already added)
         # This prevents duplicate user messages
         result_state = self.workflow_executor.execute_workflow(
-            workflow, prompt, display_callback=display_agent_response,
+            workflow, display_callback=display_agent_response,
             initial_state=workflow_state
         )
         
@@ -122,6 +121,7 @@ class WorkflowOrchestrator:
         else:
             # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
             executor = CreateAgentExecutor(agent)
-            response = executor.execute(self.llm_client, prompt, stream=False)
+            conversation_messages = st.session_state.workflow_state.get("messages", [])
+            response = executor.execute(self.llm_client, prompt, messages=conversation_messages)
             return response
 

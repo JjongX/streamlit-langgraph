@@ -11,39 +11,32 @@ from ...state import WorkflowState, WorkflowStateManager
 
 class WorkflowExecutor:
     
-    def execute_workflow(self, workflow: StateGraph, user_input: str, 
+    def execute_workflow(self, workflow: StateGraph, 
                         display_callback: Optional[Callable] = None,
                         config: Optional[Dict[str, Any]] = None,
                         initial_state: Optional[WorkflowState] = None) -> WorkflowState:
         """
-        Execute a compiled workflow with the given user input.
+        Execute a compiled workflow with the given initial state.
         
         Args:
             workflow: Compiled workflow graph
-            user_input: User's input/request (used only if initial_state is not provided)
             display_callback: Optional callback for displaying messages
             config: Optional configuration for workflow execution (may include thread_id for HITL)
-            initial_state: Optional existing workflow state to use (prevents duplicate user messages)
+            initial_state: Required existing workflow state to use (user message should already be added)
             
         Returns:
             Final state after workflow execution (may contain pending_interrupts in metadata)
         """
-        # Use provided initial_state if available (user message already added)
-        # Otherwise create new state (for backward compatibility)
-        if initial_state is not None:
-            # Deep copy to avoid modifying the original workflow_state
-            initial_state = copy.deepcopy(initial_state)
-            if config:
-                if "metadata" not in initial_state:
-                    initial_state["metadata"] = {}
-                initial_state["metadata"].update(config)
-        else:
-            # Create and initialize workflow state with message ID
-            initial_state = WorkflowStateManager.create_initial_state(
-                messages=[{"id": str(uuid.uuid4()), "role": "user", "content": user_input}]
-            )
-            if config:
-                initial_state["metadata"].update(config)
+        # Require initial_state to be provided (user message already added)
+        if initial_state is None:
+            raise ValueError("initial_state is required. User message should already be added to workflow_state.")
+        
+        # Deep copy to avoid modifying the original workflow_state
+        initial_state = copy.deepcopy(initial_state)
+        if config:
+            if "metadata" not in initial_state:
+                initial_state["metadata"] = {}
+            initial_state["metadata"].update(config)
 
         # Build workflow configuration with thread_id for checkpointing
         configurable = {}

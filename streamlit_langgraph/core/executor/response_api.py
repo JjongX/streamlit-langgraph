@@ -27,10 +27,29 @@ class ResponseAPIExecutor(BaseExecutor):
             return self._execute_with_hitl(llm_client, prompt, stream, file_messages, thread_id, config, messages)
         
         # Normal execution using Responses API
+        # Build input messages from conversation history
         input_messages = []
+        
+        # Add conversation history from workflow_state
+        if messages:
+            # Convert workflow_state messages to Responses API format
+            # Responses API expects: [{"role": "user", "content": "..."}, ...]
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                # Skip empty messages and system messages
+                if content and role in ("user", "assistant"):
+                    input_messages.append({
+                        "role": role,
+                        "content": content
+                    })
+        
         if file_messages:
             input_messages.extend(file_messages)
-        input_messages.append({"role": "user", "content": prompt})
+        
+        # Add current user prompt
+        if not input_messages or input_messages[-1].get("content") != prompt:
+            input_messages.append({"role": "user", "content": prompt})
 
         tools = self._build_tools_config(llm_client)
         api_params = {
@@ -143,13 +162,15 @@ class ResponseAPIExecutor(BaseExecutor):
         
         last_message = messages_with_tools[-1]
         if last_message.get("role") != "assistant" or "tool_calls" not in last_message:
-            # Fallback: reconstruct assistant message from pending_tool_calls
-            assistant_message = {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": self.pending_tool_calls
-            }
-            messages_with_tools.append(assistant_message)
+            # Fallback: reconstruct assistant message from pending_tool_calls if missing
+            # This can happen if the assistant_message wasn't properly persisted to workflow_state
+            if self.pending_tool_calls:
+                assistant_message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": self.pending_tool_calls
+                }
+                messages_with_tools.append(assistant_message)
         
         # Add tool results (must come after assistant message with tool_calls)
         messages_with_tools.extend(tool_results)
@@ -180,18 +201,11 @@ class ResponseAPIExecutor(BaseExecutor):
         content = message.content or ""
         return {"role": "assistant", "content": content, "agent": self.agent.name}
     
-    # ========== HITL Helper Methods ==========
     
-    def _execute_with_hitl(
-        self,
-        llm_client,
-        prompt: str,
-        stream: bool,
-        file_messages: Optional[List],
-        thread_id: str,
-        config: Dict[str, Any],
-        conversation_messages: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+    def _execute_with_hitl(self, llm_client,
+        prompt: str, stream: bool, file_messages: Optional[List],
+        thread_id: str, config: Dict[str, Any],
+        conversation_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Execute with human-in-the-loop support using Chat Completions API.
         
