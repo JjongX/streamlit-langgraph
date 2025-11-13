@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Optional
 
 from langgraph.graph import StateGraph
 
-from ...state import WorkflowState, WorkflowStateManager
+from ..state import WorkflowState, WorkflowStateManager
 
 
 class WorkflowExecutor:

@@ -5,8 +5,6 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from ...agent import Agent
-from .create_agent import CreateAgentExecutor
-from .response_api import ResponseAPIExecutor
 
 class BaseExecutor:
     """
@@ -122,6 +120,9 @@ class ExecutorRegistry:
         Returns:
             Executor instance (ResponseAPIExecutor or CreateAgentExecutor)
         """
+        # Lazy imports to avoid circular import
+        from .create_agent import CreateAgentExecutor
+        from .response_api import ResponseAPIExecutor
 
         if agent.provider.lower() == "openai" and agent.type == "response":
             return ResponseAPIExecutor(agent)

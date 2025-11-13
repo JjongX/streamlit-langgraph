@@ -9,11 +9,6 @@ from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 
 
 class WorkflowBuilder:
-    """
-    Workflow builder that delegates to specialized pattern classes.
-    
-    Provides a clean interface for creating handoff, hierarchical, and tool calling workflows.
-    """
     
     # Make SupervisorTeam accessible for Public API exposure 
     SupervisorTeam = SupervisorTeam

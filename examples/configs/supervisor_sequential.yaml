@@ -1,6 +1,6 @@
 - name: Research_Supervisor
   role: Research Project Supervisor
-  type: response
+  type: agent
   instructions: |
     You are a research project supervisor who manages a team of specialists to create comprehensive research proposals.
     
@@ -33,7 +33,7 @@
 
 - name: Information_Gatherer
   role: Information Research Specialist
-  type: response
+  type: agent
   instructions: |
     You are a specialized information researcher working under the Research Supervisor.
     
@@ -61,7 +61,7 @@
 
 - name: Proposal_Writer
   role: Academic Research & Proposal Writing Specialist
-  type: response
+  type: agent
   instructions: |
     You are a professional research proposal writer working under the Research Supervisor.
     
@@ -92,7 +92,7 @@
 
 - name: General_Assistant
   role: General Purpose AI Assistant
-  type: response
+  type: agent
   instructions: |
     You are a helpful general-purpose AI assistant working under the Research Supervisor.
     

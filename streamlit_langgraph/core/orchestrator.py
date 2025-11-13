@@ -4,15 +4,14 @@ from typing import Any, Callable, Dict, List, Optional
 
 import streamlit as st
 
-from ..agent import Agent, AgentManager
-from ..core.executor import ResponseAPIExecutor, CreateAgentExecutor, WorkflowExecutor
-from ..state import WorkflowState
+from ..agent import Agent
+from .executor import ResponseAPIExecutor, CreateAgentExecutor, WorkflowExecutor
+from .state import WorkflowState
 
 
 class WorkflowOrchestrator:
     
     def __init__(self, workflow_executor: Optional[WorkflowExecutor] = None,
-                 agent_manager: Optional[AgentManager] = None,
                  llm_client: Optional[Any] = None,
                  config: Optional[Any] = None):
         """
@@ -20,25 +19,21 @@ class WorkflowOrchestrator:
         
         Args:
             workflow_executor: Optional WorkflowExecutor for multiagent workflows
-            agent_manager: Optional AgentManager for agent access
             llm_client: Optional LLM client for single-agent execution
             config: Optional UI configuration
         """
         self.workflow_executor = workflow_executor
-        self.agent_manager = agent_manager
         self.llm_client = llm_client
         self.config = config
     
     def execute_workflow(self, workflow: Any,
-        display_callback: Optional[Callable] = None,
-        initial_state: Optional[WorkflowState] = None) -> WorkflowState:
+        display_callback: Optional[Callable] = None) -> WorkflowState:
         """
         Execute a multiagent workflow.
         
         Args:
             workflow: Compiled LangGraph workflow
             display_callback: Optional callback for displaying agent responses
-            initial_state: Optional existing workflow state to use
             
         Returns:
             Final workflow state after execution
@@ -122,7 +117,6 @@ class WorkflowOrchestrator:
             )
             return response
         else:
-            # Tools are loaded automatically by CreateAgentExecutor from CustomTool registry
             executor = CreateAgentExecutor(agent)
             response = executor.execute_single_agent(
                 self.llm_client, prompt, 

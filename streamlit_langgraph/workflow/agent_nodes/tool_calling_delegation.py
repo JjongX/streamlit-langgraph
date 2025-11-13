@@ -7,7 +7,7 @@ import streamlit as st
 
 from ...agent import Agent, AgentManager
 from .base import AgentNodeBase
-from ...state.state_schema import WorkflowState
+from ...core.state.state_schema import WorkflowState
 from ..prompts import ToolCallingPromptBuilder
 
 

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
-from ...state import WorkflowState, WorkflowStateManager
+from ...core.state import WorkflowState, WorkflowStateManager
 from .base import AgentNodeBase, create_message_with_id
 from ..prompts import SupervisorPromptBuilder
 
@@ -197,7 +197,9 @@ class HandoffDelegation:
         
         if "executors" not in state.get("metadata", {}):
             state["metadata"]["executors"] = {}
-            executor_key = ExecutorRegistry()._get_executor_key(agent.name, "workflow")
+        
+        # Get or create executor_key (must be defined before use)
+        executor_key = ExecutorRegistry()._get_executor_key(agent.name, "workflow")
         
         # Use workflow's thread_id (from state metadata) to match checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
@@ -216,8 +218,14 @@ class HandoffDelegation:
             if executor.agent_obj is None:
                 executor._build_agent(llm_client)
             
-            # Check for interrupts first via streaming
-            interrupt_data = executor._detect_interrupt_in_stream(config, enhanced_instructions)
+            # Check for interrupts first via streaming (only if HITL is enabled)
+            interrupt_data = None
+            if executor.agent.human_in_loop and executor.agent.interrupt_on:
+                # Convert enhanced_instructions to LangChain message format
+                from langchain_core.messages import HumanMessage
+                langchain_messages = [HumanMessage(content=enhanced_instructions)]
+                interrupt_data = executor._detect_interrupt_in_stream(config, langchain_messages)
+            
             if interrupt_data:
                 result = executor._create_interrupt_response(interrupt_data, workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
@@ -360,7 +368,7 @@ class HandoffDelegation:
     @staticmethod
     def _build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
         """Build context data for worker based on context mode."""
-        context_mode = getattr(worker, 'context', 'least') or 'least'
+        context_mode = worker.context
         supervisor_output = state["agent_outputs"].get(supervisor.name, "")
         
         if context_mode == "full":

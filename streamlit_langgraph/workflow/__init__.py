@@ -1,5 +1,5 @@
 from .builder import WorkflowBuilder  
-from ..state import WorkflowState, WorkflowStateManager
+from ..core.state import WorkflowState, WorkflowStateManager
 from .agent_nodes import AgentNodeFactory
 from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
 

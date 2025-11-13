@@ -9,9 +9,10 @@ import streamlit as st
 from .agent import Agent, AgentManager
 from .core.orchestrator import WorkflowOrchestrator
 from .core.executor import WorkflowExecutor
-from .state import StateSynchronizer, WorkflowStateManager
+from .core.state import StateSynchronizer, WorkflowStateManager
+from .core.middleware import HITLHandler, HITLUtils
 from .ui import DisplayManager
-from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils
+from .utils import FileHandler, CustomTool
 
 
 @dataclass
@@ -86,7 +87,7 @@ class LangGraphChat:
         self.display_manager = DisplayManager(self.config)
         # Initialize workflow orchestrator
         self.workflow_orchestrator = WorkflowOrchestrator(
-            workflow_executor=self.workflow_executor, agent_manager=self.agent_manager,
+            workflow_executor=self.workflow_executor,
             llm_client=self.llm, config=self.config
         )
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager)
@@ -308,7 +309,6 @@ class LangGraphChat:
                 agent = list(self.agent_manager.agents.values())[0]
                 return self._run_agent(prompt, agent)
         except Exception as e:
-            # Show error to user 
             st.error(f"**Error**: {str(e)}")
             # Return empty response to prevent further processing
             return {"role": "assistant", "content": "", "agent": "system"}
@@ -347,7 +347,7 @@ class LangGraphChat:
     
     def _run_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
         """
-        Run a single agent (non-workflow mode) and orchestrate UI updates.
+        Run a single agent and orchestrate UI updates.
         
         Note: HITL is not supported for single agents. Use workflows for HITL functionality.
         """

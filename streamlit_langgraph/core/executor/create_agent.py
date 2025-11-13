@@ -18,7 +18,8 @@ class CreateAgentExecutor(BaseExecutor):
     Uses LangChain's standard `create_agent` function which supports multiple providers
     (OpenAI, Anthropic, Google, etc.) through LangChain's chat model interface.
     
-    Supports human-in-the-loop approval when enabled via agent configuration.
+    HITL Handling: Uses LangChain's built-in `HumanInTheLoopMiddleware` which is automatically
+    integrated into the agent during construction (in `_build_agent`)
     """
 
     def __init__(self, agent: Agent, tools: Optional[List] = None):
@@ -109,13 +110,18 @@ class CreateAgentExecutor(BaseExecutor):
         try:
             config, thread_id = self._prepare_workflow_config(config)
             
+            # Build agent if not already built (needed for interrupt detection)
+            if self.agent_obj is None:
+                self._build_agent(llm_client)
+            
             # Convert workflow_state messages to LangChain message format for interrupt detection
             langchain_messages = self._convert_to_langchain_messages(messages, prompt)
             
-            # Stream events to detect interrupts
-            interrupt_data = self._detect_interrupt_in_stream(config, langchain_messages)
-            if interrupt_data:
-                return self._create_interrupt_response(interrupt_data, thread_id, config)
+            # Stream events to detect interrupts (only if HITL is enabled)
+            if self.agent.human_in_loop and self.agent.interrupt_on:
+                interrupt_data = self._detect_interrupt_in_stream(config, langchain_messages)
+                if interrupt_data:
+                    return self._create_interrupt_response(interrupt_data, thread_id, config)
             
             # Execute normally if no interrupt detected
             out = self._invoke_agent(llm_client, prompt, messages, config=config)

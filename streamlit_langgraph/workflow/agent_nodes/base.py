@@ -5,8 +5,8 @@ from typing import Any, Dict
 
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
-from ...middleware.interrupts import InterruptManager
-from ...state import WorkflowState
+from ...core.middleware.interrupts import InterruptManager
+from ...core.state import WorkflowState
 
 
 def create_message_with_id(role: str, content: str, agent: str) -> Dict[str, Any]:

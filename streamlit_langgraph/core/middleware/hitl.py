@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from ..agent import AgentManager
-from ..core.executor.registry import ExecutorRegistry
+from ...agent import AgentManager
+from ..executor.registry import ExecutorRegistry
 from ..state import WorkflowStateManager
 from .interrupts import InterruptManager
 

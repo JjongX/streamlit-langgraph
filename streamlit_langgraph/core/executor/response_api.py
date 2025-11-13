@@ -8,26 +8,21 @@ from .registry import BaseExecutor
 
 
 class ResponseAPIExecutor(BaseExecutor):
+    """
+    Executor for OpenAI Responses API.
+    
+    Uses OpenAI's Responses API which automatically executes tools and returns final results.
+    Supports file messages, code interpreter, web search, and image generation tools.
+    HITL Handling: Uses a custom `_execute_with_hitl` method that calls `_call_responses_api`
+    """
     
     def _build_input_messages(self, prompt: str, file_messages: Optional[List] = None,
                               messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-        """
-        Build input messages for Responses API from conversation history.
-        
-        Args:
-            prompt: Current user prompt
-            file_messages: Optional file messages
-            messages: Conversation history from workflow_state
-            
-        Returns:
-            List of input messages in Responses API format
-        """
+        """Build input messages for Responses API from conversation history."""
         input_messages = []
         
         # Add conversation history from workflow_state
         if messages:
-            # Convert workflow_state messages to Responses API format
-            # Responses API expects: [{"role": "user", "content": "..."}, ...]
             for msg in messages:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
@@ -38,6 +33,7 @@ class ResponseAPIExecutor(BaseExecutor):
                         "content": content
                     })
         
+        # Add file messages (uploaded files processed by FileHandler)
         if file_messages:
             input_messages.extend(file_messages)
         
@@ -49,17 +45,7 @@ class ResponseAPIExecutor(BaseExecutor):
     
     def _call_responses_api(self, llm_client: Any, input_messages: List[Dict[str, Any]], 
                            stream: bool = False) -> Dict[str, Any]:
-        """
-        Call OpenAI Responses API with prepared input messages.
-        
-        Args:
-            llm_client: OpenAI client
-            input_messages: Prepared input messages
-            stream: Whether to stream the response
-            
-        Returns:
-            Dict with 'role', 'content', 'agent', and optionally 'stream'
-        """
+        """Call OpenAI Responses API with prepared input messages."""
         tools = self._build_tools_config(llm_client)
         api_params = {
             "model": self.agent.model,
@@ -69,7 +55,6 @@ class ResponseAPIExecutor(BaseExecutor):
         }
         if tools:
             api_params["tools"] = tools
-
         try:
             if stream:
                 stream_iter = llm_client.responses.create(**api_params)
@@ -80,6 +65,19 @@ class ResponseAPIExecutor(BaseExecutor):
                 return {"role": "assistant", "content": response_content, "agent": self.agent.name}
         except Exception as e:
             return {"role": "assistant", "content": f"Responses API error: {str(e)}", "agent": self.agent.name}
+    
+    def _call_chat_api(self, llm_client: Any, messages: List[Dict[str, Any]]) -> Any:
+        """Call OpenAI Chat Completions API with prepared messages."""
+        from ...utils import CustomTool  # lazy import to avoid circular import
+        custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
+        
+        return llm_client.chat.completions.create(
+            model=self.agent.model,
+            messages=messages,
+            temperature=self.agent.temperature,
+            tools=custom_tools if custom_tools else None,
+            tool_choice="auto" if custom_tools else None
+        )
     
     def execute_single_agent(self, llm_client: Any, prompt: str, stream: bool = False,
         file_messages: Optional[List] = None,
@@ -108,10 +106,7 @@ class ResponseAPIExecutor(BaseExecutor):
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Execute prompt for workflow mode (requires config with thread_id).
-        
-        Supports file messages, code interpreter, web search, and image generation tools.
-        When human_in_loop is enabled, uses Chat Completions API to intercept tool calls.
-        
+                
         Args:
             llm_client: OpenAI client
             prompt: User's prompt
@@ -129,7 +124,7 @@ class ResponseAPIExecutor(BaseExecutor):
         if self.agent.human_in_loop and self.agent.interrupt_on:
             return self._execute_with_hitl(llm_client, prompt, stream, file_messages, thread_id, config, messages)
         
-        # Normal execution using Responses API (workflow mode)
+        # Normal execution using Responses API
         input_messages = self._build_input_messages(prompt, file_messages, messages)
         return self._call_responses_api(llm_client, input_messages, stream)
     
@@ -139,6 +134,9 @@ class ResponseAPIExecutor(BaseExecutor):
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Resume execution after human approval/rejection.
+        
+        Uses Chat Completions API (not Responses API) because we need to handle
+        tool results and continue the conversation with proper tool message format.
         
         Args:
             decisions: List of decision dicts with 'type' ('approve', 'reject', 'edit') and optional 'edit' content
@@ -150,11 +148,8 @@ class ResponseAPIExecutor(BaseExecutor):
         """
         if not self.agent.human_in_loop:
             raise ValueError("Cannot resume: human-in-the-loop not enabled")
+        config, thread_id = self._prepare_workflow_config(config)
         
-        config = self._prepare_config(config)
-        thread_id = self.get_thread_id(config)
-        
-        # Get LLM client
         llm_client = AgentManager.get_llm_client(self.agent)
         
         # Apply decisions to pending tool calls
@@ -164,14 +159,12 @@ class ResponseAPIExecutor(BaseExecutor):
         for i, tool_call_dict in enumerate(self.pending_tool_calls):
             tool_name = tool_call_dict["function"]["name"]
             tool_call_id = tool_call_dict["id"]
-            
             # Get decision for this tool call (default to approve if not provided)
             decision = decisions[i] if i < len(decisions) else {"type": "approve"}
             decision_type = decision.get("type", "approve") if decision else "approve"
             
             if decision_type == "reject":
                 # Still need to provide a tool response for rejected calls
-                # OpenAI requires responses for all tool_call_ids
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
@@ -195,13 +188,11 @@ class ResponseAPIExecutor(BaseExecutor):
                 "content": str(tool_result)
             })
         
-        # Get conversation history from workflow_state and clean for OpenAI API
-        # OpenAI API expects messages with only: role, content, tool_calls, tool_call_id, name
-        # Remove extra fields like "id" and "agent" that are used for workflow_state tracking
+        # Get conversation history from workflow_state and clean for Chat Completions API
         messages_with_tools = []
         if messages:
             for msg in messages:
-                # Clean message for OpenAI API format
+                # Clean message for Chat Completions API format
                 clean_msg = {
                     "role": msg.get("role"),
                     "content": msg.get("content")
@@ -224,7 +215,6 @@ class ResponseAPIExecutor(BaseExecutor):
         last_message = messages_with_tools[-1]
         if last_message.get("role") != "assistant" or "tool_calls" not in last_message:
             # Fallback: reconstruct assistant message from pending_tool_calls if missing
-            # This can happen if the assistant_message wasn't properly persisted to workflow_state
             if self.pending_tool_calls:
                 assistant_message = {
                     "role": "assistant",
@@ -236,16 +226,9 @@ class ResponseAPIExecutor(BaseExecutor):
         # Add tool results (must come after assistant message with tool_calls)
         messages_with_tools.extend(tool_results)
         
-        from ...utils import CustomTool  # lazy import to avoid circular import
-        custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
-        
-        followup_response = llm_client.chat.completions.create(
-            model=self.agent.model,
-            messages=messages_with_tools,
-            temperature=self.agent.temperature,
-            tools=custom_tools if custom_tools else None,
-            tool_choice="auto" if custom_tools else None
-        )
+        # Use Chat Completions API for resume (required for HITL with tool results)
+        # Cannot use Responses API because it doesn't support tool messages format
+        followup_response = self._call_chat_api(llm_client, messages_with_tools)
         
         message = followup_response.choices[0].message
         
@@ -254,13 +237,16 @@ class ResponseAPIExecutor(BaseExecutor):
             interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
             if interrupt_data:
                 self.pending_tool_calls = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
-                return self._create_interrupt_response(interrupt_data, thread_id, config)
+                return self._create_interrupt_response(
+                    {"action_requests": interrupt_data}, thread_id, config
+                )
         
         # Clear pending tool calls
         self.pending_tool_calls = []
         
         content = message.content or ""
         return {"role": "assistant", "content": content, "agent": self.agent.name}
+    
     
     def _execute_with_hitl(self, llm_client,
         prompt: str, stream: bool, file_messages: Optional[List],
@@ -269,7 +255,10 @@ class ResponseAPIExecutor(BaseExecutor):
         """
         Execute with human-in-the-loop support using Chat Completions API.
         
-        This allows us to intercept tool calls before execution.
+        IMPORTANT: This method uses Chat Completions API (not Responses API) because:
+        - Responses API executes tools automatically and cannot intercept them
+        - Chat Completions API allows us to intercept tool calls before execution
+        - We can check which tools need approval and pause for human decision
         """
         # Build messages from passed conversation history (from workflow_state)
         messages = conversation_messages.copy() if conversation_messages else []
@@ -282,18 +271,10 @@ class ResponseAPIExecutor(BaseExecutor):
         if not messages or messages[-1].get("content") != prompt:
             messages.append({"role": "user", "content": prompt})
         
-        from ...utils import CustomTool  # lazy import to avoid circular import
-        custom_tools = CustomTool.get_openai_tools(self.agent.tools) if self.agent.tools else []
-        
         try:
-            # Use Chat Completions API for tool interception
-            response = llm_client.chat.completions.create(
-                model=self.agent.model,
-                messages=messages,
-                temperature=self.agent.temperature,
-                tools=custom_tools if custom_tools else None,
-                tool_choice="auto" if custom_tools else None
-            )
+            # Use Chat Completions API for tool interception (required for HITL)
+            # Cannot use Responses API because it executes tools automatically
+            response = self._call_chat_api(llm_client, messages)
             
             message = response.choices[0].message
             
@@ -303,7 +284,9 @@ class ResponseAPIExecutor(BaseExecutor):
                 if interrupt_data:
                     # Store pending tool calls for resume()
                     self.pending_tool_calls = [self._tool_call_to_dict(tc) for tc in message.tool_calls]
-                    interrupt_response = self._create_interrupt_response(interrupt_data, thread_id, config)
+                    interrupt_response = self._create_interrupt_response(
+                        {"action_requests": interrupt_data}, thread_id, config
+                    )
                     # Include the assistant message with tool_calls for caller to add to workflow_state
                     interrupt_response["assistant_message"] = self._message_to_dict(message)
                     return interrupt_response
@@ -326,16 +309,10 @@ class ResponseAPIExecutor(BaseExecutor):
                         "content": str(tool_result)
                     })
                 
-                # Continue conversation with tool results
+                # Continue conversation with tool results using Chat Completions API
                 messages_with_assistant = messages + [self._message_to_dict(message)]
                 messages_with_tools = messages_with_assistant + tool_results
-                followup_response = llm_client.chat.completions.create(
-                    model=self.agent.model,
-                    messages=messages_with_tools,
-                    temperature=self.agent.temperature,
-                    tools=custom_tools if custom_tools else None,
-                    tool_choice="auto" if custom_tools else None
-                )
+                followup_response = self._call_chat_api(llm_client, messages_with_tools)
                 
                 final_message = followup_response.choices[0].message
                 content = final_message.content or ""
