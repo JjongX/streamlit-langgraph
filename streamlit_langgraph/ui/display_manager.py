@@ -115,7 +115,6 @@ class Section:
                  else self.display_manager.config.assistant_avatar)
         with self.delta_generator:
             with st.chat_message(self.role, avatar=avatar):
-                # Render all blocks
                 for block in self.blocks:
                     block.write()
                 # Show agent name if available

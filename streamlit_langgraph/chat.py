@@ -88,7 +88,7 @@ class LangGraphChat:
         # Initialize nessary managers and handlers
         self.state_manager = StateSynchronizer()
         self.display_manager = DisplayManager(self.config)
-        self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager)
+        self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
     
     
     def _init_session_state(self):
