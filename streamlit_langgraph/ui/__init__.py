@@ -1,6 +1,6 @@
 # UI modules for streamlit-langgraph.
 
-from .display import DisplayManager, Block, Section
+from .display_manager import DisplayManager, Block, Section
 
 __all__ = [
     "DisplayManager",

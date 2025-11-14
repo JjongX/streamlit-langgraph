@@ -1,25 +1,13 @@
-# Centralized state coordinator for managing WorkflowState and session_state synchronization
-
+# Synchronizes between WorkflowState and Streamlit's session_state for UI rendering.
 
 import uuid
 from typing import Any, Dict, List
 import streamlit as st
 
-from .workflow_state import WorkflowStateManager
+from .state_schema import WorkflowStateManager
 
-class StateCoordinator:
-    """
-    Centralized coordinator for managing WorkflowState and session_state synchronization.
-    
-    This class ensures that WorkflowState remains the single source of truth while
-    session_state is kept in sync for UI rendering purposes.
-    
-    Note: This class assumes session_state has been initialized (typically by LangGraphChat).
-    """
-    
-    def __init__(self):
-        """Initialize the coordinator."""
-        pass
+
+class StateSynchronizer:
     
     def update_workflow_state(self, updates: Dict[str, Any], auto_sync: bool = True) -> None:
         """
@@ -81,44 +69,36 @@ class StateCoordinator:
         new_messages = self._find_new_messages(workflow_messages, session_messages)
         st.session_state.messages.extend(new_messages)
     
-    def _find_new_messages(
-        self,
+    def _find_new_messages(self, 
         workflow_messages: List[Dict[str, Any]],
-        session_messages: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        session_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Find messages in workflow_messages that aren't in session_messages.
         
         Uses ID-based comparison for simple and reliable duplicate detection.
-        Also checks content+role as fallback for messages without IDs.
+        All messages must have IDs.
         """
         # Create a set of message IDs for fast lookup
         session_ids = {msg.get("id") for msg in session_messages if msg.get("id")}
-        
-        # Also create a set of (role, content) tuples for messages without IDs (fallback)
-        session_content_signatures = {
-            (msg.get("role"), msg.get("content", ""))
-            for msg in session_messages
-            if not msg.get("id")  # Only for messages without IDs
-        }
         
         new_messages = []
         for msg in workflow_messages:
             msg_id = msg.get("id")
             
-            # Check by ID first (most reliable)
-            if msg_id and msg_id in session_ids:
-                continue
-            
-            # Fallback: check by content+role for messages without IDs
+            # Require all messages to have IDs
             if not msg_id:
-                content_sig = (msg.get("role"), msg.get("content", ""))
-                if content_sig in session_content_signatures:
-                    continue
+                raise ValueError(
+                    f"Message missing required 'id' field: {msg}. "
+                    "All messages must have IDs for proper duplicate detection."
+                )
+            
+            # Check by ID
+            if msg_id in session_ids:
+                continue
             
             # Convert to session format (copy message with ID)
             session_msg = {
-                "id": msg_id if msg_id else str(uuid.uuid4()),  # Ensure all messages have IDs
+                "id": msg_id,
                 "role": msg.get("role"),
                 "content": msg.get("content", "")
             }

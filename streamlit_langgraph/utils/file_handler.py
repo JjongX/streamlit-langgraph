@@ -33,9 +33,7 @@ MIME_TYPES = {
 
 
 class FileHandler:
-    """
-    Handler for managing file uploads with OpenAI API integration.
-    """
+    """Handler for managing file uploads with OpenAI API integration."""
     
     FILE_SEARCH_EXTENSIONS = [
         ".c", ".cpp", ".cs", ".css", ".doc", ".docx", ".go", 

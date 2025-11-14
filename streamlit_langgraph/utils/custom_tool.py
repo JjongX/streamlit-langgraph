@@ -15,7 +15,6 @@ class CustomTool:
     # Class-level registry for storing all registered tools
     # Using ClassVar to indicate this is a class variable, not an instance field
     _registry: ClassVar[Dict[str, "CustomTool"]] = {}
-    
     name: str
     description: str
     function: Callable
@@ -27,12 +26,7 @@ class CustomTool:
         """
         Register a custom tool and add it to the class-level registry.
         """
-        tool = cls(
-            name=name,
-            description=description,
-            function=function,
-            **kwargs
-        )
+        tool = cls(name=name, description=description, function=function, **kwargs)
         cls._registry[name] = tool
         return tool
     
@@ -101,15 +95,10 @@ class CustomTool:
     def _extract_parameters(self) -> Dict[str, Any]:
         """Extract parameters from function signature."""
         sig = inspect.signature(self.function)
-        parameters = {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-        
+        parameters = {"type": "object", "properties": {}, "required": []}
+
         for param_name, param in sig.parameters.items():
-            param_info = {"type": "string"}  # Default type
-            
+            param_info = {"type": "string"}    
             # Try to extract type from annotation
             if param.annotation is not inspect.Parameter.empty:
                 if param.annotation is str:
@@ -124,9 +113,8 @@ class CustomTool:
                     param_info["type"] = "array"
                 elif param.annotation is dict:
                     param_info["type"] = "object"
-            
+                    
             parameters["properties"][param_name] = param_info
-            
             # Check if parameter is required
             if param.default == inspect.Parameter.empty:
                 parameters["required"].append(param_name)

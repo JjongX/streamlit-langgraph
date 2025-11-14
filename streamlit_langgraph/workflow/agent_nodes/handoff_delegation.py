@@ -5,17 +5,17 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
 from langchain_core.tools import StructuredTool
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from ...agent import Agent, AgentManager
-from ...core.executor_registry import ExecutorRegistry
-from ...state import WorkflowState, WorkflowStateManager
+from ...core.executor.registry import ExecutorRegistry
+from ...core.state import WorkflowState, WorkflowStateManager
 from .base import AgentNodeBase, create_message_with_id
 from ..prompts import SupervisorPromptBuilder
 
 
 class HandoffDelegation:
-    """Handoff delegation pattern where agents transfer control between nodes."""
     
     @staticmethod
     def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
@@ -29,7 +29,7 @@ class HandoffDelegation:
                 role=worker.role, instructions=worker.instructions, user_query=user_query,
                 supervisor_output=context_data, previous_worker_outputs=previous_worker_outputs
             )
-            response = AgentNodeBase.execute_agent(worker, state, worker_instructions, [], 0)
+            response = AgentNodeBase.execute_agent(worker, state, worker_instructions)
             
             executor_key = f"workflow_executor_{worker.name}"
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
@@ -90,13 +90,17 @@ class HandoffDelegation:
     
     @staticmethod
     def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
-                                           input_message: str, workers: List[Agent],
-                                           allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
+                                          input_message: str, workers: List[Agent],
+                                          allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using ResponseAPIExecutor approach with OpenAI function calling."""
         client = AgentManager.get_llm_client(agent)
         tools = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
-        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-        messages = [{"role": "user", "content": enhanced_instructions}]
+        
+        # Use clean input_message with system message for agent context
+        messages = []
+        if agent.system_message:
+            messages.append({"role": "system", "content": agent.system_message})
+        messages.append({"role": "user", "content": input_message})
         
         with st.spinner(f"🤖 {agent.name} is working..."):
             response = client.chat.completions.create(
@@ -173,13 +177,13 @@ class HandoffDelegation:
         """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
         # Check if we have workers to delegate to
         if not workers:
-            content = AgentNodeBase.execute_agent(agent, state, input_message, [], 0)
+            content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
         # Build delegation tool as LangChain StructuredTool
         delegation_tool = HandoffDelegation._build_langchain_delegation_tool(workers, allow_parallel)
         if not delegation_tool:
-            content = AgentNodeBase.execute_agent(agent, state, input_message, [], 0)
+            content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
         llm_client = AgentManager.get_llm_client(agent)
@@ -187,7 +191,7 @@ class HandoffDelegation:
         
         # Get or create executor with delegation tool temporarily added
         existing_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
-        executor = ExecutorRegistry.get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])
+        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])
         
         # Reuse existing executor but temporarily add delegation tool if needed
         if executor.tools and "delegate_task" not in [tool.name for tool in executor.tools]:
@@ -198,36 +202,50 @@ class HandoffDelegation:
         
         if "executors" not in state.get("metadata", {}):
             state["metadata"]["executors"] = {}
-        executor_key = ExecutorRegistry._get_executor_key(agent.name, "workflow")
-        state["metadata"]["executors"][executor_key] = {"thread_id": executor.thread_id}
         
-        # Execute with enhanced instructions
-        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-        config = {"configurable": {"thread_id": executor.thread_id}}
+        # Get or create executor_key (must be defined before use)
+        executor_key = ExecutorRegistry()._get_executor_key(agent.name, "workflow")
+        
+        # Use workflow's thread_id (from state metadata) to match checkpointer
+        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
+        if not workflow_thread_id:
+            import uuid
+            workflow_thread_id = str(uuid.uuid4())
+            state["metadata"]["workflow_thread_id"] = workflow_thread_id
+        
+        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
+        
+        # Use clean input_message (agent context comes from system_message)
+        config = {"configurable": {"thread_id": workflow_thread_id}}
         
         with st.spinner(f"🤖 {agent.name} is working..."):
             if executor.agent_obj is None:
                 executor._build_agent(llm_client)
             
-            # Check for interrupts first via streaming
-            interrupt_data = executor._detect_interrupt_in_stream(config, enhanced_instructions)
+            # Check for interrupts first via streaming (only if HITL is enabled)
+            interrupt_data = None
+            if executor.agent.human_in_loop and executor.agent.interrupt_on:
+                # Convert input_message to LangChain message format
+                langchain_messages = [HumanMessage(content=input_message)]
+                interrupt_data = executor._detect_interrupt_in_stream(config, langchain_messages)
+            
             if interrupt_data:
-                result = executor._create_interrupt_response(interrupt_data, executor.thread_id, config)
+                result = executor._create_interrupt_response(interrupt_data, workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
             # Invoke agent and get raw output
             out = executor.agent_obj.invoke(
-                {"messages": [{"role": "user", "content": enhanced_instructions}]}, config=config
+                {"messages": [{"role": "user", "content": input_message}]}, config=config
             )
             # Check for interrupts in output
             if isinstance(out, dict) and "__interrupt__" in out:
-                result = executor._create_interrupt_response(out["__interrupt__"], executor.thread_id, config)
+                result = executor._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
         # Extract routing decision from LangChain output
-        routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, enhanced_instructions)
+        routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
     
     @staticmethod
@@ -275,68 +293,59 @@ class HandoffDelegation:
         routing_decision = {"action": "finish"}
         content = ""
         
-        try:
-            messages = None
+        messages = None
+        if isinstance(out, dict):
+            if 'messages' in out:
+                messages = out['messages']
+            elif 'output' in out:
+                content = str(out['output'])
+        elif hasattr(out, 'messages'):
+            messages = out.messages
+        elif hasattr(out, 'content'):
+            content = out.content
+        
+        if messages:
+            from langchain_core.messages import AIMessage
+            for msg in reversed(messages):
+                if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        if tool_call.get("name") == "delegate_task" or (
+                            isinstance(tool_call, dict) and tool_call.get("name") == "delegate_task"
+                        ):
+                            if isinstance(tool_call, dict):
+                                args = tool_call.get("args", {})
+                            else:
+                                args = getattr(tool_call, "args", {})
+                            if isinstance(args, str):
+                                args = json.loads(args)
+                            routing_decision = {
+                                "action": "delegate",
+                                "target_worker": args.get("worker_name"),
+                                "task_description": args.get("task_description"),
+                                "priority": args.get("priority", "medium")
+                            }
+                            delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
+                            if hasattr(msg, 'content') and msg.content:
+                                content = msg.content
+                            content = content + delegation_text if content else delegation_text[2:]
+                            return routing_decision, content
+                if hasattr(msg, 'content') and msg.content and not content:
+                    content = msg.content
+        
+        if not content:
             if isinstance(out, dict):
-                if 'messages' in out:
-                    messages = out['messages']
-                elif 'output' in out:
+                if 'output' in out:
                     content = str(out['output'])
-            elif hasattr(out, 'messages'):
-                messages = out.messages
+                elif 'messages' in out and out['messages']:
+                    last_msg = out['messages'][-1]
+                    if hasattr(last_msg, 'content'):
+                        content = last_msg.content
+                    else:
+                        content = str(last_msg)
             elif hasattr(out, 'content'):
                 content = out.content
-            
-            if messages:
-                from langchain_core.messages import AIMessage
-                for msg in reversed(messages):
-                    if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        for tool_call in msg.tool_calls:
-                            if tool_call.get("name") == "delegate_task" or (
-                                isinstance(tool_call, dict) and tool_call.get("name") == "delegate_task"
-                            ):
-                                # Extract arguments - tool_call can be dict or object
-                                if isinstance(tool_call, dict):
-                                    args = tool_call.get("args", {})
-                                else:
-                                    # Try to get args attribute
-                                    args = getattr(tool_call, "args", {})
-                                # If args is a string (JSON), parse it
-                                if isinstance(args, str):
-                                    args = json.loads(args)
-                                routing_decision = {
-                                    "action": "delegate",
-                                    "target_worker": args.get("worker_name"),
-                                    "task_description": args.get("task_description"),
-                                    "priority": args.get("priority", "medium")
-                                }
-                                delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
-                                if hasattr(msg, 'content') and msg.content:
-                                    content = msg.content
-                                content = content + delegation_text if content else delegation_text[2:]  # Remove leading \n\n
-                                return routing_decision, content
-                    # Also check if message has content (for final response)
-                    if hasattr(msg, 'content') and msg.content and not content:
-                        content = msg.content
-            
-            if not content:
-                if isinstance(out, dict):
-                    if 'output' in out:
-                        content = str(out['output'])
-                    elif 'messages' in out and out['messages']:
-                        last_msg = out['messages'][-1]
-                        if hasattr(last_msg, 'content'):
-                            content = last_msg.content
-                        else:
-                            content = str(last_msg)
-                elif hasattr(out, 'content'):
-                    content = out.content
-                else:
-                    content = str(out)
-        except Exception:
-            # Fallback: just extract text content
-            if not content:
-                content = str(out.get('output', '')) if isinstance(out, dict) and 'output' in out else (out if isinstance(out, str) else str(out))
+            else:
+                content = str(out)
         
         return routing_decision, content or ""
 
@@ -353,7 +362,7 @@ class HandoffDelegation:
     @staticmethod
     def _build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
         """Build context data for worker based on context mode."""
-        context_mode = getattr(worker, 'context', 'least') or 'least'
+        context_mode = worker.context
         supervisor_output = state["agent_outputs"].get(supervisor.name, "")
         
         if context_mode == "full":

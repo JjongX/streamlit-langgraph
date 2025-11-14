@@ -8,11 +8,11 @@ __all__ = [
     # Agent classes (agent.py)
     "Agent",
     "AgentManager",
-    # Workflow builders (workflow)
-    "WorkflowBuilder",
     # UI components (chat.py)
     "UIConfig",
     "LangGraphChat",
+    # Workflow builders (workflow)
+    "WorkflowBuilder",
     # Tools (utils)
     "CustomTool",
     # Version

@@ -6,13 +6,12 @@ from typing import Any, Dict, List
 import streamlit as st
 
 from ...agent import Agent, AgentManager
-from ...state import WorkflowState
 from .base import AgentNodeBase
+from ...core.state.state_schema import WorkflowState
 from ..prompts import ToolCallingPromptBuilder
 
 
 class ToolCallingDelegation:
-    """Tool calling delegation pattern where agents are exposed as tools."""
     
     @staticmethod
     def _create_agent_tools(tool_agents: List[Agent], state: WorkflowState) -> List[Dict[str, Any]]:
@@ -38,14 +37,18 @@ class ToolCallingDelegation:
                                   tool_agents_map: Dict[str, Agent]) -> str:
         """Execute an agent with access to tools (other agents wrapped as tools)."""
         if agent.provider.lower() != "openai":
-            return AgentNodeBase.execute_agent(agent, state, input_message, [], 0)
+            raise ValueError(
+                f"Tool calling delegation requires OpenAI provider. "
+                f"Agent '{agent.name}' uses provider '{agent.provider}'."
+            )
 
         client = AgentManager.get_llm_client(agent)
-        enhanced_instructions = ToolCallingPromptBuilder.get_orchestrator_tool_instructions(
-            role=agent.role,
-            instructions=agent.instructions
-        )
-        messages = [{"role": "user", "content": f"{enhanced_instructions}\n\nUser request: {input_message}"}]
+        
+        # Use system message for agent context, clean user message for task
+        messages = []
+        if agent.system_message:
+            messages.append({"role": "system", "content": agent.system_message})
+        messages.append({"role": "user", "content": input_message})
         
         for iteration in range(10):
             with st.spinner(f"🤖 {agent.name} is working..."):
@@ -77,17 +80,14 @@ class ToolCallingDelegation:
     def _execute_tool_call(tool_call, tool_agents_map: Dict[str, Agent], state: WorkflowState) -> str:
         """Execute a tool call by invoking the corresponding agent."""
         tool_name = tool_call.function.name
-        try:
-            args = json.loads(tool_call.function.arguments)
-            tool_agent = tool_agents_map.get(tool_name)
-            if not tool_agent:
-                return f"Error: Agent {tool_name} not found"
-            tool_instructions = ToolCallingPromptBuilder.get_worker_tool_instructions(
-                role=tool_agent.role,
-                instructions=tool_agent.instructions,
-                task=args.get("task", "")
-            )
-            return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions, [], 0)
-        except Exception as e:
-            return f"Error executing {tool_name}: {str(e)}"
+        args = json.loads(tool_call.function.arguments)
+        tool_agent = tool_agents_map.get(tool_name)
+        if not tool_agent:
+            return f"Error: Agent {tool_name} not found"
+        tool_instructions = ToolCallingPromptBuilder.get_worker_tool_instructions(
+            role=tool_agent.role,
+            instructions=tool_agent.instructions,
+            task=args.get("task", "")
+        )
+        return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)
 

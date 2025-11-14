@@ -3,7 +3,7 @@
 from typing import Any, Callable, Dict, List
 
 from ...agent import Agent
-from ...state import WorkflowState, WorkflowStateManager
+from ...core.state import WorkflowState, WorkflowStateManager
 from .base import AgentNodeBase, create_message_with_id
 from .handoff_delegation import HandoffDelegation
 from .tool_calling_delegation import ToolCallingDelegation
@@ -11,7 +11,6 @@ from ..prompts import SupervisorPromptBuilder
 
 
 class AgentNodeFactory:
-    """Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes."""
 
     @staticmethod
     def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent], 

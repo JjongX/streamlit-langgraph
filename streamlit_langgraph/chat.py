@@ -1,4 +1,4 @@
-# Main chat interface for Streamlit and LangGraph.
+# Main chat interface.
 
 import base64
 from dataclasses import dataclass
@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from .agent import Agent, AgentManager
-from .core.execution_coordinator import ExecutionCoordinator
 from .core.executor import WorkflowExecutor
-from .state import StateCoordinator, WorkflowStateManager
+from .core.state import StateSynchronizer, WorkflowStateManager
+from .core.middleware import HITLHandler, HITLUtils
 from .ui import DisplayManager
-from .utils import FileHandler, CustomTool, HITLHandler, HITLUtils
+from .utils import FileHandler, CustomTool
 
 
 @dataclass
@@ -52,7 +52,7 @@ class LangGraphChat:
         self.config = config or UIConfig()
         self.agent_manager = AgentManager()
         self.workflow = workflow
-        self.workflow_executor = WorkflowExecutor() if workflow else None
+        self.workflow_executor = WorkflowExecutor()
         
         # Initialize agents
         if agents:
@@ -78,23 +78,17 @@ class LangGraphChat:
         openai_client = self.llm if hasattr(self.llm, 'files') else None
         self.file_handler = FileHandler(openai_client=openai_client)
         
-        # Initialize Streamlit session state
+        # Set up client and container_id for file retrieval from code interpreter
+        self._client = self.llm if hasattr(self.llm, 'containers') else None
+        # Container ID will be set when executor creates container
+        self._container_id = None
+
+        # Initialize session state variables
         self._init_session_state()
-        # Initialize state coordinator
-        self.state_coordinator = StateCoordinator()
-        
-        # Initialize display manager
+        # Initialize nessary managers and handlers
+        self.state_manager = StateSynchronizer()
         self.display_manager = DisplayManager(self.config)
-        
-        # Initialize execution coordinator
-        self.execution_coordinator = ExecutionCoordinator(
-            workflow_executor=self.workflow_executor,
-            agent_manager=self.agent_manager,
-            llm_client=self.llm,
-            config=self.config
-        )
-        
-        self.hitl_handler = HITLHandler(self.agent_manager, self.config, self.state_coordinator)
+        self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager)
     
     def create_block(self, category, content=None, filename=None, file_id=None):
         """Create a new Block instance."""
@@ -133,7 +127,6 @@ class LangGraphChat:
     def _render_sidebar(self):
         """Render the sidebar with controls and information."""
         with st.sidebar:
-            # Agent information
             st.header("Agent Configuration")
             agents = list(self.agent_manager.agents.values())
             if agents:
@@ -141,7 +134,6 @@ class LangGraphChat:
                     with st.expander(f"{agent.name}", expanded=False):
                         st.write(f"**Role:** {agent.role}")
                         st.write(f"**Instructions:** {agent.instructions[:100]}...")
-                        # Display capabilities
                         capabilities = []
                         if hasattr(agent, 'allow_file_search') and agent.allow_file_search:
                             capabilities.append("📁 File Search")
@@ -155,7 +147,6 @@ class LangGraphChat:
                             st.write("**Capabilities:**")
                             for cap in capabilities:
                                 st.write(f"- {cap}")
-            # Add chat-specific controls
             st.header("Controls")
             if st.button("Reset All", type="secondary"):
                 st.session_state.clear()
@@ -163,17 +154,15 @@ class LangGraphChat:
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
-        # Sync at the START of rendering
-        self.state_coordinator.sync_to_session_state()
+        self.state_manager.sync_to_session_state()
         
-        # Display welcome message
         if not st.session_state.messages:
             self.display_manager.render_welcome_message()
 
         # Check for pending interrupts FIRST - workflow_state is the single source of truth
         workflow_state = st.session_state.workflow_state
         if HITLUtils.has_pending_interrupts(workflow_state):
-            interrupt_handled = self.hitl_handler.handle_pending_interrupts(workflow_state)
+            interrupt_handled = self.interrupt_handler.handle_pending_interrupts(workflow_state)
             if interrupt_handled:
                 return  # Don't process messages or show input while handling interrupts
 
@@ -202,7 +191,7 @@ class LangGraphChat:
         if "metadata" not in workflow_state:
             workflow_state["metadata"] = {}
         
-        self.state_coordinator.add_user_message(prompt)
+        self.state_manager.add_user_message(prompt)
         
         section = self.add_section("user")
         section.update("text", prompt)
@@ -211,7 +200,7 @@ class LangGraphChat:
         section.stream()
 
         # Clear HITL state before new request
-        self.state_coordinator.clear_hitl_state()
+        self.state_manager.clear_hitl_state()
         
         # Generate response
         with st.spinner("Thinking..."):
@@ -245,7 +234,7 @@ class LangGraphChat:
         # Add assistant response to state if not a workflow control message
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
-            self.state_coordinator.add_assistant_message(
+            self.state_manager.add_assistant_message(
                 response["content"], 
                 response["agent"]
             )
@@ -257,7 +246,7 @@ class LangGraphChat:
                 file_info = self.file_handler.save_uploaded_file(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
                 # Add file metadata to workflow state (not content)
-                self.state_coordinator.update_workflow_state({
+                self.state_manager.update_workflow_state({
                     "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
                 }, auto_sync=False)
     
@@ -292,31 +281,25 @@ class LangGraphChat:
                         file_id=file_id, container_id=self._container_id
                     )
                     file_bytes = file_content.read()
-                    
-                if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                    section.update("image", file_bytes, filename=filename, file_id=file_id)
-                    section.update("download", file_bytes, filename=filename, file_id=file_id)
-                    section.stream()
-                else:
-                    section.update("download", file_bytes, filename=filename, file_id=file_id)
-                    section.stream()
+                if file_bytes:
+                    if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                        section.update("image", file_bytes, filename=filename, file_id=file_id)
+                        section.update("download", file_bytes, filename=filename, file_id=file_id)
+                        section.stream()
+                    else:
+                        section.update("download", file_bytes, filename=filename, file_id=file_id)
+                        section.stream()
+                        
         return ""
     
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
         """Generate response using the configured workflow or dynamically selected agents."""
-        try:
-            if self.workflow_executor:
-                # Use workflow execution
-                return self._run_workflow(prompt)
-            elif self.agent_manager.agents:
-                # Single agent mode (validated to be exactly 1 agent in __init__)
-                agent = list(self.agent_manager.agents.values())[0]
-                return self._run_agent(prompt, agent)
-        except Exception as e:
-            # Show error to user 
-            st.error(f"**Error**: {str(e)}")
-            # Return empty response to prevent further processing
-            return {"role": "assistant", "content": "", "agent": "system"}
+        if self.workflow:
+            return self._run_workflow(prompt)
+        elif self.agent_manager.agents:
+            agent = list(self.agent_manager.agents.values())[0]
+            return self._run_agent(prompt, agent)
+        return {"role": "assistant", "content": "", "agent": "system"}
     
     def _run_workflow(self, prompt: str) -> Dict[str, Any]:
         """
@@ -329,20 +312,20 @@ class LangGraphChat:
             """Callback to display agent responses as they complete during workflow execution."""
             self.display_manager.render_workflow_message(msg)
         
-        # Use execution coordinator for workflow execution
-        result_state = self.execution_coordinator.execute_workflow(
-            self.workflow, prompt, display_callback=display_callback
+        # Use WorkflowExecutor directly (orchestrator logic merged in)
+        result_state = self.workflow_executor.execute_workflow(
+            self.workflow, display_callback=display_callback
         )
 
         if HITLUtils.has_pending_interrupts(result_state):
             st.session_state.workflow_state = result_state
-            self.state_coordinator.sync_to_session_state()
+            self.state_manager.sync_to_session_state()
             st.rerun()
         else:
-            self.state_coordinator.clear_hitl_state()
+            self.state_manager.clear_hitl_state()
 
         st.session_state.workflow_state = result_state
-        self.state_coordinator.sync_to_session_state()
+        self.state_manager.sync_to_session_state()
         
         return {
             "role": "assistant",
@@ -352,29 +335,27 @@ class LangGraphChat:
     
     def _run_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
         """
-        Run a single agent (non-workflow mode) and orchestrate UI updates.
+        Run a single agent and orchestrate UI updates.
         
-        Coordinates agent execution with HITL handling and state synchronization.
+        Note: HITL is not supported for single agents. Use workflows for HITL functionality.
         """
         file_messages = self.file_handler.get_openai_input_messages()
         
-        # Use execution coordinator for single agent execution
-        response = self.execution_coordinator.execute_single_agent(
-            agent, prompt, file_messages=file_messages
+        # Use WorkflowExecutor directly (orchestrator logic merged in)
+        response = self.workflow_executor.execute_single_agent(
+            agent, prompt,
+            llm_client=self.llm,
+            config=self.config,
+            file_messages=file_messages
         )
         
-        # Handle interrupts from ResponseAPIExecutor
-        if response.get("__interrupt__"):
-            self.state_coordinator.set_pending_interrupt(
-                agent.name,
-                response,
-                "single_agent_executor"
-            )
-            return response
+        # Update container_id if agent has code interpreter (for file retrieval)
+        if agent.container_id:
+            self._container_id = agent.container_id
         
-        # Update workflow_state with agent response using coordinator
+        # Update workflow_state with agent response using state manager
         if response.get("content"):
-            self.state_coordinator.add_assistant_message(
+            self.state_manager.add_assistant_message(
                 response.get("content", ""),
                 response.get("agent", agent.name)
             )
