@@ -287,7 +287,8 @@ class HITLHandler:
             CreateAgentExecutor or ResponseAPIExecutor instance or None
         """
         registry = ExecutorRegistry()
-        executor = registry.get(agent_name, executor_type="workflow")
+        executor_key = f"workflow_executor_{agent_name}"
+        executor = st.session_state.agent_executors.get(executor_key)
         if executor is None:
             agent = self.agent_manager.agents.get(agent_name)
             if agent:

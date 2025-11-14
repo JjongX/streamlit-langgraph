@@ -1,7 +1,7 @@
 # Handoff delegation pattern implementation for agent nodes.
 
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
 from langchain_core.tools import StructuredTool
@@ -11,53 +11,13 @@ from pydantic import BaseModel, Field
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
 from ...core.state import WorkflowState, WorkflowStateManager
-from .base import AgentNodeBase, create_message_with_id
-from ..prompts import SupervisorPromptBuilder
+from .base import AgentNodeBase
 
 
 class HandoffDelegation:
-    
+        
     @staticmethod
-    def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
-        """Create a worker agent node for supervisor workflows."""
-        def worker_agent_node(state: WorkflowState) -> Dict[str, Any]:
-            user_query = AgentNodeBase.extract_user_query(state)
-            context_data, previous_worker_outputs = HandoffDelegation._build_worker_context(
-                state, worker, supervisor
-            )
-            worker_instructions = SupervisorPromptBuilder.get_worker_agent_instructions(
-                role=worker.role, instructions=worker.instructions, user_query=user_query,
-                supervisor_output=context_data, previous_worker_outputs=previous_worker_outputs
-            )
-            response = AgentNodeBase.execute_agent(worker, state, worker_instructions)
-            
-            executor_key = f"workflow_executor_{worker.name}"
-            pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
-            if executor_key in pending_interrupts:
-                return {
-                    "current_agent": worker.name,
-                    "metadata": state.get("metadata", {}),
-                }
-            return {
-                "current_agent": worker.name,
-                "messages": [create_message_with_id("assistant", response, worker.name)],
-                "agent_outputs": {worker.name: response}
-            }
-        return worker_agent_node
-    
-    @staticmethod
-    def _build_worker_outputs_summary(state: WorkflowState, workers: List[Agent]) -> List[str]:
-        """Build summary of worker outputs from state."""
-        worker_outputs = []
-        worker_names = [w.name for w in workers]
-        for worker_name in worker_names:
-            if worker_name in state["agent_outputs"]:
-                output = state['agent_outputs'][worker_name]
-                worker_outputs.append(f"**{worker_name}**: {output}")
-        return worker_outputs
-
-    @staticmethod
-    def _execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
+    def execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
                                         input_message: str, workers: List[Agent],
                                         allow_parallel: bool = False) -> Tuple[str, Dict[str, Any]]:
         """
@@ -78,16 +38,41 @@ class HandoffDelegation:
             Tuple of (response_content, routing_decision_dict)
         """
         if agent.provider.lower() == "openai" and agent.type == "response":
-            # Use ResponseAPIExecutor approach - OpenAI function calling
             return HandoffDelegation._execute_with_response_api_executor(
                 agent, state, input_message, workers, allow_parallel
             )
         else:
-            # Use CreateAgentExecutor approach - LangChain tool calling
             return HandoffDelegation._execute_with_create_agent_executor(
                 agent, state, input_message, workers, allow_parallel
             )
     
+    @staticmethod
+    def build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
+        """Build context data for worker based on context mode."""
+        context_mode = worker.context
+        supervisor_output = state["agent_outputs"].get(supervisor.name, "")
+        
+        if context_mode == "full":
+            return supervisor_output, HandoffDelegation._get_previous_worker_outputs(
+                state, supervisor.name, worker.name
+            )
+        elif context_mode == "summary":
+            routing_decision = state.get("metadata", {}).get("routing_decision", {})
+            return routing_decision.get("task_description", supervisor_output), None
+        else:  # least
+            return None, None
+    
+    @staticmethod
+    def build_worker_outputs_summary(state: WorkflowState, workers: List[Agent]) -> List[str]:
+        """Build summary of worker outputs from state."""
+        worker_outputs = []
+        worker_names = [w.name for w in workers]
+        for worker_name in worker_names:
+            if worker_name in state["agent_outputs"]:
+                output = state['agent_outputs'][worker_name]
+                worker_outputs.append(f"**{worker_name}**: {output}")
+        return worker_outputs
+        
     @staticmethod
     def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
                                           input_message: str, workers: List[Agent],
@@ -111,64 +96,6 @@ class HandoffDelegation:
         content = message.content or ""
         routing_decision = HandoffDelegation._extract_openai_routing_decision(message, content)
         return routing_decision[1], routing_decision[0]
-
-    @staticmethod
-    def _build_openai_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
-        """Build OpenAI function tool definition for delegation."""
-        if not workers:
-            return []
-        
-        worker_name_options = [w.name for w in workers]
-        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
-        if allow_parallel and len(workers) > 1:
-            worker_name_options.append("PARALLEL")
-            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
-        
-        return [{
-            "type": "function",
-            "function": {
-                "name": "delegate_task",
-                "description": "Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "worker_name": {
-                            "type": "string",
-                            "enum": worker_name_options,
-                            "description": f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}"
-                        },
-                        "task_description": {
-                            "type": "string",
-                            "description": "Clear description of what the worker should do"
-                        },
-                        "priority": {
-                            "type": "string",
-                            "enum": ["high", "medium", "low"],
-                            "description": "Priority level of this task"
-                        }
-                    },
-                    "required": ["worker_name", "task_description"]
-                }
-            }
-        }]
-    
-    @staticmethod
-    def _extract_openai_routing_decision(message, content: str) -> Tuple[Dict[str, Any], str]:
-        """Extract routing decision from OpenAI function call response."""
-        routing_decision = {"action": "finish"}
-        if message.tool_calls:
-            tool_call = message.tool_calls[0]
-            if tool_call.function.name == "delegate_task":
-                args = json.loads(tool_call.function.arguments)
-                routing_decision = {
-                    "action": "delegate",
-                    "target_worker": args.get("worker_name"),
-                    "task_description": args.get("task_description"),
-                    "priority": args.get("priority", "medium")
-                }
-                delegation_text = f"\n\n**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
-                content = content + delegation_text if content else delegation_text[2:]
-        return routing_decision, content
     
     @staticmethod
     def _execute_with_create_agent_executor(agent: Agent, state: WorkflowState,
@@ -204,7 +131,7 @@ class HandoffDelegation:
             state["metadata"]["executors"] = {}
         
         # Get or create executor_key (must be defined before use)
-        executor_key = ExecutorRegistry()._get_executor_key(agent.name, "workflow")
+        executor_key = f"workflow_executor_{agent.name}"
         
         # Use workflow's thread_id (from state metadata) to match checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
@@ -247,6 +174,46 @@ class HandoffDelegation:
         # Extract routing decision from LangChain output
         routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
+        
+    @staticmethod
+    def _build_openai_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
+        """Build OpenAI function tool definition for delegation."""
+        if not workers:
+            return []
+        
+        worker_name_options = [w.name for w in workers]
+        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
+        if allow_parallel and len(workers) > 1:
+            worker_name_options.append("PARALLEL")
+            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
+        
+        return [{
+            "type": "function",
+            "function": {
+                "name": "delegate_task",
+                "description": "Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "worker_name": {
+                            "type": "string",
+                            "enum": worker_name_options,
+                            "description": f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}"
+                        },
+                        "task_description": {
+                            "type": "string",
+                            "description": "Clear description of what the worker should do"
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                            "description": "Priority level of this task"
+                        }
+                    },
+                    "required": ["worker_name", "task_description"]
+                }
+            }
+        }]
     
     @staticmethod
     def _build_langchain_delegation_tool(workers: List[Agent], allow_parallel: bool) -> Optional[StructuredTool]:
@@ -286,6 +253,24 @@ class HandoffDelegation:
             description=tool_description,
             args_schema=DelegationParams
         )
+    
+    @staticmethod
+    def _extract_openai_routing_decision(message, content: str) -> Tuple[Dict[str, Any], str]:
+        """Extract routing decision from OpenAI function call response."""
+        routing_decision = {"action": "finish"}
+        if message.tool_calls:
+            tool_call = message.tool_calls[0]
+            if tool_call.function.name == "delegate_task":
+                args = json.loads(tool_call.function.arguments)
+                routing_decision = {
+                    "action": "delegate",
+                    "target_worker": args.get("worker_name"),
+                    "task_description": args.get("task_description"),
+                    "priority": args.get("priority", "medium")
+                }
+                delegation_text = f"\n\n**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
+                content = content + delegation_text if content else delegation_text[2:]
+        return routing_decision, content
     
     @staticmethod
     def _extract_langchain_routing_decision(out: Any, prompt: str) -> Tuple[Dict[str, Any], str]:
@@ -348,7 +333,7 @@ class HandoffDelegation:
                 content = str(out)
         
         return routing_decision, content or ""
-
+        
     @staticmethod
     def _get_previous_worker_outputs(state: WorkflowState, supervisor_name: str, current_worker_name: str) -> Optional[List[str]]:
         """Get formatted list of previous worker outputs."""
@@ -358,20 +343,3 @@ class HandoffDelegation:
             if name not in (supervisor_name, current_worker_name):
                 worker_outputs.append(f"**{name}**: {output}")
         return worker_outputs if worker_outputs else None
-    
-    @staticmethod
-    def _build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
-        """Build context data for worker based on context mode."""
-        context_mode = worker.context
-        supervisor_output = state["agent_outputs"].get(supervisor.name, "")
-        
-        if context_mode == "full":
-            return supervisor_output, HandoffDelegation._get_previous_worker_outputs(
-                state, supervisor.name, worker.name
-            )
-        elif context_mode == "summary":
-            routing_decision = state.get("metadata", {}).get("routing_decision", {})
-            return routing_decision.get("task_description", supervisor_output), None
-        else:  # least
-            return None, None
-

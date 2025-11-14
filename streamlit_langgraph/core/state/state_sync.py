@@ -1,10 +1,10 @@
 # Synchronizes between WorkflowState and Streamlit's session_state for UI rendering.
 
-import uuid
 from typing import Any, Dict, List
 import streamlit as st
 
 from .state_schema import WorkflowStateManager
+from ...workflow.agent_nodes.base import create_message_with_id
 
 
 class StateSynchronizer:
@@ -44,13 +44,13 @@ class StateSynchronizer:
     def add_user_message(self, content: str) -> None:
         """Add a user message to workflow state with unique ID."""
         self.update_workflow_state({
-            "messages": [{"id": str(uuid.uuid4()), "role": "user", "content": content, "agent": None}]
+            "messages": [create_message_with_id("user", content, None)]
         })
     
     def add_assistant_message(self, content: str, agent_name: str) -> None:
         """Add an assistant message to workflow state with unique ID."""
         self.update_workflow_state({
-            "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": content, "agent": agent_name}],
+            "messages": [create_message_with_id("assistant", content, agent_name)],
             "agent_outputs": {agent_name: content},
             "current_agent": agent_name
         })

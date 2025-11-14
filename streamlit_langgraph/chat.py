@@ -90,25 +90,20 @@ class LangGraphChat:
         self.display_manager = DisplayManager(self.config)
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager)
     
-    def create_block(self, category, content=None, filename=None, file_id=None):
-        """Create a new Block instance."""
-        return self.display_manager.create_block(category, content=content, filename=filename, file_id=file_id)
-
-    def add_section(self, role, blocks=None):
-        """Create and add a new Section for a chat message."""
-        return self.display_manager.add_section(role, blocks=blocks)
     
     def _init_session_state(self):
-        """Initialize Streamlit session state with required keys."""
+        """Initialize all Streamlit session state variables in one place."""
         
         if "workflow_state" not in st.session_state:
             st.session_state.workflow_state = WorkflowStateManager.create_initial_state()
         if "agent_executors" not in st.session_state:
-            st.session_state.agent_executors = {}  # Executor objects (not data)
+            st.session_state.agent_executors = {}
         if "messages" not in st.session_state:
-            st.session_state.messages = []  # Performance cache for rendering
+            st.session_state.messages = []
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []  # File objects (not in workflow_state)
+        if "display_sections" not in st.session_state:
+            st.session_state.display_sections = []  # UI sections for persistence across reruns
     
     def run(self):
         """Run the main chat interface."""
@@ -193,7 +188,7 @@ class LangGraphChat:
         
         self.state_manager.add_user_message(prompt)
         
-        section = self.add_section("user")
+        section = self.display_manager.add_section("user")
         section.update("text", prompt)
         for uploaded_file in files:
             section.update("text", f"\n:material/attach_file: `{uploaded_file.name}`")
@@ -215,7 +210,7 @@ class LangGraphChat:
         
         if response and "stream" in response:
             # Handle streaming response from OpenAI Responses API
-            section = self.add_section("assistant")
+            section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             
             full_response = ""
@@ -226,7 +221,7 @@ class LangGraphChat:
             response["content"] = full_response
         else:
             # Handle non-streaming response from agent
-            section = self.add_section("assistant")
+            section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             section.update("text", response["content"])
             section.stream()
@@ -275,7 +270,6 @@ class LangGraphChat:
                 file_id = annotation["file_id"]
                 filename = annotation["filename"]
                 file_bytes = None
-                
                 if hasattr(self, '_client') and hasattr(self, '_container_id') and self._client and self._container_id:
                     file_content = self._client.containers.files.content.retrieve(
                         file_id=file_id, container_id=self._container_id

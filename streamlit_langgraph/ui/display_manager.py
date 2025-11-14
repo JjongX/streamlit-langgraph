@@ -127,9 +127,6 @@ class Section:
     
     def _save_to_session_state(self) -> None:
         """Save section data to session state for persistence."""
-        if "display_sections" not in st.session_state:
-            st.session_state.display_sections = []
-        
         section_data = {
             "role": self.role,
             "blocks": [],
@@ -186,7 +183,6 @@ class DisplayManager:
     
     def render_message_history(self, messages: List[Dict[str, Any]]) -> None:
         """Render historical messages from session state."""
-        # Render sections directly in order - no matching needed
         display_sections = st.session_state.get("display_sections", [])
         
         for section_data in display_sections:
@@ -194,10 +190,8 @@ class DisplayManager:
                      else self.config.assistant_avatar)
             
             with st.chat_message(section_data["role"], avatar=avatar):
-                # Render all blocks in order
                 for block_data in section_data.get("blocks", []):
                     category = block_data.get("category")
-                    
                     if category == "text":
                         st.markdown(block_data.get("content", ""))
                     elif category == "image":

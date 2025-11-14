@@ -16,17 +16,10 @@ class BaseExecutor:
     """
     
     def __init__(self, agent: Agent):
-        """
-        Initialize the executor.
-        
-        Args:
-            agent: The agent configuration to execute
-        """
         self.agent = agent
         self.pending_tool_calls: List[Dict[str, Any]] = []
     
     def _prepare_workflow_config(self, config: Optional[Dict[str, Any]]) -> tuple[Dict[str, Any], str]:
-        """Prepare workflow execution configuration and extract thread_id."""
         # Setting config 
         if config is None:
             raise ValueError(
@@ -88,17 +81,6 @@ class BaseExecutor:
 
 
 class ExecutorRegistry:
-
-    def _get_executor_key(self, agent_name: str, executor_type: str = "workflow") -> str:
-        """Generate consistent executor key."""
-        if executor_type == "single_agent":
-            return "single_agent_executor"
-        return f"workflow_executor_{agent_name}"
-    
-    def _ensure_executors_dict(self) -> None:
-        """Ensure agent_executors exists in session state."""
-        if "agent_executors" not in st.session_state:
-            st.session_state.agent_executors = {}
     
     def _create_executor(self, agent: Agent, tools: Optional[list] = None) -> Any:
         """Create appropriate executor for the agent."""
@@ -123,9 +105,7 @@ class ExecutorRegistry:
         Returns:
             Executor instance (ResponseAPIExecutor or CreateAgentExecutor)
         """
-        self._ensure_executors_dict()
-        
-        executor_key = self._get_executor_key(agent.name, executor_type)
+        executor_key = "single_agent_executor" if executor_type == "single_agent" else f"workflow_executor_{agent.name}"
         
         # Get existing executor or create new one
         if executor_key not in st.session_state.agent_executors:
@@ -141,13 +121,6 @@ class ExecutorRegistry:
         
         return executor
     
-    def get(self, agent_name: str, executor_type: str = "workflow") -> Optional[Any]:
-        """Get existing executor by key."""
-        self._ensure_executors_dict()
-        
-        executor_key = self._get_executor_key(agent_name, executor_type)
-        return st.session_state.agent_executors.get(executor_key)
-    
     def create_for_hitl(self, agent: Agent, executor_key: Optional[str] = None) -> Any:
         """
         Create executor for HITL scenarios.
@@ -159,11 +132,8 @@ class ExecutorRegistry:
         Returns:
             Executor instance (ResponseAPIExecutor or CreateAgentExecutor)
         """
-        self._ensure_executors_dict()
-        
         if executor_key is None:
-            executor_key = self._get_executor_key(agent.name, "workflow")
-        
+            executor_key = f"workflow_executor_{agent.name}"
         # Create executor - thread_id comes from config in workflows
         executor = self._create_executor(agent)
         
