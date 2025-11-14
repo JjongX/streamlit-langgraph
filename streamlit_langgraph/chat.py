@@ -98,8 +98,6 @@ class LangGraphChat:
             st.session_state.workflow_state = WorkflowStateManager.create_initial_state()
         if "agent_executors" not in st.session_state:
             st.session_state.agent_executors = {}
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []  # File objects (not in workflow_state)
         if "display_sections" not in st.session_state:
@@ -149,9 +147,7 @@ class LangGraphChat:
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
-        self.state_manager.sync_to_session_state()
-        
-        if not st.session_state.messages:
+        if not st.session_state.display_sections:
             self.display_manager.render_welcome_message()
 
         # Check for pending interrupts FIRST - workflow_state is the single source of truth
@@ -162,8 +158,7 @@ class LangGraphChat:
                 return  # Don't process messages or show input while handling interrupts
 
         # Render message history
-        self.display_manager.render_message_history(st.session_state.messages)
-
+        self.display_manager.render_message_history()
         # Render user input
         if prompt := st.chat_input(
             self.config.placeholder, accept_file=self.config.enable_file_upload
@@ -243,7 +238,7 @@ class LangGraphChat:
                 # Add file metadata to workflow state (not content)
                 self.state_manager.update_workflow_state({
                     "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
-                }, auto_sync=False)
+                })
     
     def _process_stream_event(self, event, section) -> str:
         """
@@ -313,13 +308,11 @@ class LangGraphChat:
 
         if HITLUtils.has_pending_interrupts(result_state):
             st.session_state.workflow_state = result_state
-            self.state_manager.sync_to_session_state()
             st.rerun()
         else:
             self.state_manager.clear_hitl_state()
 
         st.session_state.workflow_state = result_state
-        self.state_manager.sync_to_session_state()
         
         return {
             "role": "assistant",

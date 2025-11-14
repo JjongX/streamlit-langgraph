@@ -70,9 +70,8 @@ class WorkflowExecutor:
                 break
         
         # Track which messages have already been displayed to prevent duplicates
-        displayed_message_ids = set()
-        if "messages" in st.session_state:
-            displayed_message_ids = {msg.get("id") for msg in st.session_state.messages if msg.get("id")}
+        display_sections = st.session_state.get("display_sections", [])
+        displayed_message_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
         
         def wrapper(state: WorkflowState):
             """Display callback wrapper with deduplication logic."""
