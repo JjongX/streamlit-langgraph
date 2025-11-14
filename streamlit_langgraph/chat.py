@@ -77,6 +77,11 @@ class LangGraphChat:
         self.llm = AgentManager.get_llm_client(first_agent)
         openai_client = self.llm if hasattr(self.llm, 'files') else None
         self.file_handler = FileHandler(openai_client=openai_client)
+        
+        # Set up client and container_id for file retrieval from code interpreter
+        self._client = self.llm if hasattr(self.llm, 'containers') else None
+        # Container ID will be set when executor creates container
+        self._container_id = None
 
         # Initialize session state variables
         self._init_session_state()
@@ -276,28 +281,25 @@ class LangGraphChat:
                         file_id=file_id, container_id=self._container_id
                     )
                     file_bytes = file_content.read()
-                    
-                if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                    section.update("image", file_bytes, filename=filename, file_id=file_id)
-                    section.update("download", file_bytes, filename=filename, file_id=file_id)
-                    section.stream()
-                else:
-                    section.update("download", file_bytes, filename=filename, file_id=file_id)
-                    section.stream()
+                if file_bytes:
+                    if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                        section.update("image", file_bytes, filename=filename, file_id=file_id)
+                        section.update("download", file_bytes, filename=filename, file_id=file_id)
+                        section.stream()
+                    else:
+                        section.update("download", file_bytes, filename=filename, file_id=file_id)
+                        section.stream()
+                        
         return ""
     
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
         """Generate response using the configured workflow or dynamically selected agents."""
-        try:
-            if self.workflow:
-                return self._run_workflow(prompt)
-            elif self.agent_manager.agents:
-                agent = list(self.agent_manager.agents.values())[0]
-                return self._run_agent(prompt, agent)
-        except Exception as e:
-            st.error(f"**Error**: {str(e)}")
-            # Return empty response to prevent further processing
-            return {"role": "assistant", "content": "", "agent": "system"}
+        if self.workflow:
+            return self._run_workflow(prompt)
+        elif self.agent_manager.agents:
+            agent = list(self.agent_manager.agents.values())[0]
+            return self._run_agent(prompt, agent)
+        return {"role": "assistant", "content": "", "agent": "system"}
     
     def _run_workflow(self, prompt: str) -> Dict[str, Any]:
         """
@@ -346,6 +348,10 @@ class LangGraphChat:
             config=self.config,
             file_messages=file_messages
         )
+        
+        # Update container_id if agent has code interpreter (for file retrieval)
+        if agent.container_id:
+            self._container_id = agent.container_id
         
         # Update workflow_state with agent response using state manager
         if response.get("content"):

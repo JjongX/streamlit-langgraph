@@ -293,68 +293,59 @@ class HandoffDelegation:
         routing_decision = {"action": "finish"}
         content = ""
         
-        try:
-            messages = None
+        messages = None
+        if isinstance(out, dict):
+            if 'messages' in out:
+                messages = out['messages']
+            elif 'output' in out:
+                content = str(out['output'])
+        elif hasattr(out, 'messages'):
+            messages = out.messages
+        elif hasattr(out, 'content'):
+            content = out.content
+        
+        if messages:
+            from langchain_core.messages import AIMessage
+            for msg in reversed(messages):
+                if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        if tool_call.get("name") == "delegate_task" or (
+                            isinstance(tool_call, dict) and tool_call.get("name") == "delegate_task"
+                        ):
+                            if isinstance(tool_call, dict):
+                                args = tool_call.get("args", {})
+                            else:
+                                args = getattr(tool_call, "args", {})
+                            if isinstance(args, str):
+                                args = json.loads(args)
+                            routing_decision = {
+                                "action": "delegate",
+                                "target_worker": args.get("worker_name"),
+                                "task_description": args.get("task_description"),
+                                "priority": args.get("priority", "medium")
+                            }
+                            delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
+                            if hasattr(msg, 'content') and msg.content:
+                                content = msg.content
+                            content = content + delegation_text if content else delegation_text[2:]
+                            return routing_decision, content
+                if hasattr(msg, 'content') and msg.content and not content:
+                    content = msg.content
+        
+        if not content:
             if isinstance(out, dict):
-                if 'messages' in out:
-                    messages = out['messages']
-                elif 'output' in out:
+                if 'output' in out:
                     content = str(out['output'])
-            elif hasattr(out, 'messages'):
-                messages = out.messages
+                elif 'messages' in out and out['messages']:
+                    last_msg = out['messages'][-1]
+                    if hasattr(last_msg, 'content'):
+                        content = last_msg.content
+                    else:
+                        content = str(last_msg)
             elif hasattr(out, 'content'):
                 content = out.content
-            
-            if messages:
-                from langchain_core.messages import AIMessage
-                for msg in reversed(messages):
-                    if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        for tool_call in msg.tool_calls:
-                            if tool_call.get("name") == "delegate_task" or (
-                                isinstance(tool_call, dict) and tool_call.get("name") == "delegate_task"
-                            ):
-                                # Extract arguments - tool_call can be dict or object
-                                if isinstance(tool_call, dict):
-                                    args = tool_call.get("args", {})
-                                else:
-                                    # Try to get args attribute
-                                    args = getattr(tool_call, "args", {})
-                                # If args is a string (JSON), parse it
-                                if isinstance(args, str):
-                                    args = json.loads(args)
-                                routing_decision = {
-                                    "action": "delegate",
-                                    "target_worker": args.get("worker_name"),
-                                    "task_description": args.get("task_description"),
-                                    "priority": args.get("priority", "medium")
-                                }
-                                delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
-                                if hasattr(msg, 'content') and msg.content:
-                                    content = msg.content
-                                content = content + delegation_text if content else delegation_text[2:]  # Remove leading \n\n
-                                return routing_decision, content
-                    # Also check if message has content (for final response)
-                    if hasattr(msg, 'content') and msg.content and not content:
-                        content = msg.content
-            
-            if not content:
-                if isinstance(out, dict):
-                    if 'output' in out:
-                        content = str(out['output'])
-                    elif 'messages' in out and out['messages']:
-                        last_msg = out['messages'][-1]
-                        if hasattr(last_msg, 'content'):
-                            content = last_msg.content
-                        else:
-                            content = str(last_msg)
-                elif hasattr(out, 'content'):
-                    content = out.content
-                else:
-                    content = str(out)
-        except Exception:
-            # Fallback: just extract text content
-            if not content:
-                content = str(out.get('output', '')) if isinstance(out, dict) and 'output' in out else (out if isinstance(out, str) else str(out))
+            else:
+                content = str(out)
         
         return routing_decision, content or ""
 

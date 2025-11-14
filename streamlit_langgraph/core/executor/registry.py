@@ -90,16 +90,7 @@ class BaseExecutor:
 class ExecutorRegistry:
 
     def _get_executor_key(self, agent_name: str, executor_type: str = "workflow") -> str:
-        """
-        Generate consistent executor key.
-        
-        Args:
-            agent_name: Name of the agent
-            executor_type: Type of executor ("workflow" or "single_agent")
-            
-        Returns:
-            Executor key string
-        """
+        """Generate consistent executor key."""
         if executor_type == "single_agent":
             return "single_agent_executor"
         return f"workflow_executor_{agent_name}"
@@ -110,16 +101,7 @@ class ExecutorRegistry:
             st.session_state.agent_executors = {}
     
     def _create_executor(self, agent: Agent, tools: Optional[list] = None) -> Any:
-        """
-        Create appropriate executor for the agent.
-        
-        Args:
-            agent: Agent configuration
-            tools: Optional tools for CreateAgentExecutor
-            
-        Returns:
-            Executor instance (ResponseAPIExecutor or CreateAgentExecutor)
-        """
+        """Create appropriate executor for the agent."""
         # Lazy imports to avoid circular import
         from .create_agent import CreateAgentExecutor
         from .response_api import ResponseAPIExecutor

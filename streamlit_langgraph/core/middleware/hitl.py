@@ -105,20 +105,14 @@ class HITLUtils:
         if not edit_text.strip():
             return default_input, None
         
-        # If it looks like JSON (starts with { or [), try to parse it
+        # If it looks like JSON (starts with { or [), parse it
         if edit_text.strip().startswith('{') or edit_text.strip().startswith('['):
-            try:
-                parsed = json.loads(edit_text)
-                return parsed, None
-            except (json.JSONDecodeError, ValueError):
-                return None, "Invalid JSON. Please fix the input format."
-        
-        # Try to parse as JSON anyway, but fallback to string if it fails
-        try:
             parsed = json.loads(edit_text)
             return parsed, None
-        except (json.JSONDecodeError, ValueError):
-            return edit_text, None
+            
+        # Try to parse as JSON, fallback to string if it fails
+        parsed = json.loads(edit_text)
+        return parsed, None
     
     @staticmethod
     def extract_action_info(action: Any, action_index: int) -> tuple:
