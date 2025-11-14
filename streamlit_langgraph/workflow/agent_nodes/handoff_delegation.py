@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
 from langchain_core.tools import StructuredTool
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from ...agent import Agent, AgentManager
@@ -89,13 +90,17 @@ class HandoffDelegation:
     
     @staticmethod
     def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
-                                           input_message: str, workers: List[Agent],
-                                           allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
+                                          input_message: str, workers: List[Agent],
+                                          allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using ResponseAPIExecutor approach with OpenAI function calling."""
         client = AgentManager.get_llm_client(agent)
         tools = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
-        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
-        messages = [{"role": "user", "content": enhanced_instructions}]
+        
+        # Use clean input_message with system message for agent context
+        messages = []
+        if agent.system_message:
+            messages.append({"role": "system", "content": agent.system_message})
+        messages.append({"role": "user", "content": input_message})
         
         with st.spinner(f"🤖 {agent.name} is working..."):
             response = client.chat.completions.create(
@@ -210,8 +215,7 @@ class HandoffDelegation:
         
         state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
         
-        # Execute with enhanced instructions
-        enhanced_instructions = f"You are {agent.role}. {agent.instructions}\n\nCurrent task: {input_message}"
+        # Use clean input_message (agent context comes from system_message)
         config = {"configurable": {"thread_id": workflow_thread_id}}
         
         with st.spinner(f"🤖 {agent.name} is working..."):
@@ -221,9 +225,8 @@ class HandoffDelegation:
             # Check for interrupts first via streaming (only if HITL is enabled)
             interrupt_data = None
             if executor.agent.human_in_loop and executor.agent.interrupt_on:
-                # Convert enhanced_instructions to LangChain message format
-                from langchain_core.messages import HumanMessage
-                langchain_messages = [HumanMessage(content=enhanced_instructions)]
+                # Convert input_message to LangChain message format
+                langchain_messages = [HumanMessage(content=input_message)]
                 interrupt_data = executor._detect_interrupt_in_stream(config, langchain_messages)
             
             if interrupt_data:
@@ -233,7 +236,7 @@ class HandoffDelegation:
                 return "", {"action": "finish"}
             # Invoke agent and get raw output
             out = executor.agent_obj.invoke(
-                {"messages": [{"role": "user", "content": enhanced_instructions}]}, config=config
+                {"messages": [{"role": "user", "content": input_message}]}, config=config
             )
             # Check for interrupts in output
             if isinstance(out, dict) and "__interrupt__" in out:
@@ -242,7 +245,7 @@ class HandoffDelegation:
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
         # Extract routing decision from LangChain output
-        routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, enhanced_instructions)
+        routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
     
     @staticmethod

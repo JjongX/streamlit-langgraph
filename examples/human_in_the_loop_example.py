@@ -1,3 +1,6 @@
+import time
+import uuid
+
 import streamlit_langgraph as slg
 
 def analyze_sentiment(text: str, context: str = None) -> str:
@@ -15,7 +18,6 @@ def analyze_sentiment(text: str, context: str = None) -> str:
         analyze_sentiment("I love this product! It works perfectly.", "customer_review")
         analyze_sentiment("This service is terrible and I want a refund.", "support_ticket")
     """
-    import time
     
     # Simulate sentiment analysis
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -77,10 +79,7 @@ def escalate_negative_sentiment(text: str, sentiment_score: float, source: str, 
     Example:
         escalate_negative_sentiment("This product is terrible", -0.85, "customer_review", "high")
         escalate_negative_sentiment("I want to cancel my subscription", -0.65, "support_ticket", "medium")
-    """
-    import time
-    import uuid
-    
+    """    
     # Validate urgency
     valid_urgency = ["low", "medium", "high", "critical"]
     if urgency.lower() not in valid_urgency:

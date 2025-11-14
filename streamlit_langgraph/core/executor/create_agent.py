@@ -63,10 +63,7 @@ class CreateAgentExecutor(BaseExecutor):
         
         # Execute with config (empty dict for single-agent, full config for workflow)
         execution_config = config if config is not None else {}
-        out = self.agent_obj.invoke(
-            {"messages": langchain_messages},
-            config=execution_config
-        )
+        out = self.agent_obj.invoke({"messages": langchain_messages}, config=execution_config)
         
         return out
     
@@ -187,7 +184,6 @@ class CreateAgentExecutor(BaseExecutor):
         
         # Note: Checkpointer is now handled at workflow level, not executor level
         # The workflow checkpointer persists the entire workflow_state automatically
-        
         self.agent_obj = create_agent(**agent_kwargs)
         return self.agent_obj
         
@@ -234,9 +230,7 @@ class CreateAgentExecutor(BaseExecutor):
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 
-                # Skip empty messages
-                if not content and role != "system":
-                    continue
+                if not content: continue  # Skip empty messages
                 
                 if role == "user":
                     langchain_messages.append(HumanMessage(content=content))
@@ -244,8 +238,7 @@ class CreateAgentExecutor(BaseExecutor):
                     langchain_messages.append(AIMessage(content=content))
                 elif role == "system":
                     langchain_messages.append(SystemMessage(content=content))
-                # Note: tool messages are handled differently in LangChain
-                # They're typically added during tool execution
+                # tool messages are added during tool execution
         
         # Add current prompt if it's not already the last message
         # (This handles the case where prompt is new and not yet in workflow_state)

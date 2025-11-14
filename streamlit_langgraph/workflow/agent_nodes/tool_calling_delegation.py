@@ -43,11 +43,12 @@ class ToolCallingDelegation:
             )
 
         client = AgentManager.get_llm_client(agent)
-        enhanced_instructions = ToolCallingPromptBuilder.get_orchestrator_tool_instructions(
-            role=agent.role,
-            instructions=agent.instructions
-        )
-        messages = [{"role": "user", "content": f"{enhanced_instructions}\n\nUser request: {input_message}"}]
+        
+        # Use system message for agent context, clean user message for task
+        messages = []
+        if agent.system_message:
+            messages.append({"role": "system", "content": agent.system_message})
+        messages.append({"role": "user", "content": input_message})
         
         for iteration in range(10):
             with st.spinner(f"🤖 {agent.name} is working..."):

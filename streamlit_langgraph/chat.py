@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from .agent import Agent, AgentManager
-from .core.orchestrator import WorkflowOrchestrator
 from .core.executor import WorkflowExecutor
 from .core.state import StateSynchronizer, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
@@ -85,11 +84,7 @@ class LangGraphChat:
         self.state_manager = StateSynchronizer()
         # Initialize display manager
         self.display_manager = DisplayManager(self.config)
-        # Initialize workflow orchestrator
-        self.workflow_orchestrator = WorkflowOrchestrator(
-            workflow_executor=self.workflow_executor,
-            llm_client=self.llm, config=self.config
-        )
+        # WorkflowExecutor now handles both workflow and single-agent execution
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager)
     
     def create_block(self, category, content=None, filename=None, file_id=None):
@@ -324,8 +319,8 @@ class LangGraphChat:
             """Callback to display agent responses as they complete during workflow execution."""
             self.display_manager.render_workflow_message(msg)
         
-        # Use workflow orchestrator for workflow execution
-        result_state = self.workflow_orchestrator.execute_workflow(
+        # Use WorkflowExecutor directly (orchestrator logic merged in)
+        result_state = self.workflow_executor.execute_workflow(
             self.workflow, display_callback=display_callback
         )
 
@@ -353,9 +348,12 @@ class LangGraphChat:
         """
         file_messages = self.file_handler.get_openai_input_messages()
         
-        # Use workflow orchestrator for single agent execution
-        response = self.workflow_orchestrator.execute_single_agent(
-            agent, prompt, file_messages=file_messages
+        # Use WorkflowExecutor directly (orchestrator logic merged in)
+        response = self.workflow_executor.execute_single_agent(
+            agent, prompt,
+            llm_client=self.llm,
+            config=self.config,
+            file_messages=file_messages
         )
         
         # Update workflow_state with agent response using state manager
