@@ -32,7 +32,6 @@ class WorkflowExecutor:
         Returns:
             Final state after workflow execution (may contain pending_interrupts in metadata)
         """
-        # Use session state if initial_state not provided
         if initial_state is None:
             initial_state = st.session_state.workflow_state
         
@@ -41,16 +40,13 @@ class WorkflowExecutor:
         if "metadata" not in state:
             state["metadata"] = {}
         
-        # Build workflow configuration with thread_id for checkpointing
         configurable = {}
         if "configurable" in state.get("metadata", {}):
             configurable.update(state["metadata"]["configurable"])
         if "thread_id" not in configurable:
             configurable["thread_id"] = str(uuid.uuid4())
         
-        # Store workflow thread_id in state metadata so nodes can access it
         state["metadata"]["workflow_thread_id"] = configurable["thread_id"]
-        
         workflow_config = {"configurable": configurable}
         
         # Setup display callback with deduplication if provided
@@ -66,7 +62,6 @@ class WorkflowExecutor:
         
         Prevents re-displaying old messages when a new question is asked.
         """
-        # Get the last user message ID to only display messages after this point
         last_user_msg_id = None
         workflow_messages = initial_state.get("messages", [])
         for msg in reversed(workflow_messages):
@@ -152,10 +147,7 @@ class WorkflowExecutor:
                        config: Dict[str, Any]) -> WorkflowState:
         """Execute workflow synchronously using invoke() method."""
         final_state = workflow.invoke(initial_state, config=config)
-        
-        # Preserve HITL metadata from initial state
         WorkflowStateManager.preserve_hitl_metadata(initial_state, final_state)
-        
         return final_state
     
     def _execute_streaming(self, workflow: StateGraph, initial_state: WorkflowState, 

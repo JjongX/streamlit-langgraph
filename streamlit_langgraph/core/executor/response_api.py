@@ -86,8 +86,6 @@ class ResponseAPIExecutor(BaseExecutor):
         
         llm_client = AgentManager.get_llm_client(self.agent)
         
-        # Apply decisions to pending tool calls
-        # OpenAI requires a tool response for EVERY tool_call_id, even if rejected
         tool_results = []
         # Process all pending tool calls, using decisions if available
         for i, tool_call_dict in enumerate(self.pending_tool_calls):
@@ -107,13 +105,10 @@ class ResponseAPIExecutor(BaseExecutor):
                 })
                 continue
             elif decision_type == "edit":
-                # Use edited arguments
                 tool_args = decision.get("input", decision.get("edit", {}))
             else:
-                # Approve - use original arguments
                 tool_args = json.loads(tool_call_dict["function"]["arguments"])
             
-            # Execute approved/edited tool
             tool_result = self._execute_tool(tool_name, tool_args)
             tool_results.append({
                 "role": "tool",
@@ -122,7 +117,6 @@ class ResponseAPIExecutor(BaseExecutor):
                 "content": str(tool_result)
             })
         
-        # Get conversation history from workflow_state and clean for Chat Completions API
         messages_with_tools = []
         if messages:
             for msg in messages:
@@ -131,7 +125,6 @@ class ResponseAPIExecutor(BaseExecutor):
                     "role": msg.get("role"),
                     "content": msg.get("content")
                 }
-                # Include tool_calls if present
                 if "tool_calls" in msg:
                     clean_msg["tool_calls"] = msg["tool_calls"]
                 # Include tool_call_id and name for tool messages
@@ -141,10 +134,6 @@ class ResponseAPIExecutor(BaseExecutor):
                     if "name" in msg:
                         clean_msg["name"] = msg["name"]
                 messages_with_tools.append(clean_msg)
-        
-        # Verify we have messages and the last message is an assistant message with tool_calls
-        if not messages_with_tools:
-            raise ValueError("Cannot resume: conversation history is empty")
         
         last_message = messages_with_tools[-1]
         if last_message.get("role") != "assistant" or "tool_calls" not in last_message:
@@ -157,16 +146,11 @@ class ResponseAPIExecutor(BaseExecutor):
                 }
                 messages_with_tools.append(assistant_message)
         
-        # Add tool results (must come after assistant message with tool_calls)
         messages_with_tools.extend(tool_results)
         
-        # Use Chat Completions API for resume (required for HITL with tool results)
-        # Cannot use Responses API because it doesn't support tool messages format
         followup_response = self._call_chat_api(llm_client, messages_with_tools)
-        
         message = followup_response.choices[0].message
         
-        # Check for additional tool calls that need approval
         if message.tool_calls:
             interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
             if interrupt_data:
@@ -193,10 +177,8 @@ class ResponseAPIExecutor(BaseExecutor):
         - Chat Completions API allows us to intercept tool calls before execution
         - We can check which tools need approval and pause for human decision
         """
-        # Build messages from passed conversation history (from workflow_state)
         messages = conversation_messages.copy() if conversation_messages else []
         
-        # Add file messages if provided
         if file_messages:
             messages.extend(file_messages)
         
@@ -208,10 +190,8 @@ class ResponseAPIExecutor(BaseExecutor):
             # Use Chat Completions API for tool interception (required for HITL)
             # Cannot use Responses API because it executes tools automatically
             response = self._call_chat_api(llm_client, messages)
-            
             message = response.choices[0].message
             
-            # Check for tool calls that need approval
             if message.tool_calls:
                 interrupt_data = self._check_tool_calls_for_interrupt(message.tool_calls)
                 if interrupt_data:
@@ -220,20 +200,16 @@ class ResponseAPIExecutor(BaseExecutor):
                     interrupt_response = self._create_interrupt_response(
                         {"action_requests": interrupt_data}, thread_id, config
                     )
-                    # Include the assistant message with tool_calls for caller to add to workflow_state
                     interrupt_response["assistant_message"] = self._message_to_dict(message)
                     return interrupt_response
             
             # No interrupt needed, continue execution
             # If there are tool calls, execute them (for non-interrupted tools)
             if message.tool_calls:
-                # Execute tool calls and continue conversation
                 tool_results = []
                 for tool_call in message.tool_calls:
                     tool_name = tool_call.function.name
                     tool_args = json.loads(tool_call.function.arguments)
-                    
-                    # Execute tool (this should be handled by CustomTool)
                     tool_result = self._execute_tool(tool_name, tool_args)
                     tool_results.append({
                         "role": "tool",
@@ -246,7 +222,6 @@ class ResponseAPIExecutor(BaseExecutor):
                 messages_with_assistant = messages + [self._message_to_dict(message)]
                 messages_with_tools = messages_with_assistant + tool_results
                 followup_response = self._call_chat_api(llm_client, messages_with_tools)
-                
                 final_message = followup_response.choices[0].message
                 content = final_message.content or ""
             else:

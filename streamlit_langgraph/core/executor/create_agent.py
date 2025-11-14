@@ -33,7 +33,6 @@ class CreateAgentExecutor(BaseExecutor):
         super().__init__(agent)
         self.agent_obj = None
         
-        # Build tools configuration from CustomTool registry if not explicitly provided
         if tools is not None:
             self.tools = tools
         else:
@@ -58,13 +57,9 @@ class CreateAgentExecutor(BaseExecutor):
         if self.agent_obj is None:
             self._build_agent(llm_client)
         
-        # Convert workflow_state messages to LangChain message format
         langchain_messages = self._convert_to_langchain_messages(messages, prompt)
-        
-        # Execute with config (empty dict for single-agent, full config for workflow)
         execution_config = config if config is not None else {}
         out = self.agent_obj.invoke({"messages": langchain_messages}, config=execution_config)
-        
         return out
     
     def execute_single_agent(self, llm_client: Any, prompt: str,

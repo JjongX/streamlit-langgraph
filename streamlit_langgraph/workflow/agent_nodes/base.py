@@ -37,15 +37,12 @@ class AgentNodeBase:
         """
         from ...utils import CustomTool  # lazy import to avoid circular import
         
-        # Get or create executor
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
         # Update tools for CreateAgentExecutor if needed
         if hasattr(executor, 'tools') and agent.tools:
             executor.tools = CustomTool.get_langchain_tools(agent.tools)
         
-        # Prepare execution config
-        # Ensure metadata structure exists
         if "metadata" not in state:
             state["metadata"] = {}
         if "executors" not in state["metadata"]:
@@ -54,11 +51,9 @@ class AgentNodeBase:
         # Use workflow's thread_id (set by WorkflowExecutor) - this matches the checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
         if not workflow_thread_id:
-            # Fallback: generate one (shouldn't happen in normal workflow execution)
             workflow_thread_id = str(uuid.uuid4())
             state["metadata"]["workflow_thread_id"] = workflow_thread_id
         
-        # Store executor metadata
         executor_key = f"workflow_executor_{executor.agent.name}"
         state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
         
@@ -80,14 +75,11 @@ class AgentNodeBase:
         if InterruptManager.should_interrupt(result):
             interrupt_data = InterruptManager.extract_interrupt_data(result)
             
-            # If assistant_message is present (from ResponseAPIExecutor), add it to workflow_state
-            # This is needed for resume() to have the complete conversation history
+            # Add assistant_message to workflow_state for resume() to have complete conversation history
             if "assistant_message" in result:
                 assistant_msg = result["assistant_message"]
-                # Ensure the message has an ID
                 if "id" not in assistant_msg:
                     assistant_msg["id"] = str(uuid.uuid4())
-                # Ensure agent name is set
                 if "agent" not in assistant_msg:
                     assistant_msg["agent"] = agent.name
                 # Add to workflow_state messages
@@ -95,7 +87,6 @@ class AgentNodeBase:
                     state["messages"] = []
                 state["messages"].append(assistant_msg)
             
-            # Store interrupt in state
             interrupt_update = InterruptManager.store_interrupt(
                 state=state,
                 agent_name=agent.name,
