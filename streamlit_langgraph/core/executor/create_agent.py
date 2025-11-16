@@ -62,7 +62,7 @@ class CreateAgentExecutor(BaseExecutor):
         out = self.agent_obj.invoke({"messages": langchain_messages}, config=execution_config)
         return out
     
-    def execute_single_agent(self, llm_client: Any, prompt: str,
+    def execute_agent(self, llm_client: Any, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Execute prompt for single-agent mode (non-workflow).

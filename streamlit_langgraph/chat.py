@@ -49,12 +49,18 @@ class LangGraphChat:
             config: Chat configuration
             custom_tools: List of custom tools
         """
+        # Configuration and session state
         self.config = config or UIConfig()
+        self._init_session_state()
+        # Core managers
         self.agent_manager = AgentManager()
+        self.state_manager = StateSynchronizer()
+        self.display_manager = DisplayManager(self.config)
+        # Workflow setup
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor()
         
-        # Initialize agents
+        # Agent and tool setup
         if agents:
             if not workflow and len(agents) > 1:
                 raise ValueError(
@@ -65,31 +71,23 @@ class LangGraphChat:
                 if agent.human_in_loop and not workflow:
                     raise ValueError("Human-in-the-loop is only available for multiagent workflows.")
                 self.agent_manager.add_agent(agent)
-        # Register custom tools
         if custom_tools:
             for tool in custom_tools:
                 CustomTool.register_tool(
                     tool.name, tool.description, tool.function, 
                     parameters=tool.parameters, return_direct=tool.return_direct
                 )
-        # Initialize LLM client from first agent
+        
+        # LLM and file handling
         first_agent = next(iter(self.agent_manager.agents.values()))
         self.llm = AgentManager.get_llm_client(first_agent)
         openai_client = self.llm if hasattr(self.llm, 'files') else None
         self.file_handler = FileHandler(openai_client=openai_client)
-        
-        # Set up client and container_id for file retrieval from code interpreter
         self._client = self.llm if hasattr(self.llm, 'containers') else None
-        # Container ID will be set when executor creates container
         self._container_id = None
-
-        # Initialize session state variables
-        self._init_session_state()
-        # Initialize nessary managers and handlers
-        self.state_manager = StateSynchronizer()
-        self.display_manager = DisplayManager(self.config)
+        
+        # Handlers
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
-    
     
     def _init_session_state(self):
         """Initialize all Streamlit session state variables in one place."""
@@ -329,7 +327,7 @@ class LangGraphChat:
         file_messages = self.file_handler.get_openai_input_messages()
         
         # Use WorkflowExecutor directly (orchestrator logic merged in)
-        response = self.workflow_executor.execute_single_agent(
+        response = self.workflow_executor.execute_agent(
             agent, prompt,
             llm_client=self.llm,
             config=self.config,

@@ -104,7 +104,7 @@ class WorkflowExecutor:
         
         return wrapper
     
-    def execute_single_agent(self, agent: Agent, prompt: str,
+    def execute_agent(self, agent: Agent, prompt: str,
                            llm_client: Any, config: Any,
                            file_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -128,7 +128,7 @@ class WorkflowExecutor:
         executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
         
         if agent.type == "response":
-            response = executor.execute_single_agent(
+            response = executor.execute_agent(
                 llm_client, prompt,
                 stream=config.stream if config else True,
                 file_messages=file_messages,
@@ -136,7 +136,7 @@ class WorkflowExecutor:
             )
             return response
         else:
-            response = executor.execute_single_agent(
+            response = executor.execute_agent(
                 llm_client, prompt,
                 messages=conversation_messages
             )

@@ -16,7 +16,7 @@ class ResponseAPIExecutor(BaseExecutor):
     HITL Handling: Uses a custom `_execute_with_hitl` method that calls `_call_responses_api`
     """
 
-    def execute_single_agent(self, llm_client: Any, prompt: str, stream: bool = False,
+    def execute_agent(self, llm_client: Any, prompt: str, stream: bool = False,
         file_messages: Optional[List] = None,
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -62,8 +62,7 @@ class ResponseAPIExecutor(BaseExecutor):
         input_messages = self._build_input_messages(prompt, file_messages, messages)
         return self._call_responses_api(llm_client, input_messages, stream)
     
-    def resume(self,
-        decisions: List[Dict[str, Any]],
+    def resume(self, decisions: List[Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -234,7 +233,12 @@ class ResponseAPIExecutor(BaseExecutor):
     
     def _call_responses_api(self, llm_client: Any, input_messages: List[Dict[str, Any]], 
                            stream: bool = False) -> Dict[str, Any]:
-        """Call OpenAI Responses API with prepared input messages."""
+        """
+        Call OpenAI Responses API with prepared input messages.
+        
+        It automatically executes tools and returns final results. 
+        This is its core behavior.
+        """
         tools = self._build_tools_config(llm_client)
         api_params = {
             "model": self.agent.model,
@@ -278,7 +282,12 @@ class ResponseAPIExecutor(BaseExecutor):
     
     def _build_input_messages(self, prompt: str, file_messages: Optional[List] = None,
                               messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-        """Build input messages for Responses API from conversation history."""
+        """
+        Build input messages for Responses API from conversation history.
+        
+        It returns tool calls without executing them, 
+        which is why the code uses it for HITL.
+        """
         input_messages = []
         
         # Add conversation history from workflow_state
