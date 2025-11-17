@@ -61,7 +61,9 @@ class HierarchicalPattern:
         if execution_mode != "sequential":
             raise NotImplementedError("Only sequential mode is currently supported for hierarchical workflows")
         if checkpointer is None:
-            checkpointer = MemorySaver()
+            workflow_checkpointer = MemorySaver()
+        else:
+            workflow_checkpointer = checkpointer
         
         graph = StateGraph(WorkflowState)
         
@@ -95,7 +97,7 @@ class HierarchicalPattern:
             graph, top_supervisor, supervisor_teams
         )
         
-        return graph.compile(checkpointer=checkpointer)
+        return graph.compile(checkpointer=workflow_checkpointer)
     
     @staticmethod
     def _add_hierarchical_routing(graph: StateGraph, top_supervisor: Agent, 

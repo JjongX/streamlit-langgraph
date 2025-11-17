@@ -11,7 +11,9 @@ class ResponseAPIExecutor(BaseExecutor):
     
     Uses OpenAI's Responses API which automatically executes tools and returns final results.
     Supports file messages, code interpreter, web search, and image generation tools.
-    HITL Handling: Delegates to CreateAgentExecutor for clean HITL support with custom tools.
+    
+    HITL Handling: This executor does NOT support HITL (Human-in-the-Loop).
+    This is because Responses API cannot intercept tool calls (auto-executes tools).
     """
 
     def execute_agent(self, llm_client: Any, prompt: str, stream: bool = False,
@@ -55,49 +57,8 @@ class ResponseAPIExecutor(BaseExecutor):
         """
         config, thread_id = self._prepare_workflow_config(config)
         
-        # If HITL is enabled, delegate to CreateAgentExecutor for clean HITL support
-        if self.agent.human_in_loop and self.agent.interrupt_on:
-            from .create_agent import CreateAgentExecutor
-            from ...utils import CustomTool
-            
-            # Create CreateAgentExecutor with custom tools for HITL
-            hitl_executor = CreateAgentExecutor(
-                self.agent,
-                tools=CustomTool.get_langchain_tools(self.agent.tools) if self.agent.tools else []
-            )
-            return hitl_executor.execute_workflow(llm_client, prompt, config, messages)
-        
-        # Normal execution: use Responses API for native OpenAI features
         input_messages = self._build_input_messages(prompt, file_messages, messages)
         return self._call_responses_api(llm_client, input_messages, stream)
-    
-    def resume(self, decisions: List[Dict[str, Any]],
-        config: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        """
-        Resume execution after human approval/rejection.
-        
-        Delegates to CreateAgentExecutor for HITL support.
-        
-        Args:
-            decisions: List of decision dicts with 'type' ('approve', 'reject', 'edit') and optional 'edit' content
-            config: Execution config with thread_id
-            messages: Conversation history from workflow_state
-            
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if more approvals needed
-        """
-        if not self.agent.human_in_loop:
-            raise ValueError("Cannot resume: human-in-the-loop not enabled")
-        
-        from .create_agent import CreateAgentExecutor
-        from ...utils import CustomTool
-        # Create CreateAgentExecutor with custom tools for HITL
-        hitl_executor = CreateAgentExecutor(
-            self.agent,
-            tools=CustomTool.get_langchain_tools(self.agent.tools) if self.agent.tools else []
-        )
-        return hitl_executor.resume(decisions, config, messages)
     
     def _call_responses_api(self, llm_client: Any, input_messages: List[Dict[str, Any]], 
                            stream: bool = False) -> Dict[str, Any]:
@@ -155,7 +116,7 @@ class ResponseAPIExecutor(BaseExecutor):
             input_messages.append({"role": "user", "content": prompt})
         
         return input_messages
-    
+        
     def _build_tools_config(self, llm_client) -> List[Dict[str, Any]]:
         """Build tools configuration based on agent capabilities."""
         tools = []

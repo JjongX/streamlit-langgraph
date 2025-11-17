@@ -83,14 +83,41 @@ class BaseExecutor:
 class ExecutorRegistry:
     
     def _create_executor(self, agent: Agent, tools: Optional[list] = None) -> Any:
-        """Create appropriate executor for the agent."""
+        """
+        Create appropriate executor for the agent.
+        
+        Executor Selection Logic:
+        - type="agent" → CreateAgentExecutor (supports HITL)
+        - type="response" → ResponseAPIExecutor (no HITL support)
+        - type="response" + HITL enabled → Error (must use type="agent" for HITL)
+        """
         # Lazy imports to avoid circular import
         from .create_agent import CreateAgentExecutor
         from .response_api import ResponseAPIExecutor
 
-        if agent.provider.lower() == "openai" and agent.type == "response":
-            return ResponseAPIExecutor(agent)
-        return CreateAgentExecutor(agent, tools=tools)
+        if agent.type == "response" and agent.human_in_loop and agent.interrupt_on:
+            raise ValueError(
+                f"Agent '{agent.name}' has type='response' but HITL is enabled. "
+                "Responses API cannot intercept tool calls, so HITL requires LangChain. "
+                "Please change the agent type to 'agent' in your configuration to enable HITL support."
+            )
+        
+        if agent.type == "agent":
+            return CreateAgentExecutor(agent, tools=tools)
+        if agent.type == "response":
+            if agent.provider.lower() == "openai":
+                return ResponseAPIExecutor(agent)
+            else:
+                raise ValueError(
+                    f"Agent '{agent.name}' has type='response' but provider is '{agent.provider}'. "
+                    "ResponseAPIExecutor only supports OpenAI. "
+                    "Please change the agent type to 'agent' for other providers."
+                )
+        
+        raise ValueError(
+            f"Agent '{agent.name}' has invalid type='{agent.type}'. "
+            "Type must be either 'agent' or 'response'."
+        )
     
     def get_or_create(self, agent: Agent, executor_type: str = "workflow",
         tools: Optional[list] = None) -> Any:

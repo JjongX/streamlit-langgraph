@@ -143,6 +143,7 @@ class HandoffDelegation:
         state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
         
         # Use clean input_message (agent context comes from system_message)
+        # Use the same thread_id as workflow checkpointer - safe because they're separate instances
         config = {"configurable": {"thread_id": workflow_thread_id}}
         
         with st.spinner(f"🤖 {agent.name} is working..."):

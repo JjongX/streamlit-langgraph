@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.types import Command
 
@@ -100,7 +101,7 @@ class CreateAgentExecutor(BaseExecutor):
             Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if HITL is active
         """
         try:
-            config, thread_id = self._prepare_workflow_config(config)
+            config, workflow_thread_id = self._prepare_workflow_config(config)
             
             # Build agent if not already built (needed for interrupt detection)
             if self.agent_obj is None:
@@ -113,14 +114,14 @@ class CreateAgentExecutor(BaseExecutor):
             if self.agent.human_in_loop and self.agent.interrupt_on:
                 interrupt_data = self._detect_interrupt_in_stream(config, langchain_messages)
                 if interrupt_data:
-                    return self._create_interrupt_response(interrupt_data, thread_id, config)
+                    return self._create_interrupt_response(interrupt_data, workflow_thread_id, config)
             
             # Execute normally if no interrupt detected
             out = self._invoke_agent(llm_client, prompt, messages, config=config)
             
             # Check for interrupt in output
             if isinstance(out, dict) and "__interrupt__" in out:
-                return self._create_interrupt_response(out["__interrupt__"], thread_id, config)
+                return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
             
             result_text = self._extract_response_text(out)
             return {"role": "assistant", "content": result_text, "agent": self.agent.name}
@@ -135,7 +136,7 @@ class CreateAgentExecutor(BaseExecutor):
         
         Args:
             decisions: List of decision dicts with 'type' ('approve', 'reject', 'edit') and optional 'edit' content
-            config: Execution config with thread_id
+            config: Execution config with thread_id (workflow_thread_id)
             messages: Conversation history from workflow_state (unified message-based approach)
             
         Returns:
@@ -144,7 +145,7 @@ class CreateAgentExecutor(BaseExecutor):
         if not self.agent.human_in_loop or not self.agent_obj:
             raise ValueError("Cannot resume: human-in-the-loop not enabled or agent not initialized")
         
-        config, thread_id = self._prepare_workflow_config(config)
+        config, workflow_thread_id = self._prepare_workflow_config(config)
         
         # The checkpointer should have the history, but we ensure consistency
         resume_command = Command(resume={"decisions": decisions})
@@ -152,7 +153,7 @@ class CreateAgentExecutor(BaseExecutor):
         
         # Check for additional interrupts
         if isinstance(out, dict) and "__interrupt__" in out:
-            return self._create_interrupt_response(out["__interrupt__"], thread_id, config)
+            return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
         
         result_text = self._extract_response_text(out)
         return {"role": "assistant", "content": result_text, "agent": self.agent.name}
@@ -177,9 +178,14 @@ class CreateAgentExecutor(BaseExecutor):
         if middleware:
             agent_kwargs["middleware"] = middleware
         
-        # Note: Checkpointer is now handled at workflow level, not executor level
-        # The workflow checkpointer persists the entire workflow_state automatically
+        # This is separate from the workflow checkpointer (different MemorySaver instance)
+        # Using the same thread_id is safe because each checkpointer maintains its own namespace
+        if self.agent.human_in_loop and self.agent.interrupt_on:
+            agent_checkpointer = MemorySaver()
+            agent_kwargs["checkpointer"] = agent_checkpointer
+        
         self.agent_obj = create_agent(**agent_kwargs)
+        
         return self.agent_obj
         
     def _detect_interrupt_in_stream(self, 
