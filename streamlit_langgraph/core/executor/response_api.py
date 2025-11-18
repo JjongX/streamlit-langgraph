@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
+from ...utils import MCPToolManager
 from .registry import BaseExecutor
 
 
@@ -10,10 +11,9 @@ class ResponseAPIExecutor(BaseExecutor):
     Executor for OpenAI Responses API.
     
     Uses OpenAI's Responses API which automatically executes tools and returns final results.
-    Supports file messages, code interpreter, web search, and image generation tools.
+    Supports file messages, code interpreter, web search, image generation, and MCP tools.
     
-    HITL Handling: This executor does NOT support HITL (Human-in-the-Loop).
-    This is because Responses API cannot intercept tool calls (auto-executes tools).
+    Does NOT support HITL (Human-in-the-Loop) because Responses API cannot intercept tool calls.
     """
 
     def execute_agent(self, llm_client: Any, prompt: str, stream: bool = False,
@@ -120,6 +120,8 @@ class ResponseAPIExecutor(BaseExecutor):
     def _build_tools_config(self, llm_client) -> List[Dict[str, Any]]:
         """Build tools configuration based on agent capabilities."""
         tools = []
+        
+        # Add native OpenAI tools
         if self.agent.allow_code_interpreter:
             container = llm_client.containers.create(name=f"streamlit-{self.agent.name}")
             self.agent.container_id = container.id
@@ -128,6 +130,14 @@ class ResponseAPIExecutor(BaseExecutor):
             tools.append({"type": "web_search"})
         if self.agent.allow_image_generation:
             tools.append({"type": "image_generation", "partial_images": 3})
+        
+        # Add MCP tools if configured
+        if self.agent.mcp_servers:
+            mcp_manager = MCPToolManager()
+            mcp_manager.add_servers(self.agent.mcp_servers)
+            mcp_tools = mcp_manager.get_openai_tools()
+            tools.extend(mcp_tools)
+        
         return tools
 
     def _extract_response_content(self, response) -> str:

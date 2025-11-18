@@ -102,6 +102,17 @@ class ExecutorRegistry:
                 "Please change the agent type to 'agent' in your configuration to enable HITL support."
             )
         
+        if agent.type == "response" and agent.mcp_servers:
+            stdio_servers = [
+                name for name, config in agent.mcp_servers.items()
+                if config.get("transport", "stdio") == "stdio"
+            ]
+            if stdio_servers:
+                raise ValueError(
+                    f"Agent '{agent.name}' has type='response' but uses stdio MCP servers: {', '.join(stdio_servers)}. "
+                    "Responses API only supports HTTP/SSE transport. Use type='agent' for stdio MCP servers."
+                )
+        
         if agent.type == "agent":
             return CreateAgentExecutor(agent, tools=tools)
         if agent.type == "response":
@@ -141,10 +152,16 @@ class ExecutorRegistry:
         else:
             executor = st.session_state.agent_executors[executor_key]
             
-            # Update tools for CreateAgentExecutor if needed
-            if hasattr(executor, 'tools') and agent.tools:
-                from ...utils import CustomTool # lazy import to avoid circular import
-                executor.tools = CustomTool.get_langchain_tools(agent.tools)
+            if hasattr(executor, 'tools'):
+                from ...utils import CustomTool, MCPToolManager
+                
+                custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+                mcp_tools = []
+                if agent.mcp_servers:
+                    mcp_manager = MCPToolManager()
+                    mcp_manager.add_servers(agent.mcp_servers)
+                    mcp_tools = mcp_manager.get_tools()
+                executor.tools = custom_tools + mcp_tools
         
         return executor
     

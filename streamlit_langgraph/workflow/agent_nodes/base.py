@@ -35,13 +35,18 @@ class AgentNodeBase:
         Returns:
             Agent response content as string (empty string if interrupted)
         """
-        from ...utils import CustomTool  # lazy import to avoid circular import
+        from ...utils import CustomTool, MCPToolManager  # lazy import to avoid circular import
         
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
-        # Update tools for CreateAgentExecutor if needed
-        if hasattr(executor, 'tools') and agent.tools:
-            executor.tools = CustomTool.get_langchain_tools(agent.tools)
+        if hasattr(executor, 'tools'):
+            custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+            mcp_tools = []
+            if agent.mcp_servers:
+                mcp_manager = MCPToolManager()
+                mcp_manager.add_servers(agent.mcp_servers)
+                mcp_tools = mcp_manager.get_tools()
+            executor.tools = custom_tools + mcp_tools
         
         if "metadata" not in state:
             state["metadata"] = {}

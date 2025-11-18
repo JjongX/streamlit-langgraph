@@ -37,8 +37,15 @@ class CreateAgentExecutor(BaseExecutor):
         if tools is not None:
             self.tools = tools
         else:
-            from ...utils import CustomTool  # lazy import to avoid circular import
-            self.tools = CustomTool.get_langchain_tools(self.agent.tools) if self.agent.tools else []
+            from ...utils import CustomTool, MCPToolManager
+            
+            custom_tools = CustomTool.get_langchain_tools(self.agent.tools) if self.agent.tools else []
+            mcp_tools = []
+            if self.agent.mcp_servers:
+                mcp_manager = MCPToolManager()
+                mcp_manager.add_servers(self.agent.mcp_servers)
+                mcp_tools = mcp_manager.get_tools()
+            self.tools = custom_tools + mcp_tools
     
     def _invoke_agent(self, llm_client: Any, prompt: str, 
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -231,7 +238,8 @@ class CreateAgentExecutor(BaseExecutor):
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 
-                if not content: continue  # Skip empty messages
+                if not content:
+                    continue  # Skip empty messages
                 
                 if role == "user":
                     langchain_messages.append(HumanMessage(content=content))

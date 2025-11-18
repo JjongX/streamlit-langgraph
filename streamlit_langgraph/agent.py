@@ -29,6 +29,7 @@ class Agent:
     allow_web_search: bool = False
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
+    mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None  # MCP server configurations
     context: Optional[str] = "least"  # Context mode: "full", "summary", or "least"
     human_in_loop: bool = False  # Enable human-in-the-loop approval (multiagent workflows only)
     interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None  # Tool names to interrupt on
@@ -67,6 +68,7 @@ class Agent:
             "allow_web_search": self.allow_web_search,
             "allow_image_generation": self.allow_image_generation,
             "tools": self.tools,
+            "mcp_servers": self.mcp_servers,
             "human_in_loop": self.human_in_loop,
             "interrupt_on": self.interrupt_on,
             "hitl_description_prefix": self.hitl_description_prefix,
