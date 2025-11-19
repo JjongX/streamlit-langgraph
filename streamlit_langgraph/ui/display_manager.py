@@ -115,7 +115,6 @@ class Section:
                  else self.display_manager.config.assistant_avatar)
         with self.delta_generator:
             with st.chat_message(self.role, avatar=avatar):
-                # Render all blocks
                 for block in self.blocks:
                     block.write()
                 # Show agent name if available
@@ -127,13 +126,11 @@ class Section:
     
     def _save_to_session_state(self) -> None:
         """Save section data to session state for persistence."""
-        if "display_sections" not in st.session_state:
-            st.session_state.display_sections = []
-        
         section_data = {
             "role": self.role,
             "blocks": [],
-            "agent_info": getattr(self, '_agent_info', {})
+            "agent_info": getattr(self, '_agent_info', {}),
+            "message_id": getattr(self, '_message_id', None)
         }
         
         for block in self.blocks:
@@ -184,9 +181,8 @@ class DisplayManager:
         self._sections.append(section)
         return section
     
-    def render_message_history(self, messages: List[Dict[str, Any]]) -> None:
+    def render_message_history(self) -> None:
         """Render historical messages from session state."""
-        # Render sections directly in order - no matching needed
         display_sections = st.session_state.get("display_sections", [])
         
         for section_data in display_sections:
@@ -194,10 +190,8 @@ class DisplayManager:
                      else self.config.assistant_avatar)
             
             with st.chat_message(section_data["role"], avatar=avatar):
-                # Render all blocks in order
                 for block_data in section_data.get("blocks", []):
                     category = block_data.get("category")
-                    
                     if category == "text":
                         st.markdown(block_data.get("content", ""))
                     elif category == "image":
@@ -243,9 +237,10 @@ class DisplayManager:
         if not msg_id:
             return False
         
-        # Check if already displayed
-        session_message_ids = {msg.get("id") for msg in st.session_state.messages if msg.get("id")}
-        if msg_id in session_message_ids:
+        # Check if already displayed using display_sections
+        display_sections = st.session_state.get("display_sections", [])
+        displayed_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
+        if msg_id in displayed_ids:
             return False
         
         # Only render assistant messages with valid agents
@@ -255,18 +250,9 @@ class DisplayManager:
             
             section = self.add_section("assistant")
             section._agent_info = {"agent": message.get("agent", "Assistant")}
+            section._message_id = msg_id
             section.update("text", message.get("content", ""))
             section.stream()
-            
-            # Add to session_state immediately to prevent duplicates on reruns
-            session_msg = {
-                "id": msg_id,
-                "role": message.get("role"),
-                "content": message.get("content", "")
-            }
-            if "agent" in message:
-                session_msg["agent"] = message["agent"]
-            st.session_state.messages.append(session_msg)
             
             return True
         

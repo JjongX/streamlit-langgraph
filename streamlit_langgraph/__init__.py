@@ -11,9 +11,9 @@ __all__ = [
     # UI components (chat.py)
     "UIConfig",
     "LangGraphChat",
-    # Workflow builders (workflow)
+    # Workflow builders (workflow/builder.py)
     "WorkflowBuilder",
-    # Tools (utils)
+    # Tools (utils/custom_tool.py)
     "CustomTool",
     # Version
     "__version__",

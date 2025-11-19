@@ -192,7 +192,7 @@ class HITLHandler:
     Uses HITLUtils for data transformation utilities.
     """
     
-    def __init__(self, agent_manager, config, state_manager):
+    def __init__(self, agent_manager, config, state_manager, display_manager):
         """
         Initialize interrupt handler with dependencies.
         
@@ -200,10 +200,12 @@ class HITLHandler:
             agent_manager: AgentManager instance for accessing agents
             config: UIConfig instance for UI settings
             state_manager: StateSynchronizer instance for state management
+            display_manager: DisplayManager instance for rendering messages
         """
         self.agent_manager = agent_manager
         self.config = config
         self.state_manager = state_manager
+        self.display_manager = display_manager
     
     def handle_pending_interrupts(self, workflow_state: Dict[str, Any]) -> bool:
         """
@@ -287,7 +289,8 @@ class HITLHandler:
             CreateAgentExecutor or ResponseAPIExecutor instance or None
         """
         registry = ExecutorRegistry()
-        executor = registry.get(agent_name, executor_type="workflow")
+        executor_key = f"workflow_executor_{agent_name}"
+        executor = st.session_state.agent_executors.get(executor_key)
         if executor is None:
             agent = self.agent_manager.agents.get(agent_name)
             if agent:
@@ -357,6 +360,12 @@ class HITLHandler:
                 resume_response["content"],
                 agent_name
             )
+            
+            # Render the message using the same method as workflow execution
+            workflow_messages = workflow_state.get("messages", [])
+            if workflow_messages:
+                last_msg = workflow_messages[-1]
+                self.display_manager.render_workflow_message(last_msg)
         
         HITLUtils.clear_interrupt_and_decisions(workflow_state, executor_key)
         

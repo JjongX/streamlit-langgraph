@@ -21,6 +21,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Supervisor Parallel](#supervisor-parallel)
   - [Hierarchical Workflow](#hierarchical-workflow)
   - [Human-in-the-Loop](#human-in-the-loop)
+  - [MCP Tools](#mcp-tools)
 - [Core Concepts](#core-concepts)
   - [Agent Configuration](#agent-configuration)
   - [Workflow Patterns](#workflow-patterns)
@@ -28,6 +29,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Context Modes](#context-modes)
   - [Human-in-the-Loop](#human-in-the-loop-hitl)
   - [Custom Tools](#custom-tools)
+  - [MCP (Model Context Protocol)](#mcp-model-context-protocol)
 - [Configuration](#configuration)
   - [Agent Configuration Files](#agent-configuration-files)
   - [UI Configuration](#ui-configuration)
@@ -216,6 +218,31 @@ streamlit run examples/human_in_the_loop_example.py
 - Sentiment analysis example
 - Review escalation with edit capability
 
+### MCP Tools
+
+**File**: `examples/mcp_example.py`
+
+Demonstrates integration with MCP (Model Context Protocol) servers to access external tools and resources.
+
+```bash
+streamlit run examples/mcp_example.py
+```
+
+**Prerequisites**:
+```bash
+pip install fastmcp langchain-mcp-adapters
+```
+
+**Features**:
+- Connect to MCP servers via stdio or HTTP transport
+- Access tools from external MCP servers
+- Support for both `type="agent"` and `type="response"` executors
+- Example MCP servers included (math, weather)
+
+**MCP Server Examples**:
+- `examples/mcp_servers/math_server.py` - Math operations (add, multiply, subtract, divide)
+- `examples/mcp_servers/weather_server.py` - Weather information
+
 ## Core Concepts
 
 ### Agent Configuration
@@ -234,6 +261,7 @@ agent = slg.Agent(
     model="gpt-4.1-mini",       # Model name
     temperature=0.0,             # Response randomness
     tools=["tool1", "tool2"],   # Available tools
+    mcp_servers={...},          # MCP server configurations
     context="full",              # Context mode
     human_in_loop=True,          # Enable HITL
     interrupt_on={...}           # HITL configuration
@@ -454,6 +482,176 @@ agent = slg.Agent(
     }
 )
 ```
+
+### MCP (Model Context Protocol)
+
+MCP (Model Context Protocol) is an open protocol for standardizing how applications provide tools and context to LLMs. This package supports connecting to MCP servers to access external tools and resources.
+
+#### **What is MCP?**
+
+MCP enables LLMs to interact with external systems through a standardized interface. MCP servers expose tools, resources, and prompts that agents can use, making it easy to integrate with databases, APIs, file systems, and other services.
+
+#### **Transport Types**
+
+MCP servers can communicate via different transport protocols:
+
+1. **STDIO Transport** (Default)
+   - Communicates through standard input/output
+   - Perfect for local development and command-line tools
+   - Works with `type="agent"` only
+   - Each client spawns a new server process
+
+2. **HTTP Transport (streamable_http)**
+   - Network-accessible web service
+   - Supports multiple concurrent clients
+   - Works with both `type="agent"` and `type="response"`
+   - **For `type="response"`**: Server must be publicly accessible (not localhost)
+
+3. **SSE Transport** (Legacy)
+   - Server-Sent Events transport
+   - Backward compatibility only
+   - Use HTTP transport for new projects
+
+#### **Configuring MCP Servers**
+
+Configure MCP servers in your agent:
+
+```python
+import streamlit_langgraph as slg
+import os
+
+# STDIO transport (for type="agent")
+mcp_servers = {
+    "math": {
+        "transport": "stdio",
+        "command": "python",
+        "args": [os.path.join("mcp_servers", "math_server.py")]
+    }
+}
+
+# HTTP transport (for type="agent" or type="response")
+# Note: For type="response", server must be publicly accessible
+mcp_servers = {
+    "math": {
+        "transport": "http",  # or "streamable_http" (both accepted)
+        "url": "http://your-server.com:8000/mcp"  # Public URL required for type="response"
+    }
+}
+
+agent = slg.Agent(
+    name="calculator",
+    role="Calculator",
+    instructions="Use MCP tools to perform calculations",
+    type="agent",  # Use "agent" for stdio, "agent" or "response" for HTTP
+    provider="openai",
+    model="gpt-4o-mini",
+    mcp_servers=mcp_servers
+)
+```
+
+#### **Creating MCP Servers**
+
+Use FastMCP to create MCP servers:
+
+```python
+# math_server.py
+from fastmcp import FastMCP
+
+mcp = FastMCP("Math")
+
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers"""
+    return a + b
+
+@mcp.tool()
+def multiply(a: int, b: int) -> int:
+    """Multiply two numbers"""
+    return a * b
+
+if __name__ == "__main__":
+    mcp.run()  # STDIO transport (default)
+    # Or: mcp.run(transport="http", port=8000)  # HTTP transport
+```
+
+**Running MCP Servers**:
+
+```bash
+# Using FastMCP CLI (recommended)
+fastmcp run math_server.py
+
+# Using FastMCP CLI with HTTP transport
+fastmcp run math_server.py --transport http
+
+# Using Python directly
+python math_server.py  # STDIO
+python math_server.py --transport http --port 8000  # HTTP
+```
+
+#### **Transport Compatibility**
+
+| Transport | `type="agent"` | `type="response"` | Notes |
+|-----------|----------------|-------------------|-------|
+| **stdio** | ✅ Supported | ❌ Not supported | Local only, works with LangChain |
+| **http** | ✅ Supported | ✅ Supported* | *Requires public URL for `type="response"` |
+| **sse** | ✅ Supported | ✅ Supported* | Legacy, use HTTP instead |
+
+**Important Notes**:
+- `type="response"` (Responses API) requires MCP servers to be **publicly accessible**
+- OpenAI's servers connect to your MCP server, so `localhost` won't work
+- For local testing with `type="response"`, use a tunnel service (ngrok) or deploy publicly
+- For local development, use `type="agent"` with stdio or HTTP transport
+
+#### **Example: Local Development**
+
+```python
+# Use stdio transport with type="agent" for local development
+mcp_servers = {
+    "math": {
+        "transport": "stdio",
+        "command": "python",
+        "args": ["math_server.py"]
+    }
+}
+
+agent = slg.Agent(
+    name="calculator",
+    type="agent",  # Required for stdio transport
+    mcp_servers=mcp_servers
+)
+```
+
+#### **Example: Production Deployment**
+
+```python
+# Use HTTP transport with public URL
+mcp_servers = {
+    "math": {
+        "transport": "http",
+        "url": "https://your-mcp-server.com/mcp"  # Public URL
+    }
+}
+
+agent = slg.Agent(
+    name="calculator",
+    type="response",  # Can use response API with public URL
+    mcp_servers=mcp_servers
+)
+```
+
+#### **MCP Server Requirements**
+
+For `type="response"` with HTTP transport:
+1. MCP server must be publicly accessible (not localhost)
+2. Server should bind to `0.0.0.0` (not `127.0.0.1`) to accept external connections
+3. Security groups/firewalls must allow inbound traffic
+4. Use HTTPS for production deployments
+
+#### **Resources**
+
+- [FastMCP Documentation](https://gofastmcp.com/)
+- [MCP Specification](https://modelcontextprotocol.io/)
+- [LangChain MCP Integration](https://docs.langchain.com/oss/python/langchain/mcp)
 
 ## Configuration
 

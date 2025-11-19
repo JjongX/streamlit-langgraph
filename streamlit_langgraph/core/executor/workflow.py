@@ -70,9 +70,8 @@ class WorkflowExecutor:
                 break
         
         # Track which messages have already been displayed to prevent duplicates
-        displayed_message_ids = set()
-        if "messages" in st.session_state:
-            displayed_message_ids = {msg.get("id") for msg in st.session_state.messages if msg.get("id")}
+        display_sections = st.session_state.get("display_sections", [])
+        displayed_message_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
         
         def wrapper(state: WorkflowState):
             """Display callback wrapper with deduplication logic."""
@@ -105,7 +104,7 @@ class WorkflowExecutor:
         
         return wrapper
     
-    def execute_single_agent(self, agent: Agent, prompt: str,
+    def execute_agent(self, agent: Agent, prompt: str,
                            llm_client: Any, config: Any,
                            file_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -129,7 +128,7 @@ class WorkflowExecutor:
         executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
         
         if agent.type == "response":
-            response = executor.execute_single_agent(
+            response = executor.execute_agent(
                 llm_client, prompt,
                 stream=config.stream if config else True,
                 file_messages=file_messages,
@@ -137,7 +136,7 @@ class WorkflowExecutor:
             )
             return response
         else:
-            response = executor.execute_single_agent(
+            response = executor.execute_agent(
                 llm_client, prompt,
                 messages=conversation_messages
             )

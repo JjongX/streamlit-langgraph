@@ -42,7 +42,9 @@ class SupervisorPattern:
         if delegation_mode not in ("handoff", "tool_calling"):
             raise ValueError(f"delegation_mode must be 'handoff' or 'tool_calling', got '{delegation_mode}'")
         if checkpointer is None:
-            checkpointer = MemorySaver()
+            workflow_checkpointer = MemorySaver()
+        else:
+            workflow_checkpointer = checkpointer
     
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":
@@ -54,7 +56,7 @@ class SupervisorPattern:
             graph.add_node(supervisor_agent.name, calling_node)
             graph.add_edge(START, supervisor_agent.name)
             graph.add_edge(supervisor_agent.name, END)
-            return graph.compile(checkpointer=checkpointer)
+            return graph.compile(checkpointer=workflow_checkpointer)
         
         # Handoff mode - multiple nodes, structural handoff
         graph = StateGraph(WorkflowState)
@@ -69,14 +71,14 @@ class SupervisorPattern:
 
         if execution_mode == "sequential":
             return SupervisorPattern._create_sequential_supervisor_workflow(
-                graph, supervisor_agent, worker_agents, checkpointer)
+                graph, supervisor_agent, worker_agents, workflow_checkpointer)
         else: # parallel
             return SupervisorPattern._create_parallel_supervisor_workflow(
-                graph, supervisor_agent, worker_agents, checkpointer)
+                graph, supervisor_agent, worker_agents, workflow_checkpointer)
     
     @staticmethod
     def _create_sequential_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
-                                             worker_agents: List[Agent], checkpointer: Optional[Any] = None) -> StateGraph:
+                                             worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
         """
         Create sequential supervisor workflow.
         
@@ -116,11 +118,11 @@ class SupervisorPattern:
         for worker in worker_agents:
             graph.add_edge(worker.name, supervisor_agent.name)
         
-        return graph.compile(checkpointer=checkpointer)
+        return graph.compile(checkpointer=workflow_checkpointer)
 
     @staticmethod
     def _create_parallel_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
-                                           worker_agents: List[Agent], checkpointer: Optional[Any] = None) -> StateGraph:
+                                           worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
         """
         Create parallel supervisor workflow.
         
@@ -153,5 +155,5 @@ class SupervisorPattern:
             graph.add_edge("parallel_fanout", worker.name)
             graph.add_edge(worker.name, supervisor_agent.name)
         
-        return graph.compile(checkpointer=checkpointer)
+        return graph.compile(checkpointer=workflow_checkpointer)
     

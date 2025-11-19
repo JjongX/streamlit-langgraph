@@ -12,27 +12,9 @@ from ..prompts import ToolCallingPromptBuilder
 
 
 class ToolCallingDelegation:
-    
+
     @staticmethod
-    def _create_agent_tools(tool_agents: List[Agent], state: WorkflowState) -> List[Dict[str, Any]]:
-        """Create OpenAI function tool definitions for each agent."""
-        return [{
-            "type": "function",
-            "function": {
-                "name": agent.name,
-                "description": f"{agent.role}. {agent.instructions}",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "task": {"type": "string", "description": f"Clear description of the task for {agent.name} to perform. Be specific about what you need."}
-                    },
-                    "required": ["task"]
-                }
-            }
-        } for agent in tool_agents]
-    
-    @staticmethod
-    def _execute_agent_with_tools(agent: Agent, state: WorkflowState, 
+    def execute_agent_with_tools(agent: Agent, state: WorkflowState, 
                                   input_message: str, tools: List[Dict[str, Any]],
                                   tool_agents_map: Dict[str, Agent]) -> str:
         """Execute an agent with access to tools (other agents wrapped as tools)."""
@@ -91,3 +73,21 @@ class ToolCallingDelegation:
         )
         return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)
 
+    @staticmethod
+    def create_agent_tools(tool_agents: List[Agent], state: WorkflowState) -> List[Dict[str, Any]]:
+        """Create OpenAI function tool definitions for each agent."""
+        return [{
+            "type": "function",
+            "function": {
+                "name": agent.name,
+                "description": f"{agent.role}. {agent.instructions}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": f"Clear description of the task for {agent.name} to perform. Be specific about what you need."}
+                    },
+                    "required": ["task"]
+                }
+            }
+        } for agent in tool_agents]
+    
