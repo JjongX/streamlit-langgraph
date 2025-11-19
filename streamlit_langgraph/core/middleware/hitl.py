@@ -391,6 +391,7 @@ class HITLHandler:
         agent_interrupt_on = getattr(executor.agent, 'interrupt_on', None)
         allow_edit = HITLUtils.check_edit_allowed(agent_interrupt_on, tool_name)
         
+        # remove these three functions and just use the handle decision function
         def handle_approve():
             self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "approve"})
         

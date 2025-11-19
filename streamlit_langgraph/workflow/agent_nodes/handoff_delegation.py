@@ -1,6 +1,7 @@
 # Handoff delegation pattern implementation for agent nodes.
 
 import json
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
@@ -105,7 +106,6 @@ class HandoffDelegation:
         # Use workflow's thread_id (from state metadata) to match checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
         if not workflow_thread_id:
-            import uuid
             workflow_thread_id = str(uuid.uuid4())
             state["metadata"]["workflow_thread_id"] = workflow_thread_id
         
@@ -124,7 +124,7 @@ class HandoffDelegation:
             if executor.agent.human_in_loop and executor.agent.interrupt_on:
                 # Convert input_message to LangChain message format
                 langchain_messages = [HumanMessage(content=input_message)]
-                interrupt_data = executor._detect_interrupt_in_stream(config, langchain_messages)
+                interrupt_data = executor.detect_interrupt_in_stream(config, langchain_messages)
             
             if interrupt_data:
                 result = executor._create_interrupt_response(interrupt_data, workflow_thread_id, config)

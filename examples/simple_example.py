@@ -10,9 +10,9 @@ def main():
         model="gpt-4.1-mini",
         temperature=0.7,
         # Native OpenAI tools are automatically handled via Responses API when enabled
-        allow_file_search=True,
-        allow_code_interpreter=True,
-        allow_web_search=True,
+        # allow_file_search=True,
+        # allow_code_interpreter=True,
+        # allow_web_search=True,
     )
     # Create UI configuration
     config = slg.UIConfig(

@@ -9,10 +9,9 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langgraph.types import Command
 
 from ...agent import Agent
-from .registry import BaseExecutor
 
 
-class CreateAgentExecutor(BaseExecutor):
+class CreateAgentExecutor:
     """
     Executor that builds LangChain agents using `create_agent`.
     
@@ -31,7 +30,7 @@ class CreateAgentExecutor(BaseExecutor):
             agent: Agent configuration
             tools: Optional list of LangChain tools
         """
-        super().__init__(agent)
+        self.agent = agent
         self.agent_obj = None
         
         if tools is not None:
@@ -47,68 +46,6 @@ class CreateAgentExecutor(BaseExecutor):
                 mcp_tools = mcp_manager.get_tools()
             self.tools = custom_tools + mcp_tools
     
-    def _invoke_agent(self, llm_client: Any, prompt: str,
-        file_messages: Optional[List] = None,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        config: Optional[Dict[str, Any]] = None) -> Any:
-        """
-        Invoke the agent (non-streaming).
-        
-        Uses LangChain's create_agent which handles both ChatCompletion and Responses API
-        automatically when use_responses_api=True is set on the ChatOpenAI model.
-        
-        Args:
-            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
-            prompt: User's question/prompt
-            file_messages: Optional file messages (OpenAI format)
-            messages: Conversation history from workflow_state
-            config: Optional execution config (for workflows)
-            
-        Returns:
-            Agent output (dict or other format)
-        """
-        if self.agent_obj is None:
-            self._build_agent(llm_client)
-        
-        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
-        execution_config = config if config is not None else {}
-        out = self.agent_obj.invoke({"messages": langchain_messages}, config=execution_config)
-        return out
-    
-    def _invoke_agent_stream(self, llm_client: Any, prompt: str,
-        file_messages: Optional[List] = None,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Invoke the agent with streaming support.
-        
-        Uses LangChain's create_agent which handles both ChatCompletion and Responses API
-        automatically when use_responses_api=True is set on the ChatOpenAI model.
-        
-        Args:
-            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
-            prompt: User's question/prompt
-            file_messages: Optional file messages (OpenAI format)
-            messages: Conversation history from workflow_state
-            config: Optional execution config (for workflows)
-            
-        Returns:
-            Dict with 'role', 'content', 'agent', and 'stream' key containing iterator
-        """
-        if self.agent_obj is None:
-            self._build_agent(llm_client)
-        
-        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
-        execution_config = config if config is not None else {}
-        # Use stream_mode="messages" for token-by-token streaming
-        # This returns (token, metadata) tuples where token has content_blocks
-        stream_iter = self.agent_obj.stream(
-            {"messages": langchain_messages}, 
-            config=execution_config,
-            stream_mode="messages"
-        )
-        return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
-    
     def execute_agent(self, llm_client: Any, prompt: str,
         stream: bool = False,
         file_messages: Optional[List] = None,
@@ -121,7 +58,7 @@ class CreateAgentExecutor(BaseExecutor):
         Args:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
-            stream: Whether to stream the response (overrides agent.stream if provided)
+            stream: Whether to stream the response
             file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
             
@@ -130,11 +67,12 @@ class CreateAgentExecutor(BaseExecutor):
         """
         try:
             if stream:
-                return self._invoke_agent_stream(llm_client, prompt, file_messages, messages, config={})
+                return self._stream_agent(llm_client, prompt, file_messages, messages, config={})
             else:
                 out = self._invoke_agent(llm_client, prompt, file_messages, messages, config={})
                 result_text = self._extract_response_text(out)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+                
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
@@ -158,34 +96,20 @@ class CreateAgentExecutor(BaseExecutor):
             Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' or 'stream' if HITL is active
         """
         try:
-            config, workflow_thread_id = self._prepare_workflow_config(config)
-            
-            # Build agent if not already built (needed for interrupt detection)
+            config, workflow_thread_id = self._prepare_workflow_config(config)            
             if self.agent_obj is None:
                 self._build_agent(llm_client)
             
-            # Convert workflow_state messages to LangChain message format for interrupt detection
-            langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
-            
-            # Stream events to detect interrupts (only if HITL is enabled)
-            if self.agent.human_in_loop and self.agent.interrupt_on:
-                interrupt_data = self._detect_interrupt_in_stream(config, langchain_messages)
-                if interrupt_data:
-                    return self._create_interrupt_response(interrupt_data, workflow_thread_id, config)
-            
-            # Handle streaming
             if stream:
-                return self._invoke_agent_stream(llm_client, prompt, file_messages, messages, config=config)
-            
-            # Execute normally if no interrupt detected
-            out = self._invoke_agent(llm_client, prompt, file_messages, messages, config=config)
-            
-            # Check for interrupt in output
-            if isinstance(out, dict) and "__interrupt__" in out:
-                return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
-            
-            result_text = self._extract_response_text(out)
-            return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+                return self._stream_agent(llm_client, prompt, file_messages, messages, config=config)
+            else:
+                out = self._invoke_agent(llm_client, prompt, file_messages, messages, config=config)
+                # Check for interrupts in output (HITL)
+                if isinstance(out, dict) and "__interrupt__" in out:
+                    return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
+                result_text = self._extract_response_text(out)
+                return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
@@ -218,7 +142,88 @@ class CreateAgentExecutor(BaseExecutor):
         
         result_text = self._extract_response_text(out)
         return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+    
+    def detect_interrupt_in_stream(self, 
+        execution_config: Dict[str, Any], 
+        messages: List[BaseMessage]) -> Optional[Any]:
+        """Detect interrupt from agent stream events."""
+        for event in self.agent_obj.stream(
+            {"messages": messages},
+            config=execution_config
+        ):
+            # Check for direct interrupt key
+            if "__interrupt__" in event:
+                interrupt_data = event["__interrupt__"]
+                return list(interrupt_data) if isinstance(interrupt_data, (tuple, list)) else interrupt_data
+            
+            # Check each node in the event
+            for node_state in event.values():
+                if isinstance(node_state, dict) and "__interrupt__" in node_state:
+                    return node_state["__interrupt__"]
+                elif isinstance(node_state, (tuple, list)) and node_state:
+                    return list(node_state) if isinstance(node_state, tuple) else node_state
         
+        return None
+
+    def _invoke_agent(self, llm_client: Any, prompt: str,
+        file_messages: Optional[List] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        config: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Invoke the agent (non-streaming).
+
+        Args:
+            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
+            prompt: User's question/prompt
+            file_messages: Optional file messages (OpenAI format)
+            messages: Conversation history from workflow_state
+            config: Optional execution config (for workflows)
+            
+        Returns:
+            Agent output (dict or other format)
+        """
+        if self.agent_obj is None:
+            self._build_agent(llm_client)
+        
+        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
+        execution_config = config if config is not None else {}
+        out = self.agent_obj.invoke(
+            {"messages": langchain_messages}, 
+            config=execution_config
+        )
+        return out
+    
+    def _stream_agent(self, llm_client: Any, prompt: str,
+        file_messages: Optional[List] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Invoke the agent with streaming support.
+        
+        Args:
+            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
+            prompt: User's question/prompt
+            file_messages: Optional file messages (OpenAI format)
+            messages: Conversation history from workflow_state
+            config: Optional execution config (for workflows)
+            
+        Returns:
+            Dict with 'role', 'content', 'agent', and 'stream' key containing iterator
+        """
+        if self.agent_obj is None:
+            self._build_agent(llm_client)
+        
+        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
+        execution_config = config if config is not None else {}
+        # Use stream_mode="messages" for token-by-token streaming
+        # This returns (token, metadata) tuples where token has content_blocks
+        stream_iter = self.agent_obj.stream(
+            {"messages": langchain_messages}, 
+            config=execution_config,
+            stream_mode="messages"
+        )
+        return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
+  
     def _build_agent(self, llm_chat_model):
         """
         Build the agent with optional human-in-the-loop middleware.
@@ -257,28 +262,6 @@ class CreateAgentExecutor(BaseExecutor):
         
         return self.agent_obj
         
-    def _detect_interrupt_in_stream(self, 
-        execution_config: Dict[str, Any], 
-        messages: List[BaseMessage]) -> Optional[Any]:
-        """Detect interrupt from agent stream events."""
-        for event in self.agent_obj.stream(
-            {"messages": messages},
-            config=execution_config
-        ):
-            # Check for direct interrupt key
-            if "__interrupt__" in event:
-                interrupt_data = event["__interrupt__"]
-                return list(interrupt_data) if isinstance(interrupt_data, (tuple, list)) else interrupt_data
-            
-            # Check each node in the event
-            for node_state in event.values():
-                if isinstance(node_state, dict) and "__interrupt__" in node_state:
-                    return node_state["__interrupt__"]
-                elif isinstance(node_state, (tuple, list)) and node_state:
-                    return list(node_state) if isinstance(node_state, tuple) else node_state
-        
-        return None
-    
     def _convert_to_langchain_messages(self, 
         messages: Optional[List[Dict[str, Any]]], 
         current_prompt: str,
@@ -405,4 +388,52 @@ class CreateAgentExecutor(BaseExecutor):
         # Fallback: convert to string
         result = str(out) if out else ""
         return result
+    
+    def _prepare_workflow_config(self, config: Optional[Dict[str, Any]]) -> tuple[Dict[str, Any], str]:
+        """
+        Prepare workflow configuration and extract thread_id.
+        
+        Args:
+            config: Execution config dictionary
+            
+        Returns:
+            Tuple of (config, thread_id)
+        """
+        if config is None:
+            raise ValueError(
+                "config is required for workflow execution. "
+                "It should contain thread_id from the workflow's checkpointer configuration."
+            )
+        if "configurable" not in config:
+            config["configurable"] = {}
+        
+        if "thread_id" not in config["configurable"]:
+            raise ValueError(
+                "thread_id must be provided in config for workflow execution. "
+                "It should come from the workflow's checkpointer configuration."
+            )
+        thread_id = config["configurable"]["thread_id"]
+        
+        return config, thread_id
+    
+    def _create_interrupt_response(self, interrupt_data: Any, thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create response dictionary for interrupt.
+        
+        Args:
+            interrupt_data: Interrupt data from agent
+            thread_id: Workflow thread ID
+            config: Execution config
+            
+        Returns:
+            Response dictionary with interrupt information
+        """
+        return {
+            "role": "assistant",
+            "content": "",
+            "agent": self.agent.name,
+            "__interrupt__": interrupt_data,
+            "thread_id": thread_id,
+            "config": config
+        }
 
