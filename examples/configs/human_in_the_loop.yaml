@@ -1,6 +1,5 @@
 - name: supervisor
   role: Product Review Analysis Supervisor
-  type: response
   instructions: |
     You coordinate product review analysis workflows and delegate to your team based on the user's request.
     
@@ -23,7 +22,6 @@
 
 - name: researcher
   role: Product Review Gatherer
-  type: response
   instructions: |
     You gather and compile customer reviews for products requested by the supervisor.
     
@@ -39,7 +37,6 @@
 
 - name: analyst
   role: Sentiment Analyst
-  type: response
   instructions: |
     You are a sentiment analyst who ONLY works by calling tools - you have NO ability to analyze sentiment yourself.
     

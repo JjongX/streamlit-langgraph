@@ -108,7 +108,8 @@ assistant = slg.Agent(
     name="assistant",
     role="AI Assistant",
     instructions="You are a helpful AI assistant.",
-    type="response",  # or "agent" for LangChain agents
+    # type field is deprecated - all agents use CreateAgentExecutor
+    # Native OpenAI tools automatically use Responses API when enabled
     provider="openai",
     model="gpt-4.1-mini"
 )
@@ -236,7 +237,7 @@ pip install fastmcp langchain-mcp-adapters
 **Features**:
 - Connect to MCP servers via stdio or HTTP transport
 - Access tools from external MCP servers
-- Support for both `type="agent"` and `type="response"` executors
+- Unified executor architecture (all agents use CreateAgentExecutor)
 - Example MCP servers included (math, weather)
 
 **MCP Server Examples**:
@@ -256,7 +257,7 @@ agent = slg.Agent(
     name="analyst",              # Unique identifier
     role="Data Analyst",         # Agent's role description
     instructions="...",          # Detailed task instructions
-    type="response",             # "response" or "agent"
+    # type field is deprecated - all agents use CreateAgentExecutor
     provider="openai",           # LLM provider
     model="gpt-4.1-mini",       # Model name
     temperature=0.0,             # Response randomness
@@ -291,19 +292,16 @@ Multiple supervisor teams coordinated by a top supervisor:
 | **Supervisor Parallel** | Independent tasks can run simultaneously | Parallel | Data processing, multi-source queries |
 | **Hierarchical** | Complex multi-level organization | Sequential | Large teams, department structure |
 
-### Executor Types
+### Executor Architecture
 
-#### **ResponseAPIExecutor** (`type="response"`)
-- Uses OpenAI's Response API
-- Supports advanced features (code interpreter, file search)
-- Streaming responses
-- Native tool calling
+All agents use **CreateAgentExecutor**, which provides a unified execution model:
 
-#### **CreateAgentExecutor** (`type="agent"`)
-- Uses LangChain agents
-- ReAct-style reasoning
-- Broader LLM support
-- LangChain tools integration
+- **Standard LangChain Agents**: Uses LangChain's `create_agent` for standard agentic behavior
+- **Responses API Integration**: Automatically uses OpenAI's Responses API (via `use_responses_api=True`) when native OpenAI tools are enabled (code_interpreter, web_search, file_search, image_generation)
+- **Multi-Provider Support**: Works with OpenAI, Anthropic, Google, and other LangChain-supported providers
+- **HITL Support**: Full human-in-the-loop approval workflow support
+- **Streaming**: Supports both standard LangChain streaming and Responses API streaming
+- **Tool Integration**: Supports custom tools, MCP tools, and native OpenAI tools seamlessly
 
 ### Context Modes
 
@@ -331,7 +329,7 @@ analyst = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Analyze the provided data",
-    type="response",
+    # type field is deprecated - all agents use CreateAgentExecutor
     context="least"  # Sees only task instructions
 )
 ```
@@ -358,7 +356,7 @@ executor = slg.Agent(
     name="executor",
     role="Action Executor",
     instructions="Execute approved actions",
-    type="response",
+    # type field is deprecated - all agents use CreateAgentExecutor
     tools=["delete_data", "send_email"],
     human_in_loop=True,  # Enable HITL
     interrupt_on={
@@ -429,7 +427,7 @@ agent = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Use analyze_data tool to process user data",
-    type="response",
+    # type field is deprecated - all agents use CreateAgentExecutor
     tools=["analyze_data"]  # Tool name from registration
 )
 ```
@@ -472,7 +470,7 @@ agent = slg.Agent(
     name="admin",
     role="Database Administrator",
     instructions="Manage database operations",
-    type="response",
+    # type field is deprecated - all agents use CreateAgentExecutor
     tools=["delete_records"],
     human_in_loop=True,
     interrupt_on={
@@ -498,14 +496,14 @@ MCP servers can communicate via different transport protocols:
 1. **STDIO Transport** (Default)
    - Communicates through standard input/output
    - Perfect for local development and command-line tools
-   - Works with `type="agent"` only
    - Each client spawns a new server process
+   - Works with all agents (unified executor)
 
 2. **HTTP Transport (streamable_http)**
    - Network-accessible web service
    - Supports multiple concurrent clients
-   - Works with both `type="agent"` and `type="response"`
-   - **For `type="response"`**: Server must be publicly accessible (not localhost)
+   - Works with all agents (unified executor)
+   - When using native OpenAI tools with Responses API: Server must be publicly accessible (not localhost)
 
 3. **SSE Transport** (Legacy)
    - Server-Sent Events transport
@@ -520,7 +518,7 @@ Configure MCP servers in your agent:
 import streamlit_langgraph as slg
 import os
 
-# STDIO transport (for type="agent")
+# STDIO transport (for local development)
 mcp_servers = {
     "math": {
         "transport": "stdio",
@@ -529,12 +527,12 @@ mcp_servers = {
     }
 }
 
-# HTTP transport (for type="agent" or type="response")
-# Note: For type="response", server must be publicly accessible
+# HTTP transport (for network-accessible servers)
+# Note: When using native OpenAI tools with Responses API, server must be publicly accessible
 mcp_servers = {
     "math": {
         "transport": "http",  # or "streamable_http" (both accepted)
-        "url": "http://your-server.com:8000/mcp"  # Public URL required for type="response"
+        "url": "http://your-server.com:8000/mcp"  # Public URL required when using Responses API
     }
 }
 
@@ -542,7 +540,6 @@ agent = slg.Agent(
     name="calculator",
     role="Calculator",
     instructions="Use MCP tools to perform calculations",
-    type="agent",  # Use "agent" for stdio, "agent" or "response" for HTTP
     provider="openai",
     model="gpt-4o-mini",
     mcp_servers=mcp_servers
@@ -590,22 +587,24 @@ python math_server.py --transport http --port 8000  # HTTP
 
 #### **Transport Compatibility**
 
-| Transport | `type="agent"` | `type="response"` | Notes |
-|-----------|----------------|-------------------|-------|
-| **stdio** | ✅ Supported | ❌ Not supported | Local only, works with LangChain |
-| **http** | ✅ Supported | ✅ Supported* | *Requires public URL for `type="response"` |
-| **sse** | ✅ Supported | ✅ Supported* | Legacy, use HTTP instead |
+| Transport | Support | Notes |
+|-----------|---------|-------|
+| **stdio** | ✅ Supported | Local only, perfect for development |
+| **http** | ✅ Supported | Network-accessible, supports multiple clients |
+| **sse** | ✅ Supported | Legacy, use HTTP instead |
 
 **Important Notes**:
-- `type="response"` (Responses API) requires MCP servers to be **publicly accessible**
-- OpenAI's servers connect to your MCP server, so `localhost` won't work
-- For local testing with `type="response"`, use a tunnel service (ngrok) or deploy publicly
-- For local development, use `type="agent"` with stdio or HTTP transport
+- All agents use the unified CreateAgentExecutor
+- When using native OpenAI tools (code_interpreter, web_search, etc.), Responses API is automatically enabled
+- **For Responses API with MCP tools**: MCP servers must be **publicly accessible** (not localhost)
+- OpenAI's servers connect to your MCP server when using Responses API, so `localhost` won't work
+- For local development with native tools, use stdio transport or deploy MCP servers publicly
+- For local development without native tools, stdio or localhost HTTP works fine
 
 #### **Example: Local Development**
 
 ```python
-# Use stdio transport with type="agent" for local development
+# Use stdio transport for local development
 mcp_servers = {
     "math": {
         "transport": "stdio",
@@ -616,7 +615,7 @@ mcp_servers = {
 
 agent = slg.Agent(
     name="calculator",
-    type="agent",  # Required for stdio transport
+    # type field is deprecated - all agents use CreateAgentExecutor
     mcp_servers=mcp_servers
 )
 ```
@@ -634,14 +633,14 @@ mcp_servers = {
 
 agent = slg.Agent(
     name="calculator",
-    type="response",  # Can use response API with public URL
+    # type field is deprecated - Responses API used automatically when native tools enabled
     mcp_servers=mcp_servers
 )
 ```
 
 #### **MCP Server Requirements**
 
-For `type="response"` with HTTP transport:
+For agents using native OpenAI tools (Responses API) with HTTP transport:
 1. MCP server must be publicly accessible (not localhost)
 2. Server should bind to `0.0.0.0` (not `127.0.0.1`) to accept external connections
 3. Security groups/firewalls must allow inbound traffic
@@ -755,7 +754,6 @@ chat.run()
 | `name` | `str` | Required | Unique identifier for the agent |
 | `role` | `str` | Required | Brief description of the agent's role |
 | `instructions` | `str` | Required | Detailed instructions guiding agent behavior |
-| `type` | `str` | `"response"` | Executor type: `"response"` (OpenAI Response API) or `"agent"` (LangChain) |
 | `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
 | `model` | `str` | `"gpt-4o-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
@@ -776,7 +774,7 @@ agent = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Analyze data and provide insights",
-    type="response",
+    # type field is deprecated - all agents use CreateAgentExecutor
     provider="openai",
     model="gpt-4o-mini",
     temperature=0.0,

@@ -155,11 +155,10 @@ def main():
         delegation_mode="handoff"
     )
 
-    executor_name = "ResponseAPIExecutor" if supervisor.type == "response" else "CreateAgentExecutor"
     config = slg.UIConfig(
-        title=f"Human-in-the-Loop Multiagent Workflow ({executor_name})",
+        title="Human-in-the-Loop Multiagent Workflow",
         welcome_message=(
-            f"This workflow uses **{executor_name}** with human-in-the-loop approval for tool execution.\n"
+            "This workflow uses **CreateAgentExecutor** with human-in-the-loop approval for tool execution.\n"
             "When agents need to use tools, execution pauses for your approval (approve, reject, or edit).\n\n"
             "**Try these example queries to test the custom tools:**\n"
             "- 'Analyze the sentiment: I love this product! It works perfectly.'\n"

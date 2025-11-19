@@ -84,51 +84,15 @@ class ExecutorRegistry:
     
     def _create_executor(self, agent: Agent, tools: Optional[list] = None) -> Any:
         """
-        Create appropriate executor for the agent.
+        Create executor for the agent.
         
-        Executor Selection Logic:
-        - type="agent" → CreateAgentExecutor (supports HITL)
-        - type="response" → ResponseAPIExecutor (no HITL support)
-        - type="response" + HITL enabled → Error (must use type="agent" for HITL)
+        Always uses CreateAgentExecutor, which supports both standard LangChain agents
+        and Responses API (via use_responses_api=True) when native OpenAI tools are enabled.
         """
-        # Lazy imports to avoid circular import
+        # Lazy import to avoid circular import
         from .create_agent import CreateAgentExecutor
-        from .response_api import ResponseAPIExecutor
-
-        if agent.type == "response" and agent.human_in_loop and agent.interrupt_on:
-            raise ValueError(
-                f"Agent '{agent.name}' has type='response' but HITL is enabled. "
-                "Responses API cannot intercept tool calls, so HITL requires LangChain. "
-                "Please change the agent type to 'agent' in your configuration to enable HITL support."
-            )
         
-        if agent.type == "response" and agent.mcp_servers:
-            stdio_servers = [
-                name for name, config in agent.mcp_servers.items()
-                if config.get("transport", "stdio") == "stdio"
-            ]
-            if stdio_servers:
-                raise ValueError(
-                    f"Agent '{agent.name}' has type='response' but uses stdio MCP servers: {', '.join(stdio_servers)}. "
-                    "Responses API only supports HTTP/SSE transport (streamable_http, http, or sse). Use type='agent' for stdio MCP servers."
-                )
-        
-        if agent.type == "agent":
-            return CreateAgentExecutor(agent, tools=tools)
-        if agent.type == "response":
-            if agent.provider.lower() == "openai":
-                return ResponseAPIExecutor(agent)
-            else:
-                raise ValueError(
-                    f"Agent '{agent.name}' has type='response' but provider is '{agent.provider}'. "
-                    "ResponseAPIExecutor only supports OpenAI. "
-                    "Please change the agent type to 'agent' for other providers."
-                )
-        
-        raise ValueError(
-            f"Agent '{agent.name}' has invalid type='{agent.type}'. "
-            "Type must be either 'agent' or 'response'."
-        )
+        return CreateAgentExecutor(agent, tools=tools)
     
     def get_or_create(self, agent: Agent, executor_type: str = "workflow",
         tools: Optional[list] = None) -> Any:
@@ -141,7 +105,7 @@ class ExecutorRegistry:
             tools: Optional tools for CreateAgentExecutor
             
         Returns:
-            Executor instance (ResponseAPIExecutor or CreateAgentExecutor)
+            CreateAgentExecutor instance
         """
         executor_key = "single_agent_executor" if executor_type == "single_agent" else f"workflow_executor_{agent.name}"
         
@@ -174,7 +138,7 @@ class ExecutorRegistry:
             executor_key: Optional custom executor key
             
         Returns:
-            Executor instance (ResponseAPIExecutor or CreateAgentExecutor)
+            CreateAgentExecutor instance
         """
         if executor_key is None:
             executor_key = f"workflow_executor_{agent.name}"

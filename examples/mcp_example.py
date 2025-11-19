@@ -22,7 +22,6 @@ def main():
         name="calculator_agent",
         role="Math Assistant",
         instructions="You are a helpful math assistant that can perform calculations using MCP tools.",
-        type="response",
         provider="openai",
         model="gpt-4o-mini",
         tools=[],

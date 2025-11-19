@@ -127,20 +127,14 @@ class WorkflowExecutor:
         conversation_messages = st.session_state.workflow_state.get("messages", [])
         executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
         
-        if agent.type == "response":
-            response = executor.execute_agent(
-                llm_client, prompt,
-                stream=config.stream if config else True,
-                file_messages=file_messages,
-                messages=conversation_messages
-            )
-            return response
-        else:
-            response = executor.execute_agent(
-                llm_client, prompt,
-                messages=conversation_messages
-            )
-            return response
+        # All executors now use CreateAgentExecutor which supports file_messages and stream
+        response = executor.execute_agent(
+            llm_client, prompt,
+            stream=config.stream if config else True,
+            file_messages=file_messages,
+            messages=conversation_messages
+        )
+        return response
     
     def _execute_invoke(self, workflow: StateGraph, initial_state: WorkflowState, 
                        config: Dict[str, Any]) -> WorkflowState:

@@ -278,15 +278,13 @@ class HITLHandler:
         """
         Get existing executor or create a new one.
         
-        Supports both CreateAgentExecutor and ResponseAPIExecutor.
-        
         Args:
             executor_key: Key identifying the executor
             agent_name: Name of the agent
             workflow_state: Current workflow state
             
         Returns:
-            CreateAgentExecutor or ResponseAPIExecutor instance or None
+            CreateAgentExecutor instance or None
         """
         registry = ExecutorRegistry()
         executor_key = f"workflow_executor_{agent_name}"
@@ -312,7 +310,7 @@ class HITLHandler:
         Args:
             workflow_state: Current workflow state
             executor_key: Key identifying the executor
-            executor: CreateAgentExecutor or ResponseAPIExecutor instance
+            executor: CreateAgentExecutor instance
             agent_name: Name of the agent
             decisions: List of user decisions
             original_config: Original execution config (should contain thread_id)
@@ -342,11 +340,8 @@ class HITLHandler:
             resume_config["configurable"] = {}
         resume_config["configurable"]["thread_id"] = workflow_thread_id
         
-        # Get messages from workflow_state for resume
-        conversation_messages = workflow_state.get("messages", [])
-        
         with st.spinner("Processing your decision..."):
-            resume_response = executor.resume(formatted_decisions, config=resume_config, messages=conversation_messages)
+            resume_response = executor.resume(formatted_decisions, config=resume_config)
         
         # Handle additional interrupts
         if resume_response and resume_response.get("__interrupt__"):

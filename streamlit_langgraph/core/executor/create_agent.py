@@ -1,4 +1,4 @@
-"""CreateAgentExecutor for LangChain agents with HITL support."""
+"""CreateAgentExecutor for LangChain agents."""
 
 from typing import Any, Dict, List, Optional
 
@@ -47,15 +47,20 @@ class CreateAgentExecutor(BaseExecutor):
                 mcp_tools = mcp_manager.get_tools()
             self.tools = custom_tools + mcp_tools
     
-    def _invoke_agent(self, llm_client: Any, prompt: str, 
+    def _invoke_agent(self, llm_client: Any, prompt: str,
+        file_messages: Optional[List] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         config: Optional[Dict[str, Any]] = None) -> Any:
         """
-        Invoke the LangChain agent with prepared messages.
+        Invoke the agent (non-streaming).
+        
+        Uses LangChain's create_agent which handles both ChatCompletion and Responses API
+        automatically when use_responses_api=True is set on the ChatOpenAI model.
         
         Args:
-            llm_client: A LangChain chat model instance
+            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
             prompt: User's question/prompt
+            file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
             config: Optional execution config (for workflows)
             
@@ -65,12 +70,48 @@ class CreateAgentExecutor(BaseExecutor):
         if self.agent_obj is None:
             self._build_agent(llm_client)
         
-        langchain_messages = self._convert_to_langchain_messages(messages, prompt)
+        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
         execution_config = config if config is not None else {}
         out = self.agent_obj.invoke({"messages": langchain_messages}, config=execution_config)
         return out
     
+    def _invoke_agent_stream(self, llm_client: Any, prompt: str,
+        file_messages: Optional[List] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Invoke the agent with streaming support.
+        
+        Uses LangChain's create_agent which handles both ChatCompletion and Responses API
+        automatically when use_responses_api=True is set on the ChatOpenAI model.
+        
+        Args:
+            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
+            prompt: User's question/prompt
+            file_messages: Optional file messages (OpenAI format)
+            messages: Conversation history from workflow_state
+            config: Optional execution config (for workflows)
+            
+        Returns:
+            Dict with 'role', 'content', 'agent', and 'stream' key containing iterator
+        """
+        if self.agent_obj is None:
+            self._build_agent(llm_client)
+        
+        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
+        execution_config = config if config is not None else {}
+        # Use stream_mode="messages" for token-by-token streaming
+        # This returns (token, metadata) tuples where token has content_blocks
+        stream_iter = self.agent_obj.stream(
+            {"messages": langchain_messages}, 
+            config=execution_config,
+            stream_mode="messages"
+        )
+        return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
+    
     def execute_agent(self, llm_client: Any, prompt: str,
+        stream: bool = False,
+        file_messages: Optional[List] = None,
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Execute prompt for single-agent mode (non-workflow).
@@ -80,19 +121,26 @@ class CreateAgentExecutor(BaseExecutor):
         Args:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
+            stream: Whether to stream the response (overrides agent.stream if provided)
+            file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
             
         Returns:
-            Dict with keys 'role', 'content', 'agent'
+            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
         try:
-            out = self._invoke_agent(llm_client, prompt, messages, config={})
-            result_text = self._extract_response_text(out)
-            return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+            if stream:
+                return self._invoke_agent_stream(llm_client, prompt, file_messages, messages, config={})
+            else:
+                out = self._invoke_agent(llm_client, prompt, file_messages, messages, config={})
+                result_text = self._extract_response_text(out)
+                return {"role": "assistant", "content": result_text, "agent": self.agent.name}
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
     def execute_workflow(self, llm_client: Any, prompt: str,
+        stream: bool = False,
+        file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None, 
         messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -101,11 +149,13 @@ class CreateAgentExecutor(BaseExecutor):
         Args:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
+            stream: Whether to stream the response
+            file_messages: Optional file messages (OpenAI format)
             config: Execution config with thread_id (required for workflows)
             messages: Conversation history from workflow_state
 
         Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' if HITL is active
+            Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' or 'stream' if HITL is active
         """
         try:
             config, workflow_thread_id = self._prepare_workflow_config(config)
@@ -115,7 +165,7 @@ class CreateAgentExecutor(BaseExecutor):
                 self._build_agent(llm_client)
             
             # Convert workflow_state messages to LangChain message format for interrupt detection
-            langchain_messages = self._convert_to_langchain_messages(messages, prompt)
+            langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
             
             # Stream events to detect interrupts (only if HITL is enabled)
             if self.agent.human_in_loop and self.agent.interrupt_on:
@@ -123,8 +173,12 @@ class CreateAgentExecutor(BaseExecutor):
                 if interrupt_data:
                     return self._create_interrupt_response(interrupt_data, workflow_thread_id, config)
             
+            # Handle streaming
+            if stream:
+                return self._invoke_agent_stream(llm_client, prompt, file_messages, messages, config=config)
+            
             # Execute normally if no interrupt detected
-            out = self._invoke_agent(llm_client, prompt, messages, config=config)
+            out = self._invoke_agent(llm_client, prompt, file_messages, messages, config=config)
             
             # Check for interrupt in output
             if isinstance(out, dict) and "__interrupt__" in out:
@@ -166,7 +220,12 @@ class CreateAgentExecutor(BaseExecutor):
         return {"role": "assistant", "content": result_text, "agent": self.agent.name}
         
     def _build_agent(self, llm_chat_model):
-        """Build the agent with optional human-in-the-loop middleware."""
+        """
+        Build the agent with optional human-in-the-loop middleware.
+        
+        When native OpenAI tools are enabled and use_responses_api=True is set on the model,
+        LangChain will automatically route to Responses API for agentic behavior.
+        """
         middleware = []
         if self.agent.human_in_loop and self.agent.interrupt_on:
             middleware.append(
@@ -176,9 +235,12 @@ class CreateAgentExecutor(BaseExecutor):
                 )
             )
         
+        # Build tools list (native OpenAI tools are handled automatically by LangChain)
+        all_tools = list(self.tools) if self.tools else []
+        
         agent_kwargs = {
             "model": llm_chat_model,
-            "tools": self.tools,
+            "tools": all_tools,
             "system_prompt": self.agent.system_message,
         }
         
@@ -219,17 +281,21 @@ class CreateAgentExecutor(BaseExecutor):
     
     def _convert_to_langchain_messages(self, 
         messages: Optional[List[Dict[str, Any]]], 
-        current_prompt: str) -> List[BaseMessage]:
+        current_prompt: str,
+        file_messages: Optional[List] = None) -> List[BaseMessage]:
         """
         Convert workflow_state messages to LangChain message format.
         
         Args:
             messages: List of message dicts from workflow_state
             current_prompt: Current user prompt (will be added if not already in messages)
+            file_messages: Optional file messages (OpenAI format) to include
             
         Returns:
             List of LangChain BaseMessage objects
         """
+        from langchain_core.messages import HumanMessage as LC_HumanMessage
+        
         langchain_messages: List[BaseMessage] = []
         
         # Convert existing messages from workflow_state
@@ -249,6 +315,29 @@ class CreateAgentExecutor(BaseExecutor):
                     langchain_messages.append(SystemMessage(content=content))
                 # tool messages are added during tool execution
         
+        # Add file messages if provided (convert OpenAI format to LangChain format)
+        if file_messages:
+            for file_msg in file_messages:
+                # File messages from OpenAI are typically dicts with role and content
+                # For LangChain, we need to handle file content appropriately
+                if isinstance(file_msg, dict):
+                    role = file_msg.get("role", "user")
+                    content = file_msg.get("content", "")
+                    if role == "user" and content:
+                        # If content is a list (file content blocks), we need to handle it
+                        if isinstance(content, list):
+                            # Extract text from file content blocks
+                            text_parts = []
+                            for block in content:
+                                if isinstance(block, dict):
+                                    if block.get("type") == "text":
+                                        text_parts.append(block.get("text", ""))
+                                    elif block.get("type") == "input_file":
+                                        # File reference - include in message
+                                        text_parts.append(f"[File: {block.get('file_id', 'unknown')}]")
+                            content = " ".join(text_parts) if text_parts else str(content)
+                        langchain_messages.append(LC_HumanMessage(content=content))
+        
         # Add current prompt if it's not already the last message
         # (This handles the case where prompt is new and not yet in workflow_state)
         if not langchain_messages or not isinstance(langchain_messages[-1], HumanMessage) or langchain_messages[-1].content != current_prompt:
@@ -258,15 +347,62 @@ class CreateAgentExecutor(BaseExecutor):
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
+        from langchain_core.messages import AIMessage
+        
         if isinstance(out, dict):
+            # Check for 'output' key first (some agent formats)
             if 'output' in out:
-                return str(out['output'])
-            elif 'messages' in out and out['messages']:
-                last_message = out['messages'][-1]
-                return last_message.content if hasattr(last_message, 'content') else str(last_message)
+                output = out['output']
+                if output:
+                    return str(output)
+            
+            # Check for 'messages' key (standard LangChain agent output)
+            if 'messages' in out and out['messages']:
+                messages = out['messages']
+                # Find the last AIMessage with content
+                for msg in reversed(messages):
+                    if isinstance(msg, AIMessage):
+                        if hasattr(msg, 'content') and msg.content:
+                            # Handle both string and list content
+                            if isinstance(msg.content, str):
+                                return msg.content
+                            elif isinstance(msg.content, list):
+                                # Extract text from content blocks
+                                text_parts = []
+                                for block in msg.content:
+                                    if isinstance(block, dict) and block.get('type') == 'text':
+                                        text_parts.append(block.get('text', ''))
+                                    elif isinstance(block, str):
+                                        text_parts.append(block)
+                                if text_parts:
+                                    return ''.join(text_parts)
+                        # Fallback: try to convert message to string
+                        return str(msg) if msg else ""
+                
+                # If no AIMessage found, get the last message
+                last_message = messages[-1]
+                if hasattr(last_message, 'content'):
+                    content = last_message.content
+                    if isinstance(content, str):
+                        return content
+                    elif isinstance(content, list):
+                        return ''.join(str(c) for c in content if c)
+                return str(last_message) if last_message else ""
+        
+        # Handle string output
         elif isinstance(out, str):
             return out
+        
+        # Handle objects with content attribute
         elif hasattr(out, 'content'):
-            return out.content
-        return str(out)
+            content = out.content
+            if isinstance(content, str):
+                return content
+            elif isinstance(content, list):
+                return ''.join(str(c) for c in content if c)
+            return str(content) if content else ""
+        
+        # Fallback: convert to string
+        result = str(out) if out else ""
+        return result
 
