@@ -1,7 +1,5 @@
 # Example demonstrating MCP (Model Context Protocol) tool integration.
 
-import os
-
 import streamlit_langgraph as slg
 
 
@@ -13,11 +11,11 @@ def main():
         #     "command": "python",
         #     "args": [os.path.join(os.path.dirname(__file__), "mcp_servers", "math_server.py")]
         # },
-        # http transport
-        "math": {
-            "transport": "streamable_http",
-            "url": "http://127.0.0.1:8000/mcp"
-        }
+        # http transport - need mcp at the end of the url for agent
+        # "math": {
+        #     "transport": "streamable_http",
+        #     "url": "http://127.0.0.1:8000/mcp"
+        # }
     }
     
     agent = slg.Agent(

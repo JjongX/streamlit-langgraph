@@ -137,15 +137,27 @@ class MCPToolManager:
                 "require_approval": config.get("require_approval", "never"),
             }
             
-            if transport in ("streamable_http", "sse"):
+            # Handle HTTP-based transports (streamable_http, http, sse)
+            if transport in ("streamable_http", "http", "sse"):
                 if "url" in config:
-                    tool_dict["server_url"] = config["url"]
+                    url = config["url"]
+                    # Validate URL is publicly accessible (not localhost) for Responses API
+                    if "localhost" in url or "127.0.0.1" in url:
+                        raise ValueError(
+                            f"MCP server '{server_name}' uses localhost URL '{url}'. "
+                            "For type='response', the MCP server must be publicly accessible. "
+                            "Please use a public IP address or domain name, and ensure the server "
+                            "is bound to '0.0.0.0' (not '127.0.0.1') to accept external connections."
+                        )
+                    tool_dict["server_url"] = url
+                    # Note: OpenAI Responses API doesn't accept a "transport" field
+                    # The transport type is inferred from the server_url
                 else:
                     raise ValueError(f"MCP server '{server_name}' with transport '{transport}' requires 'url' field")
             elif transport == "stdio":
                 raise ValueError(
                     f"MCP server '{server_name}' uses 'stdio' transport, which is not supported by OpenAI Responses API. "
-                    "Please use 'streamable_http' or 'sse' transport, or use type='agent' instead of type='response'."
+                    "Please use 'streamable_http', 'http', or 'sse' transport, or use type='agent' instead of type='response'."
                 )
             else:
                 raise ValueError(f"Unsupported MCP transport type: {transport}")

@@ -2,11 +2,11 @@
 Example MCP Weather Server (supports both stdio and HTTP/SSE transport).
 
 Run this server with:
-    # Using FastMCP CLI:
+    # Using FastMCP CLI (stdio transport):
     fastmcp run weather_server.py
     
-    # Using FastMCP CLI with HTTP transport:
-    fastmcp run weather_server.py --transport http
+    # Using FastMCP CLI with HTTP transport (for type="response", use 0.0.0.0 for public access):
+    fastmcp run weather_server.py --transport http --host 0.0.0.0 --port 8000
     
 Then configure it in your agent's mcp_servers configuration:
     # For stdio:
@@ -18,12 +18,11 @@ Then configure it in your agent's mcp_servers configuration:
     
     # For HTTP/SSE (after starting server):
     "weather": {
-        "transport": "http",  # or "sse" for legacy SSE transport
-        "url": "http://127.0.0.1:8000/mcp"  # Update port if using --port option
+        "transport": "streamable_http",  # or "sse" for legacy SSE transport
+        "url": "http://<ip-address>:8000/mcp"  # Use public IP for openai response api
     }
 """
 
-import argparse
 from fastmcp import FastMCP
 
 mcp = FastMCP("Weather")
@@ -39,28 +38,6 @@ async def get_weather(location: str) -> str:
 async def get_forecast(location: str, days: int = 3) -> str:
     """Get weather forecast for a location."""
     return f"Forecast for {location} for the next {days} days: Mostly sunny, high 72°F, low 55°F."
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MCP Weather Server")
-    parser.add_argument(
-        "--transport",
-        type=str,
-        default="stdio",
-        choices=["stdio", "http", "sse"],
-        help="Transport type: stdio (default), http, or sse"
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port number for HTTP/SSE transport (default: 8000)"
-    )
-    
-    args = parser.parse_args()
-    transport = args.transport
-    port = args.port
-    
-    mcp.run(transport=transport, host="127.0.0.1", port=port)
 
 
 

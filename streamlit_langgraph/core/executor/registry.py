@@ -110,7 +110,7 @@ class ExecutorRegistry:
             if stdio_servers:
                 raise ValueError(
                     f"Agent '{agent.name}' has type='response' but uses stdio MCP servers: {', '.join(stdio_servers)}. "
-                    "Responses API only supports HTTP/SSE transport. Use type='agent' for stdio MCP servers."
+                    "Responses API only supports HTTP/SSE transport (streamable_http, http, or sse). Use type='agent' for stdio MCP servers."
                 )
         
         if agent.type == "agent":
