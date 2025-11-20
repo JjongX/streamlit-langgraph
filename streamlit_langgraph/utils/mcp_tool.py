@@ -157,7 +157,8 @@ class MCPToolManager:
             elif transport == "stdio":
                 raise ValueError(
                     f"MCP server '{server_name}' uses 'stdio' transport, which is not supported by OpenAI Responses API. "
-                    "Please use 'streamable_http', 'http', or 'sse' transport, or use type='agent' instead of type='response'."
+                    "Please use 'streamable_http', 'http', or 'sse' transport, or disable native OpenAI tools "
+                    "(code_interpreter, web_search, etc.) to use ChatCompletion API instead."
                 )
             else:
                 raise ValueError(f"Unsupported MCP transport type: {transport}")

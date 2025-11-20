@@ -25,11 +25,15 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 - [Core Concepts](#core-concepts)
   - [Agent Configuration](#agent-configuration)
   - [Workflow Patterns](#workflow-patterns)
-  - [Executor Types](#executor-types)
+  - [Executor Architecture](#executor-architecture)
   - [Context Modes](#context-modes)
   - [Human-in-the-Loop](#human-in-the-loop-hitl)
   - [Custom Tools](#custom-tools)
   - [MCP (Model Context Protocol)](#mcp-model-context-protocol)
+- [Core Logic](#core-logic)
+  - [Section and Block System](#section-and-block-system)
+  - [Workflow State as Single Source of Truth](#workflow-state-as-single-source-of-truth)
+  - [Streamlit Session State Usage](#streamlit-session-state-usage)
 - [Configuration](#configuration)
   - [Agent Configuration Files](#agent-configuration-files)
   - [UI Configuration](#ui-configuration)
@@ -63,7 +67,7 @@ With that in mind, this package is designed so users can focus on defining agent
 
 3. **Ready-to-Use Multi-Agent Architectures:** Include standard patterns (supervisor, hierarchical, networked) out of the box.
 
-4. **Enhanced Compatibility with OpenAI Response API:** Support OpenAI's newer Response API for advanced capabilities like file search and code execution.
+4. **Automatic OpenAI Responses API Configuration:** Automatically configures OpenAI's Responses API when native tools are enabled, leveraging LangChain's built-in support for advanced capabilities like file search and code execution.
 
 5. **Extensibility to Other LLMs:** Design for easy integration with Gemini, Claude, and local models.
 
@@ -108,8 +112,6 @@ assistant = slg.Agent(
     name="assistant",
     role="AI Assistant",
     instructions="You are a helpful AI assistant.",
-    # type field is deprecated - all agents use CreateAgentExecutor
-    # Native OpenAI tools automatically use Responses API when enabled
     provider="openai",
     model="gpt-4.1-mini"
 )
@@ -237,7 +239,7 @@ pip install fastmcp langchain-mcp-adapters
 **Features**:
 - Connect to MCP servers via stdio or HTTP transport
 - Access tools from external MCP servers
-- Unified executor architecture (all agents use CreateAgentExecutor)
+- All agents use CreateAgentExecutor
 - Example MCP servers included (math, weather)
 
 **MCP Server Examples**:
@@ -257,7 +259,6 @@ agent = slg.Agent(
     name="analyst",              # Unique identifier
     role="Data Analyst",         # Agent's role description
     instructions="...",          # Detailed task instructions
-    # type field is deprecated - all agents use CreateAgentExecutor
     provider="openai",           # LLM provider
     model="gpt-4.1-mini",       # Model name
     temperature=0.0,             # Response randomness
@@ -294,14 +295,28 @@ Multiple supervisor teams coordinated by a top supervisor:
 
 ### Executor Architecture
 
-All agents use **CreateAgentExecutor**, which provides a unified execution model:
+All agents use a **CreateAgentExecutor** that automatically selects the appropriate API based on the provider and model configuration. For OpenAI, it utilizes both ChatCompletion API and Responses API based on agent configuration:
 
-- **Standard LangChain Agents**: Uses LangChain's `create_agent` for standard agentic behavior
-- **Responses API Integration**: Automatically uses OpenAI's Responses API (via `use_responses_api=True`) when native OpenAI tools are enabled (code_interpreter, web_search, file_search, image_generation)
+- **Automatic API Selection**: 
+  - **Responses API**: Automatically enabled when native OpenAI tools are used (`allow_code_interpreter`, `allow_web_search`, `allow_file_search`, `allow_image_generation`)
+    - Uses LangChain's `ChatOpenAI` with `use_responses_api=True` (LangChain provides the Responses API support)
+  - **ChatCompletion API**: Used when native OpenAI tools are not enabled
+- **LangChain Integration**: Uses LangChain's `create_agent` which handles API routing automatically
 - **Multi-Provider Support**: Works with OpenAI, Anthropic, Google, and other LangChain-supported providers
 - **HITL Support**: Full human-in-the-loop approval workflow support
 - **Streaming**: Supports both standard LangChain streaming and Responses API streaming
 - **Tool Integration**: Supports custom tools, MCP tools, and native OpenAI tools seamlessly
+
+**How It Works**:
+```python
+# When native tools are enabled, Responses API is used automatically
+agent = slg.Agent(
+    name="assistant",
+    allow_code_interpreter=True,  # Enables Responses API
+    allow_web_search=True          # Also uses Responses API
+)
+
+```
 
 ### Context Modes
 
@@ -329,7 +344,6 @@ analyst = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Analyze the provided data",
-    # type field is deprecated - all agents use CreateAgentExecutor
     context="least"  # Sees only task instructions
 )
 ```
@@ -356,7 +370,6 @@ executor = slg.Agent(
     name="executor",
     role="Action Executor",
     instructions="Execute approved actions",
-    # type field is deprecated - all agents use CreateAgentExecutor
     tools=["delete_data", "send_email"],
     human_in_loop=True,  # Enable HITL
     interrupt_on={
@@ -427,7 +440,6 @@ agent = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Use analyze_data tool to process user data",
-    # type field is deprecated - all agents use CreateAgentExecutor
     tools=["analyze_data"]  # Tool name from registration
 )
 ```
@@ -470,7 +482,6 @@ agent = slg.Agent(
     name="admin",
     role="Database Administrator",
     instructions="Manage database operations",
-    # type field is deprecated - all agents use CreateAgentExecutor
     tools=["delete_records"],
     human_in_loop=True,
     interrupt_on={
@@ -615,7 +626,6 @@ mcp_servers = {
 
 agent = slg.Agent(
     name="calculator",
-    # type field is deprecated - all agents use CreateAgentExecutor
     mcp_servers=mcp_servers
 )
 ```
@@ -633,7 +643,6 @@ mcp_servers = {
 
 agent = slg.Agent(
     name="calculator",
-    # type field is deprecated - Responses API used automatically when native tools enabled
     mcp_servers=mcp_servers
 )
 ```
@@ -652,6 +661,94 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 - [MCP Specification](https://modelcontextprotocol.io/)
 - [LangChain MCP Integration](https://docs.langchain.com/oss/python/langchain/mcp)
 
+## Core Logic
+
+This section explains the internal architecture for rendering messages and managing state.
+
+### Section and Block System
+
+All chat messages are rendered through a **Section/Block** architecture:
+
+- **Section**: Represents a single chat message (user or assistant). Contains multiple blocks.
+- **Block**: Individual content units within a section:
+  - `text`: Plain text content
+  - `code`: Code blocks (collapsible)
+  - `reasoning`: Reasoning/thinking blocks (collapsible)
+  - `image`: Image content
+  - `download`: Downloadable files
+
+**Flow**:
+1. User input → Creates a `Section` with `text` block
+2. Agent response → Creates a `Section` with blocks based on content type
+3. Streaming → Updates existing blocks or creates new ones as content arrives
+4. All sections/blocks are saved to `workflow_state` for persistence
+
+### Workflow State as Single Source of Truth
+
+`workflow_state` is the **single source of truth** for all chat history and application state:
+
+**Structure**:
+```python
+workflow_state = {
+    "messages": [...],           # Conversation messages (user/assistant)
+    "metadata": {
+        "display_sections": [...], # UI sections/blocks for rendering
+        "pending_interrupts": {...}, # HITL state
+        "executors": {...},        # Executor metadata
+        ...
+    },
+    "agent_outputs": {...},      # Agent responses by agent name
+    "current_agent": "...",       # Currently active agent
+    "files": [...]               # File metadata
+}
+```
+
+**Key Points**:
+- **All messages** (user and assistant) are stored in `workflow_state["messages"]`
+- **All UI sections/blocks** are stored in `workflow_state["metadata"]["display_sections"]`
+- **State persistence**: Workflow state persists across Streamlit reruns
+- **Workflow execution**: LangGraph workflows read from and write to `workflow_state`
+- **State synchronization**: `StateSynchronizer` manages updates to `workflow_state`
+
+### Streamlit Session State Usage
+
+`st.session_state` is used for **display management** and **runtime state**:
+
+**Display Management**:
+- `workflow_state`: The single source of truth (stored in session state for Streamlit persistence)
+- `display_sections`: **Deprecated** - now stored in `workflow_state.metadata.display_sections`
+- `agent_executors`: Runtime executor instances (not persisted in workflow_state)
+- `uploaded_files`: File objects for current session (metadata stored in workflow_state)
+
+**Key Separation**:
+- **`workflow_state`**: Persistent, single source of truth for all chat data
+- **`st.session_state`**: Streamlit-specific runtime state and references to workflow_state
+
+**State Flow**:
+```
+User Input
+  ↓
+StateSynchronizer.add_user_message()
+  ↓
+workflow_state["messages"] updated
+  ↓
+DisplayManager creates Section/Block
+  ↓
+Section._save_to_session_state()
+  ↓
+workflow_state["metadata"]["display_sections"] updated
+  ↓
+render_message_history() reads from workflow_state
+  ↓
+Streamlit renders UI
+```
+
+**Benefits**:
+- **Consistency**: All state in one place (`workflow_state`)
+- **Persistence**: State survives Streamlit reruns
+- **Workflow compatibility**: LangGraph workflows can read/write state directly
+- **UI synchronization**: Display always reflects workflow_state
+
 ## Configuration
 
 ### Agent Configuration Files
@@ -661,7 +758,6 @@ Agents can be configured using YAML files:
 ```yaml
 - name: supervisor
   role: Project Manager
-  type: response
   instructions: |
     You coordinate tasks and delegate to specialists.
     Analyze user requests and assign work appropriately.
@@ -674,7 +770,6 @@ Agents can be configured using YAML files:
 
 - name: worker
   role: Specialist
-  type: response
   instructions: |
     You handle specific tasks delegated by the supervisor.
   provider: openai
@@ -687,7 +782,6 @@ Agents can be configured using YAML files:
 ```yaml
 - name: analyst
   role: Data Analyst
-  type: response
   instructions: "..."
   tools:
     - analyze_data
@@ -762,9 +856,9 @@ chat.run()
 | `human_in_loop` | `bool` | `False` | Enable human-in-the-loop approval for tool execution |
 | `interrupt_on` | `Dict` | `{}` | HITL configuration per tool |
 | `hitl_description_prefix` | `str` | `""` | Prefix for HITL approval messages |
-| `allow_code_interpreter` | `bool` | `False` | Enable code interpreter (Response API only) |
-| `allow_file_search` | `bool` | `False` | Enable file search (Response API only) |
-| `allow_web_search` | `bool` | `False` | Enable web search (Response API only) |
+| `allow_code_interpreter` | `bool` | `False` | Enable code interpreter (Responses API only) |
+| `allow_file_search` | `bool` | `False` | Enable file search (Responses API only) |
+| `allow_web_search` | `bool` | `False` | Enable web search (Responses API only) |
 
 **Example**:
 ```python
@@ -774,7 +868,6 @@ agent = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Analyze data and provide insights",
-    # type field is deprecated - all agents use CreateAgentExecutor
     provider="openai",
     model="gpt-4o-mini",
     temperature=0.0,
