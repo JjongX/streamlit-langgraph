@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Any
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
@@ -61,7 +61,7 @@ class HierarchicalPattern:
         if execution_mode != "sequential":
             raise NotImplementedError("Only sequential mode is currently supported for hierarchical workflows")
         if checkpointer is None:
-            workflow_checkpointer = MemorySaver()
+            workflow_checkpointer = InMemorySaver()
         else:
             workflow_checkpointer = checkpointer
         

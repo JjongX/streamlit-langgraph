@@ -69,8 +69,9 @@ class WorkflowExecutor:
                 last_user_msg_id = msg.get("id")
                 break
         
-        # Track which messages have already been displayed to prevent duplicates
-        display_sections = st.session_state.get("display_sections", [])
+        # Use workflow_state as single source of truth
+        workflow_state = st.session_state.workflow_state
+        display_sections = workflow_state.get("metadata", {}).get("display_sections", [])
         displayed_message_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
         
         def wrapper(state: WorkflowState):

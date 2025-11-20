@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Any
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
@@ -42,7 +42,7 @@ class SupervisorPattern:
         if delegation_mode not in ("handoff", "tool_calling"):
             raise ValueError(f"delegation_mode must be 'handoff' or 'tool_calling', got '{delegation_mode}'")
         if checkpointer is None:
-            workflow_checkpointer = MemorySaver()
+            workflow_checkpointer = InMemorySaver()
         else:
             workflow_checkpointer = checkpointer
     

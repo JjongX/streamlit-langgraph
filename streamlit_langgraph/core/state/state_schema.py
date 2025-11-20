@@ -10,20 +10,13 @@ class WorkflowStateManager:
     
     @staticmethod
     def merge_metadata(x: Dict[str, Any], y: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Merge metadata dictionaries, preserving all keys from both.
-        This ensures that pending_interrupts and other HITL state is not lost.
-        
-        Used as a reducer in the WorkflowState class.
-        """
+        """Merge metadata dictionaries, preserving all keys. Used as a reducer in WorkflowState."""
         result = x.copy() if x else {}
         if y:
             for key, value in y.items():
                 if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                    # Deep merge for nested dicts (e.g., pending_interrupts, executors)
                     result[key] = {**result[key], **value}
                 else:
-                    # Overwrite for non-dict values or new keys
                     result[key] = value
         return result
     
@@ -120,6 +113,58 @@ class WorkflowStateManager:
                 final_metadata[key] = {**final_metadata[key], **initial_metadata[key]}
             else:
                 final_metadata[key] = initial_metadata[key]
+    
+    @staticmethod
+    def preserve_display_sections(initial_state: "WorkflowState", final_state: "WorkflowState") -> None:
+        """Merge display_sections from initial_state into final_state to preserve UI state."""
+        initial_metadata = initial_state.get("metadata", {})
+        initial_display_sections = initial_metadata.get("display_sections", [])
+        
+        if not initial_display_sections:
+            return
+        
+        if "metadata" not in final_state:
+            final_state["metadata"] = {}
+        
+        final_metadata = final_state["metadata"]
+        
+        if "display_sections" not in final_metadata:
+            final_metadata["display_sections"] = []
+        
+        existing_message_ids = {
+            s.get("message_id") for s in final_metadata["display_sections"] 
+            if s.get("message_id")
+        }
+        
+        for section in initial_display_sections:
+            msg_id = section.get("message_id")
+            if msg_id and msg_id not in existing_message_ids:
+                final_metadata["display_sections"].append(section)
+            elif not msg_id:
+                # Check for duplicates by comparing role and content
+                section_role = section.get("role")
+                section_blocks = section.get("blocks", [])
+                section_content = ""
+                if section_blocks:
+                    for block in section_blocks:
+                        if block.get("category") == "text":
+                            section_content = block.get("content", "")
+                            break
+                
+                section_exists = False
+                for existing_section in final_metadata["display_sections"]:
+                    if existing_section.get("role") == section_role:
+                        existing_blocks = existing_section.get("blocks", [])
+                        if existing_blocks:
+                            for block in existing_blocks:
+                                if block.get("category") == "text" and block.get("content") == section_content:
+                                    section_exists = True
+                                    break
+                        if section_exists:
+                            break
+                
+                if not section_exists:
+                    final_metadata["display_sections"].append(section)
 
 class WorkflowState(TypedDict):
     """

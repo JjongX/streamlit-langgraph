@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.types import Command
 
@@ -240,7 +240,6 @@ class CreateAgentExecutor:
                 )
             )
         
-        # Build tools list (native OpenAI tools are handled automatically by LangChain)
         all_tools = list(self.tools) if self.tools else []
         
         agent_kwargs = {
@@ -252,10 +251,10 @@ class CreateAgentExecutor:
         if middleware:
             agent_kwargs["middleware"] = middleware
         
-        # This is separate from the workflow checkpointer (different MemorySaver instance)
+        # This is separate from the workflow checkpointer (different InMemorySaver instance)
         # Using the same thread_id is safe because each checkpointer maintains its own namespace
         if self.agent.human_in_loop and self.agent.interrupt_on:
-            agent_checkpointer = MemorySaver()
+            agent_checkpointer = InMemorySaver()
             agent_kwargs["checkpointer"] = agent_checkpointer
         
         self.agent_obj = create_agent(**agent_kwargs)

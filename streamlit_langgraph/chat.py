@@ -54,7 +54,7 @@ class LangGraphChat:
         # Core managers
         self.agent_manager = AgentManager()
         self.state_manager = StateSynchronizer()
-        self.display_manager = DisplayManager(self.config)
+        self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
         # Workflow setup
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor()
@@ -98,8 +98,6 @@ class LangGraphChat:
             st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []  # File objects (not in workflow_state)
-        if "display_sections" not in st.session_state:
-            st.session_state.display_sections = []  # UI sections for persistence across reruns
 
     def run(self):
         """Run the main chat interface."""
@@ -145,7 +143,9 @@ class LangGraphChat:
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
-        if not st.session_state.display_sections:
+        # Check if there are any display sections in workflow_state
+        display_sections = self.state_manager.get_display_sections()
+        if not display_sections:
             self.display_manager.render_welcome_message()
 
         # Check for pending interrupts FIRST - workflow_state is the single source of truth
@@ -245,27 +245,26 @@ class LangGraphChat:
         return {"role": "assistant", "content": "", "agent": "system"}
     
     def _run_workflow(self, prompt: str) -> Dict[str, Any]:
-        """
-        Run the multiagent workflow and orchestrate UI updates.
-        
-        Coordinates workflow execution with display callbacks, HITL handling,
-        and state synchronization.
-        """
+        """Run the multiagent workflow and orchestrate UI updates."""
         def display_callback(msg, msg_id):
-            """Callback to display agent responses as they complete during workflow execution."""
             self.display_manager.render_workflow_message(msg)
         
-        # Use WorkflowExecutor directly (orchestrator logic merged in)
         result_state = self.workflow_executor.execute_workflow(
             self.workflow, display_callback=display_callback
         )
 
         if HITLUtils.has_pending_interrupts(result_state):
+            WorkflowStateManager.preserve_display_sections(
+                st.session_state.workflow_state, result_state
+            )
             st.session_state.workflow_state = result_state
             st.rerun()
         else:
             self.state_manager.clear_hitl_state()
 
+        WorkflowStateManager.preserve_display_sections(
+            st.session_state.workflow_state, result_state
+        )
         st.session_state.workflow_state = result_state
         
         return {
