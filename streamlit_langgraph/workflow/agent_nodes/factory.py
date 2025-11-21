@@ -46,7 +46,7 @@ class AgentNodeFactory:
             tool_agents_map = {agent.name: agent for agent in workers}
             def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
                 user_query = AgentNodeBase.extract_user_query(state)
-                agent_tools = ToolCallingDelegation.create_agent_tools(workers, state)
+                agent_tools = ToolCallingDelegation.create_agent_tools(workers)
                 response = ToolCallingDelegation.execute_agent_with_tools(
                     supervisor, state, user_query, agent_tools, tool_agents_map
                 )

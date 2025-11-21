@@ -74,7 +74,7 @@ class ToolCallingDelegation:
         return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)
 
     @staticmethod
-    def create_agent_tools(tool_agents: List[Agent], state: WorkflowState) -> List[Dict[str, Any]]:
+    def create_agent_tools(tool_agents: List[Agent]) -> List[Dict[str, Any]]:
         """Create OpenAI function tool definitions for each agent."""
         return [{
             "type": "function",

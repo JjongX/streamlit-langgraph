@@ -5,7 +5,7 @@ Run this server with:
     # Using FastMCP CLI (stdio transport):
     fastmcp run weather_server.py
     
-    # Using FastMCP CLI with HTTP transport (for type="response", use 0.0.0.0 for public access):
+    # Using FastMCP CLI with HTTP transport (use 0.0.0.0 for public access):
     fastmcp run weather_server.py --transport http --host 0.0.0.0 --port 8000
     
 Then configure it in your agent's mcp_servers configuration:

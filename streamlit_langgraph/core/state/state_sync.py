@@ -1,6 +1,6 @@
 # Synchronizes between WorkflowState and Streamlit's session_state for UI rendering.
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from .state_schema import WorkflowStateManager
@@ -10,15 +10,9 @@ from ...workflow.agent_nodes.base import create_message_with_id
 class StateSynchronizer:
     
     def update_workflow_state(self, updates: Dict[str, Any]) -> None:
-        """
-        Update workflow state with new data.
-        
-        Args:
-            updates: Dictionary of state updates to apply
-        """
+        """Update workflow state with new data."""
         workflow_state = st.session_state.workflow_state
         
-        # Apply updates using WorkflowState reducers
         if "messages" in updates:
             workflow_state["messages"].extend(updates["messages"])
         
@@ -86,4 +80,33 @@ class StateSynchronizer:
             if "hitl_decisions" in workflow_state["metadata"]:
                 workflow_state["metadata"]["hitl_decisions"] = {}
         st.session_state.agent_executors = {}
+    
+    def get_display_sections(self) -> List[Dict[str, Any]]:
+        """Get display sections from workflow_state metadata."""
+        workflow_state = st.session_state.workflow_state
+        return workflow_state.get("metadata", {}).get("display_sections", [])
+    
+    def update_display_section(self, section_index: Optional[int], section_data: Dict[str, Any]) -> int:
+        """Update or append a display section in workflow_state. Returns section index."""
+        workflow_state = st.session_state.workflow_state
+        if "metadata" not in workflow_state:
+            workflow_state["metadata"] = {}
+        if "display_sections" not in workflow_state["metadata"]:
+            workflow_state["metadata"]["display_sections"] = []
+        
+        display_sections = workflow_state["metadata"]["display_sections"]
+        
+        if section_index is not None and section_index < len(display_sections):
+            # Update existing section in place
+            display_sections[section_index] = section_data
+            return section_index
+        else:
+            # Append new section
+            display_sections.append(section_data)
+            return len(display_sections) - 1
+    
+    def get_displayed_message_ids(self) -> set:
+        """Get set of message IDs that have been displayed."""
+        display_sections = self.get_display_sections()
+        return {s.get("message_id") for s in display_sections if s.get("message_id")}
 

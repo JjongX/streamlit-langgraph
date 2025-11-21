@@ -1,6 +1,5 @@
 - name: Analysis_Supervisor
   role: Product Analysis Coordinator
-  type: response
   instructions: |
     You coordinate a team of specialized analysts who work in PARALLEL.
     
@@ -23,7 +22,6 @@
 
 - name: Market_Analyst
   role: Market Research Specialist
-  type: response
   instructions: |
     You analyze market trends, competitive landscape, and market positioning.
     
@@ -42,7 +40,6 @@
 
 - name: Technical_Analyst
   role: Technical Specifications Expert
-  type: response
   instructions: |
     You analyze technical aspects, features, and specifications.
     
@@ -62,7 +59,6 @@
 
 - name: Customer_Analyst
   role: Customer Insights Specialist
-  type: response
   instructions: |
     You analyze customer perspectives, reviews, and sentiment.
     

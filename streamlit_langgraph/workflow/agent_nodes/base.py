@@ -101,7 +101,6 @@ class AgentNodeBase:
             state["metadata"].update(interrupt_update["metadata"])
             return ""  # Empty response for interrupt
         
-        # Return normal response
         return result.get("content", "")
 
     @staticmethod

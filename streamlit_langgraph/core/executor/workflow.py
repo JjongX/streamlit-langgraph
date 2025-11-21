@@ -69,8 +69,9 @@ class WorkflowExecutor:
                 last_user_msg_id = msg.get("id")
                 break
         
-        # Track which messages have already been displayed to prevent duplicates
-        display_sections = st.session_state.get("display_sections", [])
+        # Use workflow_state as single source of truth
+        workflow_state = st.session_state.workflow_state
+        display_sections = workflow_state.get("metadata", {}).get("display_sections", [])
         displayed_message_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
         
         def wrapper(state: WorkflowState):
@@ -127,20 +128,14 @@ class WorkflowExecutor:
         conversation_messages = st.session_state.workflow_state.get("messages", [])
         executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
         
-        if agent.type == "response":
-            response = executor.execute_agent(
-                llm_client, prompt,
-                stream=config.stream if config else True,
-                file_messages=file_messages,
-                messages=conversation_messages
-            )
-            return response
-        else:
-            response = executor.execute_agent(
-                llm_client, prompt,
-                messages=conversation_messages
-            )
-            return response
+        # All executors now use CreateAgentExecutor which supports file_messages and stream
+        response = executor.execute_agent(
+            llm_client, prompt,
+            stream=config.stream if config else True,
+            file_messages=file_messages,
+            messages=conversation_messages
+        )
+        return response
     
     def _execute_invoke(self, workflow: StateGraph, initial_state: WorkflowState, 
                        config: Dict[str, Any]) -> WorkflowState:

@@ -1,6 +1,7 @@
 # Handoff delegation pattern implementation for agent nodes.
 
 import json
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
@@ -23,9 +24,7 @@ class HandoffDelegation:
         """
         Execute supervisor agent with structured routing via function calling.
         
-        Routes to appropriate executor based on agent type:
-        - ResponseAPIExecutor (OpenAI response type) -> uses OpenAI function calling directly
-        - CreateAgentExecutor (LangChain) -> uses LangChain tool calling
+        Always uses CreateAgentExecutor with LangChain tool calling.
         
         Args:
             agent: Supervisor agent
@@ -37,14 +36,9 @@ class HandoffDelegation:
         Returns:
             Tuple of (response_content, routing_decision_dict)
         """
-        if agent.provider.lower() == "openai" and agent.type == "response":
-            return HandoffDelegation._execute_with_response_api_executor(
-                agent, state, input_message, workers, allow_parallel
-            )
-        else:
-            return HandoffDelegation._execute_with_create_agent_executor(
-                agent, state, input_message, workers, allow_parallel
-            )
+        return HandoffDelegation._execute_with_create_agent_executor(
+            agent, state, input_message, workers, allow_parallel
+        )
     
     @staticmethod
     def build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
@@ -73,30 +67,6 @@ class HandoffDelegation:
                 worker_outputs.append(f"**{worker_name}**: {output}")
         return worker_outputs
         
-    @staticmethod
-    def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
-                                          input_message: str, workers: List[Agent],
-                                          allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
-        """Execute supervisor using ResponseAPIExecutor approach with OpenAI function calling."""
-        client = AgentManager.get_llm_client(agent)
-        tools = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
-        
-        # Use clean input_message with system message for agent context
-        messages = []
-        if agent.system_message:
-            messages.append({"role": "system", "content": agent.system_message})
-        messages.append({"role": "user", "content": input_message})
-        
-        with st.spinner(f"🤖 {agent.name} is working..."):
-            response = client.chat.completions.create(
-                model=agent.model, messages=messages, temperature=agent.temperature,
-                tools=tools, tool_choice="auto" if tools else None
-            )
-        message = response.choices[0].message
-        content = message.content or ""
-        routing_decision = HandoffDelegation._extract_openai_routing_decision(message, content)
-        return routing_decision[1], routing_decision[0]
-    
     @staticmethod
     def _execute_with_create_agent_executor(agent: Agent, state: WorkflowState,
                                            input_message: str, workers: List[Agent],
@@ -136,7 +106,6 @@ class HandoffDelegation:
         # Use workflow's thread_id (from state metadata) to match checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
         if not workflow_thread_id:
-            import uuid
             workflow_thread_id = str(uuid.uuid4())
             state["metadata"]["workflow_thread_id"] = workflow_thread_id
         
@@ -155,7 +124,7 @@ class HandoffDelegation:
             if executor.agent.human_in_loop and executor.agent.interrupt_on:
                 # Convert input_message to LangChain message format
                 langchain_messages = [HumanMessage(content=input_message)]
-                interrupt_data = executor._detect_interrupt_in_stream(config, langchain_messages)
+                interrupt_data = executor.detect_interrupt_in_stream(config, langchain_messages)
             
             if interrupt_data:
                 result = executor._create_interrupt_response(interrupt_data, workflow_thread_id, config)
@@ -312,11 +281,37 @@ class HandoffDelegation:
                             }
                             delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
                             if hasattr(msg, 'content') and msg.content:
-                                content = msg.content
+                                # Handle both string and list content formats
+                                if isinstance(msg.content, str):
+                                    content = msg.content
+                                elif isinstance(msg.content, list):
+                                    # Extract text from content blocks
+                                    text_parts = []
+                                    for block in msg.content:
+                                        if isinstance(block, dict) and block.get('type') == 'text':
+                                            text_parts.append(block.get('text', ''))
+                                        elif isinstance(block, str):
+                                            text_parts.append(block)
+                                    content = ''.join(text_parts) if text_parts else ""
+                                else:
+                                    content = str(msg.content) if msg.content else ""
                             content = content + delegation_text if content else delegation_text[2:]
                             return routing_decision, content
                 if hasattr(msg, 'content') and msg.content and not content:
-                    content = msg.content
+                    # Handle both string and list content formats
+                    if isinstance(msg.content, str):
+                        content = msg.content
+                    elif isinstance(msg.content, list):
+                        # Extract text from content blocks
+                        text_parts = []
+                        for block in msg.content:
+                            if isinstance(block, dict) and block.get('type') == 'text':
+                                text_parts.append(block.get('text', ''))
+                            elif isinstance(block, str):
+                                text_parts.append(block)
+                        content = ''.join(text_parts) if text_parts else ""
+                    else:
+                        content = str(msg.content) if msg.content else ""
         
         if not content:
             if isinstance(out, dict):
@@ -325,11 +320,32 @@ class HandoffDelegation:
                 elif 'messages' in out and out['messages']:
                     last_msg = out['messages'][-1]
                     if hasattr(last_msg, 'content'):
-                        content = last_msg.content
+                        msg_content = last_msg.content
+                        # Handle both string and list content formats
+                        if isinstance(msg_content, str):
+                            content = msg_content
+                        elif isinstance(msg_content, list):
+                            # Extract text from content blocks
+                            text_parts = []
+                            for block in msg_content:
+                                if isinstance(block, dict) and block.get('type') == 'text':
+                                    text_parts.append(block.get('text', ''))
+                                elif isinstance(block, str):
+                                    text_parts.append(block)
+                            content = ''.join(text_parts) if text_parts else ""
+                        else:
+                            content = str(msg_content) if msg_content else ""
                     else:
                         content = str(last_msg)
             elif hasattr(out, 'content'):
-                content = out.content
+                out_content = out.content
+                # Handle both string and list content formats
+                if isinstance(out_content, str):
+                    content = out_content
+                elif isinstance(out_content, list):
+                    content = ''.join(str(c) for c in out_content if c)
+                else:
+                    content = str(out_content) if out_content else ""
             else:
                 content = str(out)
         

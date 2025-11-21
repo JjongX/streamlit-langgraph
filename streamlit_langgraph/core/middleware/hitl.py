@@ -278,15 +278,13 @@ class HITLHandler:
         """
         Get existing executor or create a new one.
         
-        Supports both CreateAgentExecutor and ResponseAPIExecutor.
-        
         Args:
             executor_key: Key identifying the executor
             agent_name: Name of the agent
             workflow_state: Current workflow state
             
         Returns:
-            CreateAgentExecutor or ResponseAPIExecutor instance or None
+            CreateAgentExecutor instance or None
         """
         registry = ExecutorRegistry()
         executor_key = f"workflow_executor_{agent_name}"
@@ -312,7 +310,7 @@ class HITLHandler:
         Args:
             workflow_state: Current workflow state
             executor_key: Key identifying the executor
-            executor: CreateAgentExecutor or ResponseAPIExecutor instance
+            executor: CreateAgentExecutor instance
             agent_name: Name of the agent
             decisions: List of user decisions
             original_config: Original execution config (should contain thread_id)
@@ -342,11 +340,8 @@ class HITLHandler:
             resume_config["configurable"] = {}
         resume_config["configurable"]["thread_id"] = workflow_thread_id
         
-        # Get messages from workflow_state for resume
-        conversation_messages = workflow_state.get("messages", [])
-        
         with st.spinner("Processing your decision..."):
-            resume_response = executor.resume(formatted_decisions, config=resume_config, messages=conversation_messages)
+            resume_response = executor.resume(formatted_decisions, config=resume_config)
         
         # Handle additional interrupts
         if resume_response and resume_response.get("__interrupt__"):
@@ -395,20 +390,6 @@ class HITLHandler:
         
         agent_interrupt_on = getattr(executor.agent, 'interrupt_on', None)
         allow_edit = HITLUtils.check_edit_allowed(agent_interrupt_on, tool_name)
-        
-        def handle_approve():
-            self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "approve"})
-        
-        def handle_reject():
-            self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "reject"})
-        
-        def handle_edit(edit_text):
-            parsed_input, error_msg = HITLUtils.parse_edit_input(edit_text, tool_input)
-            if error_msg:
-                st.error(error_msg)
-            else:
-                self.handle_decision(workflow_state, executor_key, decisions, action_index,
-                                    {"type": "edit", "input": parsed_input})
                                     
         with st.container():
             st.markdown("---")
@@ -420,10 +401,10 @@ class HITLHandler:
             col1, col2, col3 = st.columns(3)
             with col1:
                 if st.button("✅ Approve", key=f"approve_{executor_key}_{action_id}"):
-                    handle_approve()
+                    self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "approve"})
             with col2:
                 if st.button("❌ Reject", key=f"reject_{executor_key}_{action_id}"):
-                    handle_reject()
+                    self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "reject"})
             with col3:
                 if allow_edit:
                     edit_key = f"edit_{executor_key}_{action_id}"
@@ -436,7 +417,12 @@ class HITLHandler:
                     )
                     
                     if st.button("✏️ Approve with Edit", key=edit_btn_key):
-                        handle_edit(edit_text)
+                        parsed_input, error_msg = HITLUtils.parse_edit_input(edit_text, tool_input)
+                        if error_msg:
+                            st.error(error_msg)
+                        else:
+                            self.handle_decision(workflow_state, executor_key, decisions, action_index,
+                                                {"type": "edit", "input": parsed_input})
     
     def handle_decision(self, workflow_state: Dict[str, Any], executor_key: str,
                        decisions: List[Optional[Dict[str, Any]]], action_index: int,

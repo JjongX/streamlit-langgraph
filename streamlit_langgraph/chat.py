@@ -1,6 +1,5 @@
 # Main chat interface.
 
-import base64
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -10,7 +9,7 @@ from .agent import Agent, AgentManager
 from .core.executor import WorkflowExecutor
 from .core.state import StateSynchronizer, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
-from .ui import DisplayManager
+from .ui import DisplayManager, StreamProcessor
 from .utils import FileHandler, CustomTool
 
 
@@ -55,7 +54,7 @@ class LangGraphChat:
         # Core managers
         self.agent_manager = AgentManager()
         self.state_manager = StateSynchronizer()
-        self.display_manager = DisplayManager(self.config)
+        self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
         # Workflow setup
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor()
@@ -88,6 +87,7 @@ class LangGraphChat:
         
         # Handlers
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
+        self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
     
     def _init_session_state(self):
         """Initialize all Streamlit session state variables in one place."""
@@ -98,9 +98,7 @@ class LangGraphChat:
             st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []  # File objects (not in workflow_state)
-        if "display_sections" not in st.session_state:
-            st.session_state.display_sections = []  # UI sections for persistence across reruns
-    
+
     def run(self):
         """Run the main chat interface."""
         st.set_page_config(
@@ -145,7 +143,9 @@ class LangGraphChat:
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
-        if not st.session_state.display_sections:
+        # Check if there are any display sections in workflow_state
+        display_sections = self.state_manager.get_display_sections()
+        if not display_sections:
             self.display_manager.render_welcome_message()
 
         # Check for pending interrupts FIRST - workflow_state is the single source of truth
@@ -165,10 +165,10 @@ class LangGraphChat:
     
     def _handle_user_input(self, chat_input):
         """Handle user input and generate responses."""
-        if self.config.enable_file_upload: # File upload enabled; it has text and files attribute
+        if self.config.enable_file_upload:
             prompt = chat_input.text
             files = getattr(chat_input, 'files', [])
-        else: # File upload disabled (plain string)  
+        else:
             prompt = str(chat_input)
             files = []
 
@@ -202,15 +202,12 @@ class LangGraphChat:
             st.rerun()
         
         if response and "stream" in response:
-            # Handle streaming response from OpenAI Responses API
+            # Handle streaming response - detect format and route to appropriate handler
             section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             
-            full_response = ""
-            for event in response["stream"]:
-                if hasattr(event, 'type'):
-                    full_response += self._process_stream_event(event, section)
-            
+            stream_iter = response["stream"]
+            full_response = self.stream_processor.process_stream(section, stream_iter)
             response["content"] = full_response
         else:
             # Handle non-streaming response from agent
@@ -238,47 +235,6 @@ class LangGraphChat:
                     "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
                 })
     
-    def _process_stream_event(self, event, section) -> str:
-        """
-        Process a single streaming event from OpenAI Responses API.
-        
-        Handles various event types: text deltas, code interpreter output,
-        image generation, and file citations.
-        """
-        if event.type == "response.output_text.delta":
-            section.update("text", event.delta)
-            section.stream()
-            return event.delta
-        elif event.type == "response.code_interpreter_call_code.delta":
-            section.update("code", event.delta)
-            section.stream()
-        elif event.type == "response.image_generation_call.partial_image":
-            image_bytes = base64.b64decode(event.partial_image_b64)
-            filename = f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}"
-            section.update("image", image_bytes, filename=filename, file_id=getattr(event, 'item_id', None))
-            section.stream()
-        elif event.type == "response.output_text.annotation.added":
-            annotation = event.annotation
-            if annotation["type"] == "container_file_citation":
-                file_id = annotation["file_id"]
-                filename = annotation["filename"]
-                file_bytes = None
-                if hasattr(self, '_client') and hasattr(self, '_container_id') and self._client and self._container_id:
-                    file_content = self._client.containers.files.content.retrieve(
-                        file_id=file_id, container_id=self._container_id
-                    )
-                    file_bytes = file_content.read()
-                if file_bytes:
-                    if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                        section.update("image", file_bytes, filename=filename, file_id=file_id)
-                        section.update("download", file_bytes, filename=filename, file_id=file_id)
-                        section.stream()
-                    else:
-                        section.update("download", file_bytes, filename=filename, file_id=file_id)
-                        section.stream()
-                        
-        return ""
-    
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
         """Generate response using the configured workflow or dynamically selected agents."""
         if self.workflow:
@@ -289,27 +245,26 @@ class LangGraphChat:
         return {"role": "assistant", "content": "", "agent": "system"}
     
     def _run_workflow(self, prompt: str) -> Dict[str, Any]:
-        """
-        Run the multiagent workflow and orchestrate UI updates.
-        
-        Coordinates workflow execution with display callbacks, HITL handling,
-        and state synchronization.
-        """
+        """Run the multiagent workflow and orchestrate UI updates."""
         def display_callback(msg, msg_id):
-            """Callback to display agent responses as they complete during workflow execution."""
             self.display_manager.render_workflow_message(msg)
         
-        # Use WorkflowExecutor directly (orchestrator logic merged in)
         result_state = self.workflow_executor.execute_workflow(
             self.workflow, display_callback=display_callback
         )
 
         if HITLUtils.has_pending_interrupts(result_state):
+            WorkflowStateManager.preserve_display_sections(
+                st.session_state.workflow_state, result_state
+            )
             st.session_state.workflow_state = result_state
             st.rerun()
         else:
             self.state_manager.clear_hitl_state()
 
+        WorkflowStateManager.preserve_display_sections(
+            st.session_state.workflow_state, result_state
+        )
         st.session_state.workflow_state = result_state
         
         return {
@@ -337,6 +292,7 @@ class LangGraphChat:
         # Update container_id if agent has code interpreter (for file retrieval)
         if agent.container_id:
             self._container_id = agent.container_id
+            self.stream_processor._container_id = agent.container_id
         
         # Update workflow_state with agent response using state manager
         if response.get("content"):

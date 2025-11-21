@@ -125,7 +125,7 @@ class Section:
         self._save_to_session_state()
     
     def _save_to_session_state(self) -> None:
-        """Save section data to session state for persistence."""
+        """Save section data to workflow_state."""
         section_data = {
             "role": self.role,
             "blocks": [],
@@ -139,7 +139,6 @@ class Section:
                 "filename": block.filename,
                 "file_id": block.file_id
             }
-            # For binary content (images, downloads), store as base64 or reference
             if block.category in ["image", "download"] and block.content:
                 import base64
                 if isinstance(block.content, bytes):
@@ -151,23 +150,34 @@ class Section:
             
             section_data["blocks"].append(block_data)
         
-        # Update existing section if it exists, otherwise append new one
-        # This prevents duplicate sections during streaming
-        if self._section_index is not None and self._section_index < len(st.session_state.display_sections):
-            # Update existing section in place
-            st.session_state.display_sections[self._section_index] = section_data
+        if self.display_manager.state_manager:
+            self._section_index = self.display_manager.state_manager.update_display_section(
+                self._section_index, section_data
+            )
         else:
-            # Append new section and remember its index
-            st.session_state.display_sections.append(section_data)
-            self._section_index = len(st.session_state.display_sections) - 1
+            # Fallback to session_state if state_manager not available
+            if "display_sections" not in st.session_state:
+                st.session_state.display_sections = []
+            if self._section_index is not None and self._section_index < len(st.session_state.display_sections):
+                st.session_state.display_sections[self._section_index] = section_data
+            else:
+                st.session_state.display_sections.append(section_data)
+                self._section_index = len(st.session_state.display_sections) - 1
 
 
 class DisplayManager:
     """Manages UI rendering for chat messages."""
     
-    def __init__(self, config):
-        """Initialize DisplayManager with UI configuration."""
+    def __init__(self, config, state_manager=None):
+        """
+        Initialize DisplayManager with UI configuration.
+        
+        Args:
+            config: UI configuration
+            state_manager: StateSynchronizer instance for accessing workflow_state
+        """
         self.config = config
+        self.state_manager = state_manager
         self._sections = []
         self._download_button_key = 0
     
@@ -182,8 +192,11 @@ class DisplayManager:
         return section
     
     def render_message_history(self) -> None:
-        """Render historical messages from session state."""
-        display_sections = st.session_state.get("display_sections", [])
+        """Render historical messages from workflow_state."""
+        if self.state_manager:
+            display_sections = self.state_manager.get_display_sections()
+        else:
+            display_sections = st.session_state.get("display_sections", [])
         
         for section_data in display_sections:
             avatar = (self.config.user_avatar if section_data["role"] == "user" 
@@ -237,9 +250,12 @@ class DisplayManager:
         if not msg_id:
             return False
         
-        # Check if already displayed using display_sections
-        display_sections = st.session_state.get("display_sections", [])
-        displayed_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
+        if self.state_manager:
+            displayed_ids = self.state_manager.get_displayed_message_ids()
+        else:
+            display_sections = st.session_state.get("display_sections", [])
+            displayed_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
+        
         if msg_id in displayed_ids:
             return False
         
