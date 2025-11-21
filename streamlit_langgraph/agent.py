@@ -1,22 +1,26 @@
+# Main agent class.
+
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
-import openai
 import yaml
 from langchain.chat_models import init_chat_model
+from langchain_openai import ChatOpenAI
 
 @dataclass
 class Agent:
     """
     Configuration class for defining individual agents in a multiagent system.
-    Required fields: name, role, instructions, type ('response' or 'agent').
+    Required fields: name, role, instructions.
     provider and model default to 'openai' and 'gpt-4.1-mini' if not specified.
+    
+    All agents use CreateAgentExecutor, which automatically uses Responses API
+    when native OpenAI tools are enabled.
     """
     name: str
     role: str
     instructions: str
-    type: str # Must be 'response' or 'agent'
     provider: Optional[str] = "openai"
     model: Optional[str] = "gpt-4.1-mini"
     system_message: Optional[str] = None
@@ -27,6 +31,7 @@ class Agent:
     allow_web_search: bool = False
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
+    mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None  # MCP server configurations
     context: Optional[str] = "least"  # Context mode: "full", "summary", or "least"
     human_in_loop: bool = False  # Enable human-in-the-loop approval (multiagent workflows only)
     interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None  # Tool names to interrupt on
@@ -34,8 +39,6 @@ class Agent:
 
     def __post_init__(self):
         """Post-initialization processing and validation."""
-        if self.type not in ("response", "agent"):
-            raise ValueError("Agent 'type' must be either 'response' or 'agent'.")
         if self.system_message is None:
             self.system_message = f"You are a {self.role}. {self.instructions}"
         # Auto-enable OpenAI's native tools based on tools list configuration
@@ -54,7 +57,6 @@ class Agent:
             "name": self.name,
             "role": self.role,
             "instructions": self.instructions,
-            "type": self.type,
             "provider": self.provider,
             "model": self.model,
             "system_message": self.system_message,
@@ -65,6 +67,8 @@ class Agent:
             "allow_web_search": self.allow_web_search,
             "allow_image_generation": self.allow_image_generation,
             "tools": self.tools,
+            "mcp_servers": self.mcp_servers,
+            "context": self.context,
             "human_in_loop": self.human_in_loop,
             "interrupt_on": self.interrupt_on,
             "hitl_description_prefix": self.hitl_description_prefix,
@@ -75,11 +79,9 @@ class Agent:
         """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
 
+
 class AgentManager:
-    """
-    Manager class for handling multiple agents and their interactions.
-    Provides utilities for loading agents and creating LLM clients.
-    """
+    """Manager class for handling multiple agents and their interactions."""
     
     def __init__(self):
         self.agents: Dict[str, Agent] = {}
@@ -135,23 +137,33 @@ class AgentManager:
         return agents
     
     @staticmethod
-    def get_llm_client(agent: Agent) -> Union[openai.OpenAI, Any]:
-        """Get the appropriate LLM client for an agent based on its configuration."""
-        if agent.type == "response" and agent.provider.lower() == "openai":
-            return openai.OpenAI()
-        else:
-            chat_model = init_chat_model(model=agent.model)
-            setattr(chat_model, "_provider", agent.provider.lower())
-            return chat_model
-
-class ExecutorFactory:
-    """Factory for creating appropriate executor based on agent configuration."""
-    
-    @staticmethod
-    def create(agent: "Agent", thread_id: Optional[str] = None, tools: Optional[list] = None):
-        """Create appropriate executor for the agent."""
-        from .core.executor import ResponseAPIExecutor, CreateAgentExecutor
+    def get_llm_client(agent: Agent) -> Any:
+        """
+        Get the appropriate LLM client for an agent based on its configuration.
         
-        if agent.provider.lower() == "openai" and agent.type == "response":
-            return ResponseAPIExecutor(agent, thread_id=thread_id)
-        return CreateAgentExecutor(agent, tools=tools, thread_id=thread_id)
+        Uses ChatOpenAI with use_responses_api=True when native OpenAI tools are enabled
+        (code_interpreter, web_search, file_search, image_generation) to leverage
+        OpenAI's Responses API for agentic behavior.
+        """
+        has_native_tools = (
+            agent.allow_code_interpreter or
+            agent.allow_web_search or
+            agent.allow_file_search or
+            agent.allow_image_generation
+        )        
+        # For OpenAI provider with native tools, use Responses API
+        if agent.provider.lower() == "openai" and has_native_tools:
+            chat_model = ChatOpenAI(
+                model=agent.model,
+                temperature=agent.temperature,
+                use_responses_api=True
+            )
+        else:
+            # Use standard init_chat_model for other cases
+            chat_model = init_chat_model(
+                model=agent.model,
+                temperature=agent.temperature
+            )
+        
+        setattr(chat_model, "_provider", agent.provider.lower())
+        return chat_model

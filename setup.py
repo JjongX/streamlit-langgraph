@@ -25,13 +25,10 @@ setup(
         "langchain-openai>=1.0.0",
         "openai>=2.3.0",
         "typing-extensions>=4.15.0",
+        "pyyaml>=6.0",
+        "langchain-mcp-adapters>=0.1.13",
+        "fastmcp==2.13.1",
     ],
-    extras_require={
-        "viz": [
-            "pygraphviz>=0.20.0",
-            "streamlit-mermaid>=0.3.0",
-        ],
-    },
     classifiers=[
         "Development Status :: 2 - Pre-Alpha",
         "Intended Audience :: Developers",

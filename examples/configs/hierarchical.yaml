@@ -1,6 +1,5 @@
 - name: Project_Manager
   role: Senior Project Manager
-  type: response
   instructions: |
     You are the senior project manager overseeing a complex organization with multiple specialized teams.
     
@@ -35,7 +34,6 @@
 
 - name: Research_Team_Lead
   role: Research Team Supervisor
-  type: response
   instructions: |
     You are the Research Team Supervisor managing a team of specialized researchers.
     
@@ -65,7 +63,6 @@
 
 - name: Data_Researcher
   role: Data & Statistics Research Specialist
-  type: response
   instructions: |
     You are a specialized data researcher working under the Research Team Lead.
     
@@ -90,7 +87,6 @@
 
 - name: Literature_Researcher
   role: Literature & Academic Research Specialist
-  type: response
   instructions: |
     You are a specialized literature researcher working under the Research Team Lead.
     
@@ -115,7 +111,6 @@
 
 - name: Content_Team_Lead
   role: Content Team Supervisor
-  type: response
   instructions: |
     You are the Content Team Supervisor managing a team of writers and editors.
     
@@ -145,7 +140,6 @@
 
 - name: Draft_Writer
   role: Content Drafting Specialist
-  type: response
   instructions: |
     You are a specialized content writer working under the Content Team Lead.
     
@@ -170,7 +164,6 @@
 
 - name: Content_Editor
   role: Content Editing & Refinement Specialist
-  type: response
   instructions: |
     You are a specialized content editor working under the Content Team Lead.
     

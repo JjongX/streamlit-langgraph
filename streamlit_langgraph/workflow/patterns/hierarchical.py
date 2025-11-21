@@ -1,11 +1,15 @@
-from dataclasses import dataclass
-from typing import List
+# Hierarchical workflow pattern - a top supervisor delegates to sub-supervisors,
+# each managing their own team of workers.
 
+from dataclasses import dataclass
+from typing import List, Optional, Any
+
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
 from ..agent_nodes.factory import AgentNodeFactory
-from ...state import WorkflowState
+from ...core.state import WorkflowState
 
 
 @dataclass
@@ -35,7 +39,8 @@ class HierarchicalPattern:
     def create_hierarchical_workflow(
         top_supervisor: Agent,
         supervisor_teams: List[SupervisorTeam],
-        execution_mode: str = "sequential"
+        execution_mode: str = "sequential",
+        checkpointer: Optional[Any] = None
     ) -> StateGraph:
         """
         Create a hierarchical workflow with a top supervisor coordinating multiple
@@ -45,6 +50,7 @@ class HierarchicalPattern:
             top_supervisor: The top-level supervisor that coordinates sub-supervisors
             supervisor_teams: List of SupervisorTeam objects, each with a supervisor and workers
             execution_mode: "sequential" execution (parallel not yet supported for hierarchical)
+            checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel).
             
         Returns:
             StateGraph: Compiled hierarchical workflow graph
@@ -54,6 +60,10 @@ class HierarchicalPattern:
         
         if execution_mode != "sequential":
             raise NotImplementedError("Only sequential mode is currently supported for hierarchical workflows")
+        if checkpointer is None:
+            workflow_checkpointer = InMemorySaver()
+        else:
+            workflow_checkpointer = checkpointer
         
         graph = StateGraph(WorkflowState)
         
@@ -87,7 +97,7 @@ class HierarchicalPattern:
             graph, top_supervisor, supervisor_teams
         )
         
-        return graph.compile()
+        return graph.compile(checkpointer=workflow_checkpointer)
     
     @staticmethod
     def _add_hierarchical_routing(graph: StateGraph, top_supervisor: Agent, 

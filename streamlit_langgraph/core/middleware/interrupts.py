@@ -1,10 +1,15 @@
-# Centralized interrupt management for HITL workflows.
+# General interrupt management utilities for middleware.
 
 from typing import Any, Dict, Optional
 
 
 class InterruptManager:
-    """Centralized interrupt management for HITL workflows."""
+    """
+    Centralized interrupt management for workflows.
+    
+    This class provides general interrupt detection and storage functionality
+    that can be used by any middleware type (HITL, rate limiting, etc.).
+    """
     
     @staticmethod
     def should_interrupt(result: Dict[str, Any]) -> bool:

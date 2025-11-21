@@ -1,71 +1,147 @@
+# Workflow executor for compiled workflows with display callback support.
+
 import copy
 import uuid
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+import streamlit as st
 from langgraph.graph import StateGraph
 
-from ...state import WorkflowState, WorkflowStateManager
+from ...agent import Agent
+from ..state import WorkflowState, WorkflowStateManager
 
 
 class WorkflowExecutor:
     """
-    Handles execution of compiled workflows with Streamlit integration.
+    Unified workflow executor with display callback and single-agent execution support.
+    
+    Merged functionality from WorkflowOrchestrator for simpler architecture.
     """
     
-    def execute_workflow(self, workflow: StateGraph, user_input: str, 
+    def execute_workflow(self, workflow: StateGraph, 
                         display_callback: Optional[Callable] = None,
-                        config: Optional[Dict[str, Any]] = None,
                         initial_state: Optional[WorkflowState] = None) -> WorkflowState:
         """
-        Execute a compiled workflow with the given user input.
+        Execute a compiled workflow with optional real-time display updates.
         
         Args:
-            workflow: Compiled workflow graph
-            user_input: User's input/request (used only if initial_state is not provided)
-            display_callback: Optional callback for displaying messages
-            config: Optional configuration for workflow execution (may include thread_id for HITL)
-            initial_state: Optional existing workflow state to use (prevents duplicate user messages)
+            workflow: Compiled LangGraph workflow
+            display_callback: Optional callback(msg, msg_id) for displaying messages
+            initial_state: Workflow state (user message should already be added)
             
         Returns:
             Final state after workflow execution (may contain pending_interrupts in metadata)
         """
-        # Use provided initial_state if available (user message already added)
-        # Otherwise create new state (for backward compatibility)
-        if initial_state is not None:
-            # Deep copy to avoid modifying the original workflow_state
-            initial_state = copy.deepcopy(initial_state)
-            if config:
-                if "metadata" not in initial_state:
-                    initial_state["metadata"] = {}
-                initial_state["metadata"].update(config)
-        else:
-            # Create and initialize workflow state with message ID
-            initial_state = WorkflowStateManager.create_initial_state(
-                messages=[{"id": str(uuid.uuid4()), "role": "user", "content": user_input}]
-            )
-            if config:
-                initial_state["metadata"].update(config)
-
-        # Build workflow configuration with thread_id for checkpointing
+        if initial_state is None:
+            initial_state = st.session_state.workflow_state
+        
+        # Deep copy to avoid modifying the original workflow_state
+        state = copy.deepcopy(initial_state)
+        if "metadata" not in state:
+            state["metadata"] = {}
+        
         configurable = {}
-        if config and "configurable" in config:
-            configurable.update(config["configurable"])
+        if "configurable" in state.get("metadata", {}):
+            configurable.update(state["metadata"]["configurable"])
         if "thread_id" not in configurable:
             configurable["thread_id"] = str(uuid.uuid4())
+        
+        state["metadata"]["workflow_thread_id"] = configurable["thread_id"]
         workflow_config = {"configurable": configurable}
         
+        # Setup display callback with deduplication if provided
         if display_callback:
-            return self._execute_streaming(workflow, initial_state, display_callback, workflow_config)
-        return self._execute_invoke(workflow, initial_state, workflow_config)
+            display_wrapper = self._create_display_wrapper(display_callback, initial_state)
+            return self._execute_streaming(workflow, state, display_wrapper, workflow_config)
+        
+        return self._execute_invoke(workflow, state, workflow_config)
+    
+    def _create_display_wrapper(self, callback: Callable, initial_state: WorkflowState) -> Callable:
+        """
+        Create display callback wrapper with message deduplication.
+        
+        Prevents re-displaying old messages when a new question is asked.
+        """
+        last_user_msg_id = None
+        workflow_messages = initial_state.get("messages", [])
+        for msg in reversed(workflow_messages):
+            if msg.get("role") == "user" and msg.get("id"):
+                last_user_msg_id = msg.get("id")
+                break
+        
+        # Use workflow_state as single source of truth
+        workflow_state = st.session_state.workflow_state
+        display_sections = workflow_state.get("metadata", {}).get("display_sections", [])
+        displayed_message_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
+        
+        def wrapper(state: WorkflowState):
+            """Display callback wrapper with deduplication logic."""
+            if not state or "messages" not in state:
+                return
+            
+            # Only process messages that come after the last user message
+            found_last_user = last_user_msg_id is None
+            for msg in state["messages"]:
+                msg_id = msg.get("id")
+                
+                # Track when we've reached the last user message
+                if last_user_msg_id and msg_id == last_user_msg_id:
+                    found_last_user = True
+                    continue
+                
+                # Only process messages after the last user message
+                if not found_last_user:
+                    continue
+                
+                # Skip if message has already been displayed
+                if msg_id and msg_id in displayed_message_ids:
+                    continue
+                
+                # Use display callback if provided
+                callback(msg, msg_id)
+                # Mark as displayed
+                if msg_id:
+                    displayed_message_ids.add(msg_id)
+        
+        return wrapper
+    
+    def execute_agent(self, agent: Agent, prompt: str,
+                           llm_client: Any, config: Any,
+                           file_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """
+        Execute a single agent (non-workflow mode).
+        
+        Note: HITL is not supported for single agents.
+        
+        Args:
+            agent: Agent configuration
+            prompt: User's prompt
+            llm_client: LLM client instance
+            config: UI configuration (for stream setting)
+            file_messages: Optional file messages
+            
+        Returns:
+            Dict with 'role', 'content', 'agent', and optionally 'stream'
+        """
+        from .registry import ExecutorRegistry
+        
+        conversation_messages = st.session_state.workflow_state.get("messages", [])
+        executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
+        
+        # All executors now use CreateAgentExecutor which supports file_messages and stream
+        response = executor.execute_agent(
+            llm_client, prompt,
+            stream=config.stream if config else True,
+            file_messages=file_messages,
+            messages=conversation_messages
+        )
+        return response
     
     def _execute_invoke(self, workflow: StateGraph, initial_state: WorkflowState, 
                        config: Dict[str, Any]) -> WorkflowState:
         """Execute workflow synchronously using invoke() method."""
         final_state = workflow.invoke(initial_state, config=config)
-        
-        # Preserve HITL metadata from initial state
         WorkflowStateManager.preserve_hitl_metadata(initial_state, final_state)
-        
         return final_state
     
     def _execute_streaming(self, workflow: StateGraph, initial_state: WorkflowState, 
@@ -83,6 +159,7 @@ class WorkflowExecutor:
                 if self._has_interrupt(accumulated_state, node_name, state_update):
                     return accumulated_state
                 
+                # Display callback wrapper handles deduplication internally
                 display_callback(accumulated_state)
         
         # Final check for interrupts before completing
