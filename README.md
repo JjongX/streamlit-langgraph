@@ -12,6 +12,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 
 - [Main Goal](#main-goal)
 - [Status](#status)
+- [Supported LLM Providers](#supported-llm-providers)
 - [Installation](#installation)
 - [API Key Configuration](#api-key-configuration)
 - [Quick Start](#quick-start)
@@ -22,6 +23,10 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Hierarchical Workflow](#hierarchical-workflow)
   - [Human-in-the-Loop](#human-in-the-loop)
   - [MCP Tools](#mcp-tools)
+- [Core Logic](#core-logic)
+  - [Section and Block System](#section-and-block-system)
+  - [Workflow State as Single Source of Truth](#workflow-state-as-single-source-of-truth)
+  - [Streamlit Session State Usage](#streamlit-session-state-usage)
 - [Core Concepts](#core-concepts)
   - [Agent Configuration](#agent-configuration)
   - [Workflow Patterns](#workflow-patterns)
@@ -30,10 +35,6 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Human-in-the-Loop](#human-in-the-loop-hitl)
   - [Custom Tools](#custom-tools)
   - [MCP (Model Context Protocol)](#mcp-model-context-protocol)
-- [Core Logic](#core-logic)
-  - [Section and Block System](#section-and-block-system)
-  - [Workflow State as Single Source of Truth](#workflow-state-as-single-source-of-truth)
-  - [Streamlit Session State Usage](#streamlit-session-state-usage)
 - [Configuration](#configuration)
   - [Agent Configuration Files](#agent-configuration-files)
   - [UI Configuration](#ui-configuration)
@@ -76,6 +77,24 @@ With that in mind, this package is designed so users can focus on defining agent
 This project is in **pre-alpha**. Features and APIs are subject to change.
 
 **Note:** Uses `langchain`/`langgraph` version `1.0.1`.
+
+## Supported LLM Providers
+
+| Provider | Support | Notes |
+|----------|---------|-------|
+| **OpenAI** | ✅ | Uses **Responses API** when native tools enabled (code_interpreter, web_search, file_search, image_generation). Uses **ChatCompletion API** otherwise. |
+| **Anthropic (Claude)** | ❓ | May work but not explicitly tested. |
+| **Google (Gemini)** | ✅ | Full support via LangChain's `init_chat_model` |
+| **Other LangChain Providers** | ❓ | May work but not explicitly tested.|
+
+**Legend:**
+- ✅ **O** = Fully supported and tested
+- ❌ **X** = Not supported
+- ❓ **?** = May work but not explicitly tested
+
+**Notes:**
+- **OpenAI**: Automatically selects Responses API or ChatCompletion API based on native tool configuration
+- Support depends on LangChain's provider compatibility
 
 ## Installation
 
@@ -245,6 +264,94 @@ pip install fastmcp langchain-mcp-adapters
 **MCP Server Examples**:
 - `examples/mcp_servers/math_server.py` - Math operations (add, multiply, subtract, divide)
 - `examples/mcp_servers/weather_server.py` - Weather information
+
+## Core Logic
+
+This section explains the internal architecture for rendering messages and managing state.
+
+### Section and Block System
+
+All chat messages are rendered through a **Section/Block** architecture:
+
+- **Section**: Represents a single chat message (user or assistant). Contains multiple blocks.
+- **Block**: Individual content units within a section:
+  - `text`: Plain text content
+  - `code`: Code blocks (collapsible)
+  - `reasoning`: Reasoning/thinking blocks (collapsible)
+  - `image`: Image content
+  - `download`: Downloadable files
+
+**Flow**:
+1. User input → Creates a `Section` with `text` block
+2. Agent response → Creates a `Section` with blocks based on content type
+3. Streaming → Updates existing blocks or creates new ones as content arrives
+4. All sections/blocks are saved to `workflow_state` for persistence
+
+### Workflow State as Single Source of Truth
+
+`workflow_state` is the **single source of truth** for all chat history and application state:
+
+**Structure**:
+```python
+workflow_state = {
+    "messages": [...],           # Conversation messages (user/assistant)
+    "metadata": {
+        "display_sections": [...], # UI sections/blocks for rendering
+        "pending_interrupts": {...}, # HITL state
+        "executors": {...},        # Executor metadata
+        ...
+    },
+    "agent_outputs": {...},      # Agent responses by agent name
+    "current_agent": "...",       # Currently active agent
+    "files": [...]               # File metadata
+}
+```
+
+**Key Points**:
+- **All messages** (user and assistant) are stored in `workflow_state["messages"]`
+- **All UI sections/blocks** are stored in `workflow_state["metadata"]["display_sections"]`
+- **State persistence**: Workflow state persists across Streamlit reruns
+- **Workflow execution**: LangGraph workflows read from and write to `workflow_state`
+- **State synchronization**: `StateSynchronizer` manages updates to `workflow_state`
+
+### Streamlit Session State Usage
+
+`st.session_state` is used for **display management** and **runtime state**:
+
+**Display Management**:
+- `workflow_state`: The single source of truth (stored in session state for Streamlit persistence)
+- `display_sections`: **Deprecated** - now stored in `workflow_state.metadata.display_sections`
+- `agent_executors`: Runtime executor instances (not persisted in workflow_state)
+- `uploaded_files`: File objects for current session (metadata stored in workflow_state)
+
+**Key Separation**:
+- **`workflow_state`**: Persistent, single source of truth for all chat data
+- **`st.session_state`**: Streamlit-specific runtime state and references to workflow_state
+
+**State Flow**:
+```
+User Input
+  ↓
+StateSynchronizer.add_user_message()
+  ↓
+workflow_state["messages"] updated
+  ↓
+DisplayManager creates Section/Block
+  ↓
+Section._save_to_session_state()
+  ↓
+workflow_state["metadata"]["display_sections"] updated
+  ↓
+render_message_history() reads from workflow_state
+  ↓
+Streamlit renders UI
+```
+
+**Benefits**:
+- **Consistency**: All state in one place (`workflow_state`)
+- **Persistence**: State survives Streamlit reruns
+- **Workflow compatibility**: LangGraph workflows can read/write state directly
+- **UI synchronization**: Display always reflects workflow_state
 
 ## Core Concepts
 
@@ -585,15 +692,11 @@ if __name__ == "__main__":
 **Running MCP Servers**:
 
 ```bash
-# Using FastMCP CLI (recommended)
+# Using FastMCP CLI
 fastmcp run math_server.py
 
 # Using FastMCP CLI with HTTP transport
 fastmcp run math_server.py --transport http
-
-# Using Python directly
-python math_server.py  # STDIO
-python math_server.py --transport http --port 8000  # HTTP
 ```
 
 #### **Transport Compatibility**
@@ -660,94 +763,6 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 - [FastMCP Documentation](https://gofastmcp.com/)
 - [MCP Specification](https://modelcontextprotocol.io/)
 - [LangChain MCP Integration](https://docs.langchain.com/oss/python/langchain/mcp)
-
-## Core Logic
-
-This section explains the internal architecture for rendering messages and managing state.
-
-### Section and Block System
-
-All chat messages are rendered through a **Section/Block** architecture:
-
-- **Section**: Represents a single chat message (user or assistant). Contains multiple blocks.
-- **Block**: Individual content units within a section:
-  - `text`: Plain text content
-  - `code`: Code blocks (collapsible)
-  - `reasoning`: Reasoning/thinking blocks (collapsible)
-  - `image`: Image content
-  - `download`: Downloadable files
-
-**Flow**:
-1. User input → Creates a `Section` with `text` block
-2. Agent response → Creates a `Section` with blocks based on content type
-3. Streaming → Updates existing blocks or creates new ones as content arrives
-4. All sections/blocks are saved to `workflow_state` for persistence
-
-### Workflow State as Single Source of Truth
-
-`workflow_state` is the **single source of truth** for all chat history and application state:
-
-**Structure**:
-```python
-workflow_state = {
-    "messages": [...],           # Conversation messages (user/assistant)
-    "metadata": {
-        "display_sections": [...], # UI sections/blocks for rendering
-        "pending_interrupts": {...}, # HITL state
-        "executors": {...},        # Executor metadata
-        ...
-    },
-    "agent_outputs": {...},      # Agent responses by agent name
-    "current_agent": "...",       # Currently active agent
-    "files": [...]               # File metadata
-}
-```
-
-**Key Points**:
-- **All messages** (user and assistant) are stored in `workflow_state["messages"]`
-- **All UI sections/blocks** are stored in `workflow_state["metadata"]["display_sections"]`
-- **State persistence**: Workflow state persists across Streamlit reruns
-- **Workflow execution**: LangGraph workflows read from and write to `workflow_state`
-- **State synchronization**: `StateSynchronizer` manages updates to `workflow_state`
-
-### Streamlit Session State Usage
-
-`st.session_state` is used for **display management** and **runtime state**:
-
-**Display Management**:
-- `workflow_state`: The single source of truth (stored in session state for Streamlit persistence)
-- `display_sections`: **Deprecated** - now stored in `workflow_state.metadata.display_sections`
-- `agent_executors`: Runtime executor instances (not persisted in workflow_state)
-- `uploaded_files`: File objects for current session (metadata stored in workflow_state)
-
-**Key Separation**:
-- **`workflow_state`**: Persistent, single source of truth for all chat data
-- **`st.session_state`**: Streamlit-specific runtime state and references to workflow_state
-
-**State Flow**:
-```
-User Input
-  ↓
-StateSynchronizer.add_user_message()
-  ↓
-workflow_state["messages"] updated
-  ↓
-DisplayManager creates Section/Block
-  ↓
-Section._save_to_session_state()
-  ↓
-workflow_state["metadata"]["display_sections"] updated
-  ↓
-render_message_history() reads from workflow_state
-  ↓
-Streamlit renders UI
-```
-
-**Benefits**:
-- **Consistency**: All state in one place (`workflow_state`)
-- **Persistence**: State survives Streamlit reruns
-- **Workflow compatibility**: LangGraph workflows can read/write state directly
-- **UI synchronization**: Display always reflects workflow_state
 
 ## Configuration
 

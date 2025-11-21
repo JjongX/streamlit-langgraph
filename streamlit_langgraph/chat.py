@@ -165,10 +165,10 @@ class LangGraphChat:
     
     def _handle_user_input(self, chat_input):
         """Handle user input and generate responses."""
-        if self.config.enable_file_upload: # File upload enabled; it has text and files attribute
+        if self.config.enable_file_upload:
             prompt = chat_input.text
             files = getattr(chat_input, 'files', [])
-        else: # File upload disabled (plain string)  
+        else:
             prompt = str(chat_input)
             files = []
 

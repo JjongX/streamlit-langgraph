@@ -142,29 +142,31 @@ class WorkflowStateManager:
                 final_metadata["display_sections"].append(section)
             elif not msg_id:
                 # Check for duplicates by comparing role and content
-                section_role = section.get("role")
-                section_blocks = section.get("blocks", [])
-                section_content = ""
-                if section_blocks:
-                    for block in section_blocks:
-                        if block.get("category") == "text":
-                            section_content = block.get("content", "")
-                            break
-                
-                section_exists = False
-                for existing_section in final_metadata["display_sections"]:
-                    if existing_section.get("role") == section_role:
-                        existing_blocks = existing_section.get("blocks", [])
-                        if existing_blocks:
-                            for block in existing_blocks:
-                                if block.get("category") == "text" and block.get("content") == section_content:
-                                    section_exists = True
-                                    break
-                        if section_exists:
-                            break
-                
-                if not section_exists:
+                if not WorkflowStateManager._section_exists(section, final_metadata["display_sections"]):
                     final_metadata["display_sections"].append(section)
+    
+    @staticmethod
+    def _section_exists(section: Dict[str, Any], existing_sections: List[Dict[str, Any]]) -> bool:
+        """Check if a section already exists by comparing role and content."""
+        section_role = section.get("role")
+        section_content = WorkflowStateManager._extract_text_content(section)
+        
+        for existing_section in existing_sections:
+            if existing_section.get("role") != section_role:
+                continue
+            existing_content = WorkflowStateManager._extract_text_content(existing_section)
+            if existing_content == section_content:
+                return True
+        return False
+    
+    @staticmethod
+    def _extract_text_content(section: Dict[str, Any]) -> str:
+        """Extract text content from the first text block in a section."""
+        section_blocks = section.get("blocks", [])
+        for block in section_blocks:
+            if block.get("category") == "text":
+                return block.get("content", "")
+        return ""
 
 class WorkflowState(TypedDict):
     """

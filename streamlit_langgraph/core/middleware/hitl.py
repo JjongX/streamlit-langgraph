@@ -390,21 +390,6 @@ class HITLHandler:
         
         agent_interrupt_on = getattr(executor.agent, 'interrupt_on', None)
         allow_edit = HITLUtils.check_edit_allowed(agent_interrupt_on, tool_name)
-        
-        # remove these three functions and just use the handle decision function
-        def handle_approve():
-            self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "approve"})
-        
-        def handle_reject():
-            self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "reject"})
-        
-        def handle_edit(edit_text):
-            parsed_input, error_msg = HITLUtils.parse_edit_input(edit_text, tool_input)
-            if error_msg:
-                st.error(error_msg)
-            else:
-                self.handle_decision(workflow_state, executor_key, decisions, action_index,
-                                    {"type": "edit", "input": parsed_input})
                                     
         with st.container():
             st.markdown("---")
@@ -416,10 +401,10 @@ class HITLHandler:
             col1, col2, col3 = st.columns(3)
             with col1:
                 if st.button("✅ Approve", key=f"approve_{executor_key}_{action_id}"):
-                    handle_approve()
+                    self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "approve"})
             with col2:
                 if st.button("❌ Reject", key=f"reject_{executor_key}_{action_id}"):
-                    handle_reject()
+                    self.handle_decision(workflow_state, executor_key, decisions, action_index, {"type": "reject"})
             with col3:
                 if allow_edit:
                     edit_key = f"edit_{executor_key}_{action_id}"
@@ -432,7 +417,12 @@ class HITLHandler:
                     )
                     
                     if st.button("✏️ Approve with Edit", key=edit_btn_key):
-                        handle_edit(edit_text)
+                        parsed_input, error_msg = HITLUtils.parse_edit_input(edit_text, tool_input)
+                        if error_msg:
+                            st.error(error_msg)
+                        else:
+                            self.handle_decision(workflow_state, executor_key, decisions, action_index,
+                                                {"type": "edit", "input": parsed_input})
     
     def handle_decision(self, workflow_state: Dict[str, Any], executor_key: str,
                        decisions: List[Optional[Dict[str, Any]]], action_index: int,
