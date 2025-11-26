@@ -9,8 +9,10 @@ from ...agent import Agent
 
 class ExecutorRegistry:
     
-    def get_or_create(self, agent: Agent, executor_type: str = "workflow",
-        tools: Optional[list] = None) -> Any:
+    def get_or_create(
+        self, agent: Agent, executor_type: str = "workflow",
+        tools: Optional[list] = None
+    ) -> Any:
         """
         Get existing executor or create a new one.
         

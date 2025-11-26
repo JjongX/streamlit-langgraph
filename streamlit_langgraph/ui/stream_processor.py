@@ -1,4 +1,4 @@
-"""Stream processor for handling different streaming formats."""
+# Stream processor for handling different streaming formats.
 
 import base64
 
@@ -16,13 +16,6 @@ class StreamProcessor:
     """
     
     def __init__(self, client=None, container_id=None):
-        """
-        Initialize StreamProcessor.
-        
-        Args:
-            client: OpenAI client for file retrieval (optional)
-            container_id: Container ID for file retrieval (optional)
-        """
         self._client = client
         self._container_id = container_id
     

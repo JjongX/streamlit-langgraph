@@ -2,6 +2,7 @@ import os
 
 import streamlit_langgraph as slg
 
+
 def create_hierarchical_workflow_example():
     """Create a hierarchical workflow with multiple supervisor teams."""
     
@@ -16,7 +17,6 @@ def create_hierarchical_workflow_example():
     content_team_lead = agents[4]
     draft_writer = agents[5]
     content_editor = agents[6]
-    
     # Create supervisor teams
     research_team = slg.WorkflowBuilder.SupervisorTeam(
         supervisor=research_team_lead,
@@ -37,7 +37,6 @@ def main():
     
     # Create hierarchical workflow components
     top_supervisor, supervisor_teams, all_agents = create_hierarchical_workflow_example()
-    
     # Create the hierarchical workflow
     builder = slg.WorkflowBuilder()
     hierarchical_workflow = builder.create_hierarchical_workflow(

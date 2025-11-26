@@ -13,7 +13,6 @@ class CustomTool:
     A custom tool that can be used by agents in the multiagent system.
     """
     # Class-level registry for storing all registered tools
-    # Using ClassVar to indicate this is a class variable, not an instance field
     _registry: ClassVar[Dict[str, "CustomTool"]] = {}
     name: str
     description: str

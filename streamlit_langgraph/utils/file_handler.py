@@ -2,9 +2,11 @@
 
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 MIME_TYPES = {
     "txt" : "text/plain",
@@ -60,7 +62,6 @@ class FileHandler:
         type: str
         content: Optional[bytes] = None
         metadata: Dict[str, Any] = None
-        # OpenAI integration fields
         openai_file_id: Optional[str] = None
         vision_file_id: Optional[str] = None
         input_messages: List[Dict[str, Any]] = None
@@ -76,39 +77,84 @@ class FileHandler:
             """Get file extension."""
             return Path(self.name).suffix.lower()
     
-    def __init__(self, temp_dir: Optional[str] = None, openai_client=None):
+    def __init__(
+        self, 
+        temp_dir: Optional[str] = None, 
+        openai_client=None,
+        container_id: Optional[str] = None,
+        allow_code_interpreter: Optional[bool] = False,
+        allow_file_search: Optional[bool] = False,
+        model: Optional[str] = "gpt-4o"
+    ):
         self.temp_dir = temp_dir or tempfile.mkdtemp()
         self.files: Dict[str, FileHandler.FileInfo] = {}
         self.openai_client = openai_client
+        self._container_id = container_id
+        self.allow_code_interpreter = allow_code_interpreter
+        self.allow_file_search = allow_file_search
+        self.model = model
+        self._tracked_files: List[FileHandler.FileInfo] = []
+        self._dynamic_vector_store = None
     
-    def save_uploaded_file(self, uploaded_file, file_id: Optional[str] = None) -> "FileHandler.FileInfo":
-        """
-        Save an uploaded file and process it for OpenAI integration.
+    def update_settings(
+        self,
+        container_id: Optional[str] = None,
+        allow_code_interpreter: Optional[bool] = None,
+        allow_file_search: Optional[bool] = None,
+        model: Optional[str] = None
+    ) -> None:
+        """Update FileHandler settings dynamically.
         
         Args:
-            uploaded_file: Streamlit uploaded file object
-            file_id: Optional custom file ID
+            container_id: Container ID for code interpreter
+            allow_code_interpreter: Whether to allow code interpreter
+            allow_file_search: Whether to allow file search
+            model: Model name for API calls
+        """
+        if container_id is not None:
+            self._container_id = container_id
+        if allow_code_interpreter is not None:
+            self.allow_code_interpreter = allow_code_interpreter
+        if allow_file_search is not None:
+            self.allow_file_search = allow_file_search
+        if model is not None:
+            self.model = model
+    
+    def track(self, uploaded_file: Union[UploadedFile, str]) -> "FileHandler.FileInfo":
+        """Tracks a file uploaded by the user.
+        
+        Args:
+            uploaded_file: An UploadedFile object or a string representing the file path.
             
         Returns:
-            FileInfo: Information about the saved file
+            FileInfo: The tracked file information.
         """
-        if file_id is None:
+        if isinstance(uploaded_file, str):
+            file_path = Path(uploaded_file).resolve()
+            if not file_path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+        elif isinstance(uploaded_file, UploadedFile):
+            file_path = Path(os.path.join(self.temp_dir, uploaded_file.name))
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getvalue())
+        else:
+            raise ValueError("uploaded_file must be an instance of UploadedFile or a string representing the file path.")
+
+        file_ext = file_path.suffix.lower()
+        file_type = MIME_TYPES.get(file_ext.lstrip("."), "application/octet-stream")
+        
+        file_id = None
+        if isinstance(uploaded_file, UploadedFile):
             file_id = uploaded_file.file_id if hasattr(uploaded_file, 'file_id') else uploaded_file.name
-        
-        file_path = os.path.join(self.temp_dir, uploaded_file.name)
-        
-        with open(file_path, 'wb') as f:
-            f.write(uploaded_file.getvalue())
-        
-        file_ext = Path(uploaded_file.name).suffix.lower()
-        file_type = MIME_TYPES.get(file_ext)
+        else:
+            file_id = file_path.name
         
         file_info = FileHandler.FileInfo(
-            name=uploaded_file.name,
-            path=file_path,
-            size=len(uploaded_file.getvalue()),
+            name=file_path.name,
+            path=str(file_path),
+            size=file_path.stat().st_size if file_path.exists() else 0,
             type=file_type,
-            content=uploaded_file.getvalue(),
+            content=None,
             metadata={
                 'file_id': file_id,
                 'extension': file_ext,
@@ -116,67 +162,123 @@ class FileHandler:
             }
         )
         
-        if self.openai_client:
-            self._process_file_for_openai(file_info)
+        file_info.input_messages.append(
+            {"role": "user", "content": [{"type": "input_text", "text": f"File locally available at: {file_path}"}]}
+        )
+
+        if not self.openai_client:
+            self._tracked_files.append(file_info)
+            if file_id:
+                self.files[file_id] = file_info
+            return file_info
         
-        self.files[file_id] = file_info
+        if not hasattr(self.openai_client, 'files'):
+            raise ValueError(
+                "OpenAI client is not properly configured. "
+                "The client must have a 'files' attribute for file operations. "
+                "Please ensure the OpenAI client is correctly initialized."
+            )
+
+        file_ext_lower = file_path.suffix.lower()
+        openai_file = None
+        vision_file = None
+        skip_file_search = False
+
+        if file_ext_lower == ".pdf":
+            with open(file_path, "rb") as f:
+                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+            file_info.input_messages.append({
+                "role": "user",
+                "content": [{"type": "input_file", "file_id": openai_file.id}]
+            })
+
+        if file_ext_lower in FileHandler.VISION_EXTENSIONS:
+            vision_file = self.openai_client.files.create(file=file_path, purpose="vision")
+            file_info.input_messages.append({
+                "role": "user",
+                "content": [{"type": "input_image", "file_id": vision_file.id}]
+            })
+
+        if (self.allow_code_interpreter and 
+            self._container_id and 
+            file_ext_lower in FileHandler.CODE_INTERPRETER_EXTENSIONS):
+            if file_ext_lower in FileHandler.VISION_EXTENSIONS:
+                openai_file = vision_file
+            if openai_file is None:
+                with open(file_path, "rb") as f:
+                    openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+            self.openai_client.containers.files.create(
+                container_id=self._container_id,
+                file_id=openai_file.id,
+            )
+
+        if (self.allow_file_search and 
+            not skip_file_search and 
+            file_ext_lower in FileHandler.FILE_SEARCH_EXTENSIONS):
+            if openai_file is None:
+                with open(file_path, "rb") as f:
+                    openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+            
+            if self._dynamic_vector_store is None:
+                self._dynamic_vector_store = self.openai_client.vector_stores.create(
+                    name="streamlit-langgraph"
+                )
+            
+            self.openai_client.vector_stores.files.create(
+                vector_store_id=self._dynamic_vector_store.id,
+                file_id=openai_file.id
+            )
+            
+            result = self.openai_client.vector_stores.retrieve(
+                vector_store_id=self._dynamic_vector_store.id,
+            )
+            while result.status != "completed":
+                time.sleep(1)
+                result = self.openai_client.vector_stores.retrieve(
+                    vector_store_id=self._dynamic_vector_store.id,
+                )
+
+        if openai_file:
+            file_info.openai_file_id = openai_file.id
+        if vision_file:
+            file_info.vision_file_id = vision_file.id
+
+        self._tracked_files.append(file_info)
+        if file_id:
+            self.files[file_id] = file_info
+        
         return file_info
     
+    def save_uploaded_file(self, uploaded_file, file_id: Optional[str] = None) -> "FileHandler.FileInfo":
+        """
+        Save an uploaded file and process it for OpenAI integration.
+        
+        Args:
+            uploaded_file: Streamlit uploaded file object or file path string
+            file_id: Optional custom file ID (ignored, uses uploaded_file.file_id or filename)
+            
+        Returns:
+            FileInfo: Information about the saved file
+        """
+        return self.track(uploaded_file)
+    
     def get_openai_input_messages(self) -> List[Dict[str, Any]]:
-        """Get OpenAI input messages for all files.
+        """Get OpenAI input messages for all tracked files.
         
         Returns:
             List[Dict]: List of OpenAI input messages for files
         """
         messages = []
-        for file_info in self.files.values():
+        for file_info in self._tracked_files:
             messages.extend(file_info.input_messages)
         return messages
-
-    def _process_file_for_openai(self, file_info: "FileHandler.FileInfo") -> None:
+    
+    def get_vector_store_ids(self) -> List[str]:
+        """Get vector store IDs for file search.
+        
+        Returns:
+            List[str]: List of vector store IDs, empty if no vector store exists
         """
-        Process a file for OpenAI integration and update its input_messages.
-        
-        Handles different file types: PDFs, images (vision), and text files.
-        Creates appropriate OpenAI file objects and adds them to input_messages.
-        """
-        if not self.openai_client:
-            return
-        
-        file_ext = file_info.extension
-        file_path = Path(file_info.path)
-        
-        file_info.input_messages.append({
-            "role": "user", 
-            "content": f"File locally available at: {file_path}"
-        })
-        
-        if file_ext == ".pdf":
-            with open(file_path, "rb") as f:
-                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-                file_info.openai_file_id = openai_file.id
-            file_info.input_messages.append({
-                "role": "user",
-                "content": [{"type": "input_file", "file_id": openai_file.id}]
-            })
-        elif file_ext in FileHandler.VISION_EXTENSIONS:
-            with open(file_path, "rb") as f:
-                vision_file = self.openai_client.files.create(file=f, purpose="vision")
-                file_info.vision_file_id = vision_file.id
-            file_info.input_messages.append({
-                "role": "user",
-                "content": [{"type": "input_image", "file_id": vision_file.id}]
-            })
-        elif file_ext in [".txt", ".md", ".json", ".csv", ".py", ".js", ".html", ".xml"]:
-            with open(file_path, "rb") as f:
-                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-                file_info.openai_file_id = openai_file.id
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                file_info.input_messages.append({
-                    "role": "user",
-                    "content": f"Content of {file_path.name}:\n```\n{content[:2000]}{'...' if len(content) > 2000 else ''}\n```"
-                })
-
-
-
+        if self._dynamic_vector_store:
+            return [self._dynamic_vector_store.id]
+        return []

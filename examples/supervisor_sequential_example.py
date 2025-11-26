@@ -2,6 +2,7 @@ import os
 
 import streamlit_langgraph as slg
 
+
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""
     
@@ -12,6 +13,7 @@ def create_supervisor_workflow_example():
     workers = agents[1:]
 
     return supervisor, workers
+
 
 def main():
     """Supervisor sequential example with clean workflow pattern."""
@@ -60,7 +62,7 @@ def main():
     
     chat = slg.LangGraphChat(
         workflow=supervisor_workflow,
-        agents=[supervisor] + workers, # Might update later to not pass agents
+        agents=[supervisor] + workers,
         config=config
     )
     chat.run()

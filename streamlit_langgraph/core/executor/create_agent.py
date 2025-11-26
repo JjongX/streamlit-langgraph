@@ -46,10 +46,12 @@ class CreateAgentExecutor:
                 mcp_tools = mcp_manager.get_tools()
             self.tools = custom_tools + mcp_tools
     
-    def execute_agent(self, llm_client: Any, prompt: str,
-        stream: bool = False,
+    def execute_agent(
+        self, 
+        llm_client: Any, prompt: str, stream: bool = False,
+        messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         Execute prompt for single-agent mode (non-workflow).
         
@@ -59,9 +61,9 @@ class CreateAgentExecutor:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             stream: Whether to stream the response
-            file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
-            
+            file_messages: Optional file messages (OpenAI format)
+
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
@@ -76,11 +78,14 @@ class CreateAgentExecutor:
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
-    def execute_workflow(self, llm_client: Any, prompt: str,
-        stream: bool = False,
+    def execute_workflow(
+        self, 
+        llm_client: Any, prompt: str, stream: bool = False,
+        messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None, 
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
+        
         """
         Execute prompt for workflow mode (requires config with thread_id).
 
@@ -88,9 +93,9 @@ class CreateAgentExecutor:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             stream: Whether to stream the response
+            messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
             config: Execution config with thread_id (required for workflows)
-            messages: Conversation history from workflow_state
 
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' or 'stream' if HITL is active
@@ -113,9 +118,12 @@ class CreateAgentExecutor:
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
-    def resume(self, decisions: List[Dict[str, Any]],
+    def resume(
+        self, 
+        decisions: List[Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        messages: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         """
         Resume agent execution after human approval/rejection.
         
@@ -143,9 +151,11 @@ class CreateAgentExecutor:
         result_text = self._extract_response_text(out)
         return {"role": "assistant", "content": result_text, "agent": self.agent.name}
     
-    def detect_interrupt_in_stream(self, 
+    def detect_interrupt_in_stream(
+        self, 
         execution_config: Dict[str, Any], 
-        messages: List[BaseMessage]) -> Optional[Any]:
+        messages: List[BaseMessage]
+    ) -> Optional[Any]:
         """Detect interrupt from agent stream events."""
         for event in self.agent_obj.stream(
             {"messages": messages},
@@ -155,7 +165,6 @@ class CreateAgentExecutor:
             if "__interrupt__" in event:
                 interrupt_data = event["__interrupt__"]
                 return list(interrupt_data) if isinstance(interrupt_data, (tuple, list)) else interrupt_data
-            
             # Check each node in the event
             for node_state in event.values():
                 if isinstance(node_state, dict) and "__interrupt__" in node_state:
@@ -165,18 +174,20 @@ class CreateAgentExecutor:
         
         return None
 
-    def _invoke_agent(self, llm_client: Any, prompt: str,
-        file_messages: Optional[List] = None,
+    def _invoke_agent(
+        self, llm_client: Any, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
-        config: Optional[Dict[str, Any]] = None) -> Any:
+        file_messages: Optional[List] = None,
+        config: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """
         Invoke the agent (non-streaming).
 
         Args:
             llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
             prompt: User's question/prompt
-            file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
+            file_messages: Optional file messages (OpenAI format)
             config: Optional execution config (for workflows)
             
         Returns:

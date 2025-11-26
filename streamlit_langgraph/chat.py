@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
+import openai
 
 from .agent import Agent, AgentManager
 from .core.executor import WorkflowExecutor
@@ -80,12 +81,18 @@ class LangGraphChat:
         # LLM and file handling
         first_agent = next(iter(self.agent_manager.agents.values()))
         self.llm = AgentManager.get_llm_client(first_agent)
-        openai_client = self.llm if hasattr(self.llm, 'files') else None
-        self.file_handler = FileHandler(openai_client=openai_client)
-        self._client = self.llm if hasattr(self.llm, 'containers') else None
-        self._container_id = None
-        
-        # Handlers
+        openai_client = None
+        if first_agent.provider.lower() == "openai":
+            openai_client = openai.OpenAI()
+        self.file_handler = FileHandler(
+            openai_client=openai_client,
+            allow_code_interpreter=first_agent.allow_code_interpreter,
+            allow_file_search=first_agent.allow_file_search,
+            container_id=first_agent.container_id,
+            model=first_agent.model
+        )
+        self._client = openai_client
+        self._container_id = first_agent.container_id
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
     
@@ -124,13 +131,13 @@ class LangGraphChat:
                         st.write(f"**Role:** {agent.role}")
                         st.write(f"**Instructions:** {agent.instructions[:100]}...")
                         capabilities = []
-                        if hasattr(agent, 'allow_file_search') and agent.allow_file_search:
+                        if agent.allow_file_search:
                             capabilities.append("📁 File Search")
-                        if hasattr(agent, 'allow_code_interpreter') and agent.allow_code_interpreter:
+                        if agent.allow_code_interpreter:
                             capabilities.append("💻 Code Interpreter")
-                        if hasattr(agent, 'allow_web_search') and agent.allow_web_search:
+                        if agent.allow_web_search:
                             capabilities.append("🌐 Web Search")
-                        if hasattr(agent, 'tools') and agent.tools:
+                        if agent.tools:
                             capabilities.append(f"🛠️ {len(agent.tools)} Custom Tools")
                         if capabilities:
                             st.write("**Capabilities:**")
@@ -293,6 +300,12 @@ class LangGraphChat:
         if agent.container_id:
             self._container_id = agent.container_id
             self.stream_processor._container_id = agent.container_id
+            # Update FileHandler with new container_id and settings
+            self.file_handler.update_settings(
+                container_id=agent.container_id,
+                allow_code_interpreter=agent.allow_code_interpreter,
+                allow_file_search=agent.allow_file_search
+            )
         
         # Update workflow_state with agent response using state manager
         if response.get("content"):

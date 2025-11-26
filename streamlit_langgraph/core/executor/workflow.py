@@ -137,15 +137,19 @@ class WorkflowExecutor:
         )
         return response
     
-    def _execute_invoke(self, workflow: StateGraph, initial_state: WorkflowState, 
-                       config: Dict[str, Any]) -> WorkflowState:
+    def _execute_invoke(
+        self, workflow: StateGraph, initial_state: WorkflowState,
+        config: Dict[str, Any]
+    ) -> WorkflowState:
         """Execute workflow synchronously using invoke() method."""
         final_state = workflow.invoke(initial_state, config=config)
         WorkflowStateManager.preserve_hitl_metadata(initial_state, final_state)
         return final_state
     
-    def _execute_streaming(self, workflow: StateGraph, initial_state: WorkflowState, 
-                          display_callback: Callable, config: Dict[str, Any]) -> WorkflowState:
+    def _execute_streaming(
+        self, workflow: StateGraph, initial_state: WorkflowState, 
+        config: Dict[str, Any], display_callback: Callable, 
+    ) -> WorkflowState:
         """Execute workflow using stream() method with real-time display updates."""
         accumulated_state = initial_state.copy()
         

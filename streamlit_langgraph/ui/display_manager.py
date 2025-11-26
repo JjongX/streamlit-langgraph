@@ -76,7 +76,7 @@ class Section:
         self.role = role
         self.blocks = blocks or []
         self.delta_generator = st.empty()
-        self._section_index = None  # Track which index this section is saved at
+        self._section_index = None
     
     @property
     def empty(self) -> bool:

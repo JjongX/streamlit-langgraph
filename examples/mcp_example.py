@@ -27,7 +27,6 @@ def main():
         tools=[],
         mcp_servers=mcp_servers
     )
-    
     # Create chat interface
     config = slg.UIConfig(
         title="MCP Tools Chat",
@@ -54,7 +53,6 @@ This example demonstrates using MCP (Model Context Protocol) tools with agents.
         agents=[agent],
         config=config
     )
-    
     chat.run()
 
 
