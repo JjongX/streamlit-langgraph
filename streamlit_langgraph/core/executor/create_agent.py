@@ -69,9 +69,9 @@ class CreateAgentExecutor:
         """
         try:
             if stream:
-                return self._stream_agent(llm_client, prompt, file_messages, messages, config={})
+                return self._stream_agent(llm_client, prompt, messages, file_messages, config={})
             else:
-                out = self._invoke_agent(llm_client, prompt, file_messages, messages, config={})
+                out = self._invoke_agent(llm_client, prompt, messages, file_messages, config={})
                 result_text = self._extract_response_text(out)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
                 
@@ -106,9 +106,9 @@ class CreateAgentExecutor:
                 self._build_agent(llm_client)
             
             if stream:
-                return self._stream_agent(llm_client, prompt, file_messages, messages, config=config)
+                return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
             else:
-                out = self._invoke_agent(llm_client, prompt, file_messages, messages, config=config)
+                out = self._invoke_agent(llm_client, prompt, messages, file_messages, config=config)
                 # Check for interrupts in output (HITL)
                 if isinstance(out, dict) and "__interrupt__" in out:
                     return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
@@ -205,8 +205,8 @@ class CreateAgentExecutor:
         return out
     
     def _stream_agent(self, llm_client: Any, prompt: str,
-        file_messages: Optional[List] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Invoke the agent with streaming support.

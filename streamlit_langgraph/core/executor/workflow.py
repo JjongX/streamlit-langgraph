@@ -52,7 +52,7 @@ class WorkflowExecutor:
         # Setup display callback with deduplication if provided
         if display_callback:
             display_wrapper = self._create_display_wrapper(display_callback, initial_state)
-            return self._execute_streaming(workflow, state, display_wrapper, workflow_config)
+            return self._execute_streaming(workflow, state, workflow_config, display_wrapper)
         
         return self._execute_invoke(workflow, state, workflow_config)
     
