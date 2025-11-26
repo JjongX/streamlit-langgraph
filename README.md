@@ -76,7 +76,13 @@ With that in mind, this package is designed so users can focus on defining agent
 
 This project is in **pre-alpha**. Features and APIs are subject to change.
 
+> Recommendation:
+It is recommended to use this package for production or critical projects after it reaches beta status (release version 0.2.0 or higher).
+Until then, expect breaking changes and experimental features
+
 **Note:** Uses `langchain`/`langgraph` version `1.0.1`.
+
+---
 
 ## Supported LLM Providers
 
@@ -84,7 +90,7 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 |----------|---------|-------|
 | **OpenAI** | ✅ | Uses **Responses API** when native tools enabled (code_interpreter, web_search, file_search, image_generation). Uses **ChatCompletion API** otherwise. |
 | **Anthropic (Claude)** | ❓ | May work but not explicitly tested. |
-| **Google (Gemini)** | ✅ | Full support via LangChain's `init_chat_model` |
+| **Google (Gemini)** | ❓ | Full support via LangChain's `init_chat_model` |
 | **Other LangChain Providers** | ❓ | May work but not explicitly tested.|
 
 **Legend:**
@@ -95,6 +101,8 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 **Notes:**
 - **OpenAI**: Automatically selects Responses API or ChatCompletion API based on native tool configuration
 - Support depends on LangChain's provider compatibility
+
+---
 
 ## Installation
 
