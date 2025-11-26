@@ -1,5 +1,7 @@
 # streamlit-langgraph
 
+> Recommendation: It is recommended to use this package for production or critical projects only after it reaches beta status (release version 0.2.0 or higher), which is scheduled to be completed and released no later than December 14, 2025. Until then, expect breaking changes and experimental features.
+
 [![PyPI version](https://badge.fury.io/py/streamlit-langgraph.svg)](https://badge.fury.io/py/streamlit-langgraph)
 
 A Python package that integrates Streamlit's intuitive web interface with LangGraph's advanced multi-agent orchestration. Build interactive AI applications featuring multiple specialized agents collaborating in customizable workflows.
