@@ -57,23 +57,16 @@ class MCPToolManager:
         if not self._server_configs:
             return []
         
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If event loop is already running, we need to handle this differently
-                # For now, return empty list and log a warning
-                import warnings
-                warnings.warn(
-                    "Cannot load MCP tools synchronously when event loop is running. "
-                    "Consider using get_tools_async() or configuring MCP tools before starting the event loop."
-                )
-                return []
-            async_tools = loop.run_until_complete(self.get_tools_async())
-        except RuntimeError:
-            # No event loop running, create a new one
-            async_tools = asyncio.run(self.get_tools_async())
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import warnings
+            warnings.warn(
+                "Cannot load MCP tools synchronously when event loop is running. "
+                "Consider using get_tools_async() or configuring MCP tools before starting the event loop."
+            )
+            return []
+        async_tools = loop.run_until_complete(self.get_tools_async())
         
-        # Wrap async tools to support sync invocation
         return [self._wrap_async_tool(tool) for tool in async_tools]
     
     def _wrap_async_tool(self, async_tool: Any) -> StructuredTool:
@@ -81,32 +74,24 @@ class MCPToolManager:
         def sync_wrapper(**kwargs):
             """Sync wrapper that runs the async tool."""
             async def run_async():
-                # Call the async tool's ainvoke method with the kwargs
                 return await async_tool.ainvoke(kwargs)
             
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If loop is running, we can't use asyncio.run()
-                    # Create a new event loop in a thread
-                    import concurrent.futures
-                    
-                    def run_in_thread():
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        try:
-                            return new_loop.run_until_complete(run_async())
-                        finally:
-                            new_loop.close()
-                    
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(run_in_thread)
-                        return future.result()
-                else:
-                    return loop.run_until_complete(run_async())
-            except RuntimeError:
-                # No event loop, create a new one
-                return asyncio.run(run_async())
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                
+                def run_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    result = new_loop.run_until_complete(run_async())
+                    new_loop.close()
+                    return result
+                
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(run_in_thread)
+                    return future.result()
+            else:
+                return loop.run_until_complete(run_async())
         
         # Create a new StructuredTool with the sync wrapper
         # Preserve the original tool's args_schema if available

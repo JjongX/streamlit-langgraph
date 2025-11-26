@@ -38,44 +38,35 @@ class StreamProcessor:
         stream_type = None
         full_response = ""
         
-        try:
-            for event in stream_iter:
-                events_list.append(event)
-                
-                # Detect stream type from first event
-                if stream_type is None:
-                    if isinstance(event, tuple) and len(event) == 2:
-                        stream_type = 'langchain_messages'
-                    elif hasattr(event, 'type'):
-                        stream_type = 'responses_api'
-                    elif isinstance(event, dict):
-                        stream_type = 'langchain_updates'
-                    else:
-                        stream_type = 'unknown'
-                
-                # Route to appropriate handler
-                if stream_type == 'responses_api':
-                    delta = self._process_responses_api_stream(event, section)
-                    if delta:
-                        full_response += delta
-                elif stream_type == 'langchain_messages':
-                    token, metadata = event
-                    delta = self._process_langchain_message_token(token, section)
-                    if delta:
-                        full_response += delta
-                elif stream_type == 'langchain_updates':
-                    partial_response = self._process_langchain_stream_event(event, section, full_response)
-                    if partial_response and len(partial_response) > len(full_response):
-                        full_response = partial_response
+        for event in stream_iter:
+            events_list.append(event)
             
-            # Fallback: extract from final state if no content was streamed
-            if not full_response and events_list:
-                full_response = self._extract_final_content(events_list, stream_type, section)
-                
-        except (StopIteration, TypeError, AttributeError):
-            # Empty stream or invalid format - try to extract from final state
-            if events_list:
-                full_response = self._extract_final_content(events_list, stream_type, section)
+            if stream_type is None:
+                if isinstance(event, tuple) and len(event) == 2:
+                    stream_type = 'langchain_messages'
+                elif hasattr(event, 'type'):
+                    stream_type = 'responses_api'
+                elif isinstance(event, dict):
+                    stream_type = 'langchain_updates'
+                else:
+                    stream_type = 'unknown'
+            
+            if stream_type == 'responses_api':
+                delta = self._process_responses_api_stream(event, section)
+                if delta:
+                    full_response += delta
+            elif stream_type == 'langchain_messages':
+                token, metadata = event
+                delta = self._process_langchain_message_token(token, section)
+                if delta:
+                    full_response += delta
+            elif stream_type == 'langchain_updates':
+                partial_response = self._process_langchain_stream_event(event, section, full_response)
+                if partial_response and len(partial_response) > len(full_response):
+                    full_response = partial_response
+        
+        if not full_response and events_list:
+            full_response = self._extract_final_content(events_list, stream_type, section)
         
         return full_response
     
@@ -151,8 +142,7 @@ class StreamProcessor:
         if not isinstance(event, dict):
             return accumulated_content
         
-        # LangGraph stream format: {node_name: state_update}
-        for node_name, state_update in event.items():
+        for _, state_update in event.items():
             if isinstance(state_update, dict):
                 # Check for messages in state update
                 if 'messages' in state_update:
@@ -300,7 +290,7 @@ class StreamProcessor:
                     section.stream()
         elif stream_type == 'langchain_updates' and isinstance(last_event, dict):
             # Handle updates mode format
-            for node_name, state_update in last_event.items():
+            for _, state_update in last_event.items():
                 if isinstance(state_update, dict) and 'messages' in state_update:
                     messages = state_update['messages']
                     for msg in reversed(messages):
