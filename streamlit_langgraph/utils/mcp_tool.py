@@ -93,8 +93,6 @@ class MCPToolManager:
             else:
                 return loop.run_until_complete(run_async())
         
-        # Create a new StructuredTool with the sync wrapper
-        # Preserve the original tool's args_schema if available
         args_schema = None
         if hasattr(async_tool, 'args_schema') and async_tool.args_schema:
             args_schema = async_tool.args_schema
@@ -122,11 +120,9 @@ class MCPToolManager:
                 "require_approval": config.get("require_approval", "never"),
             }
             
-            # Handle HTTP-based transports (streamable_http, http, sse)
             if transport in ("streamable_http", "http", "sse"):
                 if "url" in config:
                     url = config["url"]
-                    # Validate URL is publicly accessible (not localhost) for Responses API
                     if "localhost" in url or "127.0.0.1" in url:
                         raise ValueError(
                             f"MCP server '{server_name}' uses localhost URL '{url}'. "
@@ -135,8 +131,6 @@ class MCPToolManager:
                             "is bound to '0.0.0.0' (not '127.0.0.1') to accept external connections."
                         )
                     tool_dict["server_url"] = url
-                    # Note: OpenAI Responses API doesn't accept a "transport" field
-                    # The transport type is inferred from the server_url
                 else:
                     raise ValueError(f"MCP server '{server_name}' with transport '{transport}' requires 'url' field")
             elif transport == "stdio":

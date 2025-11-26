@@ -118,7 +118,6 @@ class AgentManager:
             config_path = os.path.join(os.path.dirname(__file__), "./configs/my_agents.yaml")
             agents = AgentManager.load_from_yaml(config_path)
         """
-        # Resolve path - handle both absolute and relative paths
         if not os.path.isabs(yaml_path):
             yaml_path = os.path.abspath(yaml_path)
         if not os.path.exists(yaml_path):

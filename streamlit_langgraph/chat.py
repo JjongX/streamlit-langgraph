@@ -150,21 +150,17 @@ class LangGraphChat:
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
-        # Check if there are any display sections in workflow_state
         display_sections = self.state_manager.get_display_sections()
         if not display_sections:
             self.display_manager.render_welcome_message()
 
-        # Check for pending interrupts FIRST - workflow_state is the single source of truth
         workflow_state = st.session_state.workflow_state
         if HITLUtils.has_pending_interrupts(workflow_state):
             interrupt_handled = self.interrupt_handler.handle_pending_interrupts(workflow_state)
             if interrupt_handled:
                 return  # Don't process messages or show input while handling interrupts
 
-        # Render message history
         self.display_manager.render_message_history()
-        # Render user input
         if prompt := st.chat_input(
             self.config.placeholder, accept_file=self.config.enable_file_upload
         ):
@@ -194,17 +190,13 @@ class LangGraphChat:
             section.update("text", f"\n:material/attach_file: `{uploaded_file.name}`")
         section.stream()
 
-        # Clear HITL state before new request
         self.state_manager.clear_hitl_state()
         
-        # Generate response
         with st.spinner("Thinking..."):
             response = self._generate_response(prompt)
 
-        # Handle workflow completion
         if response.get("agent") == "workflow-completed":
             return
-        # Handle interrupts from human-in-the-loop
         if response.get("__interrupt__"):
             st.rerun()
         
@@ -237,7 +229,6 @@ class LangGraphChat:
             if uploaded_file not in st.session_state.uploaded_files:
                 file_info = self.file_handler.save_uploaded_file(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
-                # Add file metadata to workflow state (not content)
                 self.state_manager.update_workflow_state({
                     "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
                 })
@@ -287,8 +278,6 @@ class LangGraphChat:
         Note: HITL is not supported for single agents. Use workflows for HITL functionality.
         """
         file_messages = self.file_handler.get_openai_input_messages()
-        
-        # Use WorkflowExecutor directly (orchestrator logic merged in)
         response = self.workflow_executor.execute_agent(
             agent, prompt,
             llm_client=self.llm,
@@ -307,7 +296,6 @@ class LangGraphChat:
                 allow_file_search=agent.allow_file_search
             )
         
-        # Update workflow_state with agent response using state manager
         if response.get("content"):
             self.state_manager.add_assistant_message(
                 response.get("content", ""),

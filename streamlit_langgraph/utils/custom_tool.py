@@ -114,7 +114,6 @@ class CustomTool:
                     param_info["type"] = "object"
                     
             parameters["properties"][param_name] = param_info
-            # Check if parameter is required
             if param.default == inspect.Parameter.empty:
                 parameters["required"].append(param_name)
         

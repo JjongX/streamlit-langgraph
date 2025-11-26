@@ -49,7 +49,6 @@ class SupervisorPattern:
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":
             graph = StateGraph(WorkflowState)
-            # Use delegation mechanism via create_supervisor_agent_node with tool_calling mode
             calling_node = AgentNodeFactory.create_supervisor_agent_node(
                 supervisor_agent, worker_agents, delegation_mode="tool_calling"
             )

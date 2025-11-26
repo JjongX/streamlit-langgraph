@@ -105,12 +105,10 @@ class HITLUtils:
         if not edit_text.strip():
             return default_input, None
         
-        # If it looks like JSON (starts with { or [), parse it
         if edit_text.strip().startswith('{') or edit_text.strip().startswith('['):
             parsed = json.loads(edit_text)
             return parsed, None
             
-        # Try to parse as JSON, fallback to string if it fails
         parsed = json.loads(edit_text)
         return parsed, None
     

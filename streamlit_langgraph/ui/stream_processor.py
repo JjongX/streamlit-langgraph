@@ -87,8 +87,6 @@ class StreamProcessor:
         if not isinstance(token, AIMessage):
             return ""
         
-        # Extract text from content_blocks
-        # content_blocks is a list of dicts: [{'type': 'text', 'text': '...'}, ...]
         if hasattr(token, 'content_blocks') and token.content_blocks:
             text_parts = []
             for block in token.content_blocks:
@@ -144,10 +142,8 @@ class StreamProcessor:
         
         for _, state_update in event.items():
             if isinstance(state_update, dict):
-                # Check for messages in state update
                 if 'messages' in state_update:
                     messages = state_update['messages']
-                    # Find new AIMessages
                     for msg in messages:
                         if isinstance(msg, AIMessage):
                             if hasattr(msg, 'content') and msg.content:
@@ -166,7 +162,6 @@ class StreamProcessor:
                                         section.stream()
                                         return new_content
                                 elif isinstance(msg.content, list):
-                                    # Handle list content (Responses API format)
                                     text_parts = []
                                     for block in msg.content:
                                         if isinstance(block, dict) and block.get('type') == 'text':
@@ -175,7 +170,6 @@ class StreamProcessor:
                                             text_parts.append(block)
                                     if text_parts:
                                         new_content = ''.join(text_parts)
-                                        # Check if this is new content
                                         if new_content != accumulated_content:
                                             if new_content.startswith(accumulated_content):
                                                 delta = new_content[len(accumulated_content):]
@@ -186,7 +180,6 @@ class StreamProcessor:
                                                 section.update("text", new_content)
                                                 section.stream()
                                             return new_content
-                # Check for output in state update
                 elif 'output' in state_update:
                     output = state_update['output']
                     if output and str(output) != accumulated_content:

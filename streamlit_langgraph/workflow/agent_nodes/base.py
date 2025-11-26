@@ -65,7 +65,6 @@ class AgentNodeBase:
         # Build execution config with workflow's thread_id (matches checkpointer)
         config = {"configurable": {"thread_id": workflow_thread_id}}
         
-        # Execute agent
         llm_client = AgentManager.get_llm_client(agent)
         conversation_messages = state.get("messages", [])
         
@@ -76,18 +75,15 @@ class AgentNodeBase:
             messages=conversation_messages
         )
         
-        # Handle interrupt
         if InterruptManager.should_interrupt(result):
             interrupt_data = InterruptManager.extract_interrupt_data(result)
             
-            # Add assistant_message to workflow_state for resume() to have complete conversation history
             if "assistant_message" in result:
                 assistant_msg = result["assistant_message"]
                 if "id" not in assistant_msg:
                     assistant_msg["id"] = str(uuid.uuid4())
                 if "agent" not in assistant_msg:
                     assistant_msg["agent"] = agent.name
-                # Add to workflow_state messages
                 if "messages" not in state:
                     state["messages"] = []
                 state["messages"].append(assistant_msg)
