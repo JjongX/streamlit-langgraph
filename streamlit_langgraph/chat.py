@@ -49,18 +49,14 @@ class LangGraphChat:
             config: Chat configuration
             custom_tools: List of custom tools
         """
-        # Configuration and session state
         self.config = config or UIConfig()
         self._init_session_state()
-        # Core managers
         self.agent_manager = AgentManager()
         self.state_manager = StateSynchronizer()
         self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
-        # Workflow setup
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor()
         
-        # Agent and tool setup
         if agents:
             if not workflow and len(agents) > 1:
                 raise ValueError(
@@ -78,19 +74,21 @@ class LangGraphChat:
                     parameters=tool.parameters, return_direct=tool.return_direct
                 )
         
-        # LLM and file handling
         first_agent = next(iter(self.agent_manager.agents.values()))
-        self.llm = AgentManager.get_llm_client(first_agent)
+        
         openai_client = None
         if first_agent.provider.lower() == "openai":
             openai_client = openai.OpenAI()
         self.file_handler = FileHandler(
             openai_client=openai_client,
-            allow_code_interpreter=first_agent.allow_code_interpreter,
+            model=first_agent.model,
             allow_file_search=first_agent.allow_file_search,
+            allow_code_interpreter=first_agent.allow_code_interpreter,
             container_id=first_agent.container_id,
-            model=first_agent.model
         )
+        
+        vector_store_ids = self.file_handler.get_vector_store_ids()
+        self.llm = AgentManager.get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
         self._container_id = first_agent.container_id
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
@@ -115,7 +113,6 @@ class LangGraphChat:
         )
         st.title(self.config.title)
         
-        # Render default sidebar if enabled in config
         if self.config.show_sidebar:
             self._render_sidebar()
         self._render_chat_interface()
@@ -204,7 +201,6 @@ class LangGraphChat:
             # Handle streaming response - detect format and route to appropriate handler
             section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
-            
             stream_iter = response["stream"]
             full_response = self.stream_processor.process_stream(section, stream_iter)
             response["content"] = full_response
@@ -215,7 +211,6 @@ class LangGraphChat:
             section.update("text", response["content"])
             section.stream()
 
-        # Add assistant response to state if not a workflow control message
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
             self.state_manager.add_assistant_message(
@@ -278,6 +273,13 @@ class LangGraphChat:
         Note: HITL is not supported for single agents. Use workflows for HITL functionality.
         """
         file_messages = self.file_handler.get_openai_input_messages()
+        vector_store_ids = self.file_handler.get_vector_store_ids()
+        
+        if agent.allow_file_search and vector_store_ids:
+            current_vector_ids = getattr(self.llm, '_vector_store_ids', None)
+            if current_vector_ids != vector_store_ids:
+                self.llm = AgentManager.get_llm_client(agent, vector_store_ids=vector_store_ids)
+        
         response = self.workflow_executor.execute_agent(
             agent, prompt,
             llm_client=self.llm,
@@ -285,15 +287,13 @@ class LangGraphChat:
             file_messages=file_messages
         )
         
-        # Update container_id if agent has code interpreter (for file retrieval)
         if agent.container_id:
             self._container_id = agent.container_id
             self.stream_processor._container_id = agent.container_id
-            # Update FileHandler with new container_id and settings
             self.file_handler.update_settings(
-                container_id=agent.container_id,
+                allow_file_search=agent.allow_file_search,
                 allow_code_interpreter=agent.allow_code_interpreter,
-                allow_file_search=agent.allow_file_search
+                container_id=agent.container_id,
             )
         
         if response.get("content"):
