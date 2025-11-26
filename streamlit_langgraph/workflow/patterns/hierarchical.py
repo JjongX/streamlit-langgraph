@@ -112,7 +112,6 @@ class HierarchicalPattern:
         - Sub-supervisors -> top supervisor (same as workers -> supervisor)
         """
         
-        # Collect all sub-supervisor names
         sub_supervisor_names = [team.supervisor.name for team in supervisor_teams]
         
         # Top supervisor routing (same pattern as supervisor -> workers)
@@ -159,7 +158,6 @@ class HierarchicalPattern:
                 sub_routes
             )
             
-            # Workers route back to their sub-supervisor
             for worker in team.workers:
                 graph.add_edge(worker.name, team.supervisor.name)
         

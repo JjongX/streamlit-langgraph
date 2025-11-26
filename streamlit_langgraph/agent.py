@@ -118,7 +118,6 @@ class AgentManager:
             config_path = os.path.join(os.path.dirname(__file__), "./configs/my_agents.yaml")
             agents = AgentManager.load_from_yaml(config_path)
         """
-        # Resolve path - handle both absolute and relative paths
         if not os.path.isabs(yaml_path):
             yaml_path = os.path.abspath(yaml_path)
         if not os.path.exists(yaml_path):
@@ -137,7 +136,7 @@ class AgentManager:
         return agents
     
     @staticmethod
-    def get_llm_client(agent: Agent) -> Any:
+    def get_llm_client(agent: Agent, vector_store_ids: Optional[List[str]] = None) -> Any:
         """
         Get the appropriate LLM client for an agent based on its configuration.
         
@@ -151,13 +150,21 @@ class AgentManager:
             agent.allow_file_search or
             agent.allow_image_generation
         )        
-        # For OpenAI provider with native tools, use Responses API
         if agent.provider.lower() == "openai" and has_native_tools:
+            # Initialize ChatOpenAI with Responses API
             chat_model = ChatOpenAI(
                 model=agent.model,
                 temperature=agent.temperature,
-                use_responses_api=True
+                use_responses_api=True,
             )
+            if agent.allow_file_search and vector_store_ids:
+                file_search_tool = {
+                    "type": "file_search",
+                    "vector_store_ids": vector_store_ids
+                }
+                # use bind_tools() to bind the tool to the model
+                chat_model = chat_model.bind_tools([file_search_tool])
+                setattr(chat_model, "_vector_store_ids", vector_store_ids)
         else:
             # Use standard init_chat_model for other cases
             chat_model = init_chat_model(

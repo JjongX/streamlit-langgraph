@@ -32,6 +32,7 @@ class CreateAgentExecutor:
         """
         self.agent = agent
         self.agent_obj = None
+        self._last_vector_store_ids = None
         
         if tools is not None:
             self.tools = tools
@@ -46,10 +47,12 @@ class CreateAgentExecutor:
                 mcp_tools = mcp_manager.get_tools()
             self.tools = custom_tools + mcp_tools
     
-    def execute_agent(self, llm_client: Any, prompt: str,
-        stream: bool = False,
+    def execute_agent(
+        self, 
+        llm_client: Any, prompt: str, stream: bool = False,
+        messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         Execute prompt for single-agent mode (non-workflow).
         
@@ -59,28 +62,40 @@ class CreateAgentExecutor:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             stream: Whether to stream the response
-            file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
-            
+            file_messages: Optional file messages (OpenAI format)
+
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
         try:
+            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+            if not hasattr(self, '_last_vector_store_ids'):
+                self._last_vector_store_ids = None
+            
+            if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
+                self.agent_obj = None
+            
+            self._last_vector_store_ids = current_vector_ids
+            
             if stream:
-                return self._stream_agent(llm_client, prompt, file_messages, messages, config={})
+                return self._stream_agent(llm_client, prompt, messages, file_messages, config={})
             else:
-                out = self._invoke_agent(llm_client, prompt, file_messages, messages, config={})
+                out = self._invoke_agent(llm_client, prompt, messages, file_messages, config={})
                 result_text = self._extract_response_text(out)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
                 
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
-    def execute_workflow(self, llm_client: Any, prompt: str,
-        stream: bool = False,
+    def execute_workflow(
+        self, 
+        llm_client: Any, prompt: str, stream: bool = False,
+        messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None, 
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
+        
         """
         Execute prompt for workflow mode (requires config with thread_id).
 
@@ -88,22 +103,29 @@ class CreateAgentExecutor:
             llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             stream: Whether to stream the response
+            messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
             config: Execution config with thread_id (required for workflows)
-            messages: Conversation history from workflow_state
 
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' or 'stream' if HITL is active
         """
         try:
-            config, workflow_thread_id = self._prepare_workflow_config(config)            
+            config, workflow_thread_id = self._prepare_workflow_config(config)
+            
+            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+            if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
+                self.agent_obj = None
+            
+            self._last_vector_store_ids = current_vector_ids
+            
             if self.agent_obj is None:
                 self._build_agent(llm_client)
             
             if stream:
-                return self._stream_agent(llm_client, prompt, file_messages, messages, config=config)
+                return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
             else:
-                out = self._invoke_agent(llm_client, prompt, file_messages, messages, config=config)
+                out = self._invoke_agent(llm_client, prompt, messages, file_messages, config=config)
                 # Check for interrupts in output (HITL)
                 if isinstance(out, dict) and "__interrupt__" in out:
                     return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
@@ -113,9 +135,12 @@ class CreateAgentExecutor:
         except Exception as e:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
-    def resume(self, decisions: List[Dict[str, Any]],
+    def resume(
+        self, 
+        decisions: List[Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        messages: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         """
         Resume agent execution after human approval/rejection.
         
@@ -143,9 +168,11 @@ class CreateAgentExecutor:
         result_text = self._extract_response_text(out)
         return {"role": "assistant", "content": result_text, "agent": self.agent.name}
     
-    def detect_interrupt_in_stream(self, 
+    def detect_interrupt_in_stream(
+        self, 
         execution_config: Dict[str, Any], 
-        messages: List[BaseMessage]) -> Optional[Any]:
+        messages: List[BaseMessage]
+    ) -> Optional[Any]:
         """Detect interrupt from agent stream events."""
         for event in self.agent_obj.stream(
             {"messages": messages},
@@ -155,7 +182,6 @@ class CreateAgentExecutor:
             if "__interrupt__" in event:
                 interrupt_data = event["__interrupt__"]
                 return list(interrupt_data) if isinstance(interrupt_data, (tuple, list)) else interrupt_data
-            
             # Check each node in the event
             for node_state in event.values():
                 if isinstance(node_state, dict) and "__interrupt__" in node_state:
@@ -165,23 +191,31 @@ class CreateAgentExecutor:
         
         return None
 
-    def _invoke_agent(self, llm_client: Any, prompt: str,
-        file_messages: Optional[List] = None,
+    def _invoke_agent(
+        self, llm_client: Any, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
-        config: Optional[Dict[str, Any]] = None) -> Any:
+        file_messages: Optional[List] = None,
+        config: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """
         Invoke the agent (non-streaming).
 
         Args:
             llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
             prompt: User's question/prompt
-            file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
+            file_messages: Optional file messages (OpenAI format)
             config: Optional execution config (for workflows)
             
         Returns:
             Agent output (dict or other format)
         """
+        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
+            self.agent_obj = None
+        
+        self._last_vector_store_ids = current_vector_ids
+        
         if self.agent_obj is None:
             self._build_agent(llm_client)
         
@@ -194,8 +228,8 @@ class CreateAgentExecutor:
         return out
     
     def _stream_agent(self, llm_client: Any, prompt: str,
-        file_messages: Optional[List] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Invoke the agent with streaming support.
@@ -210,13 +244,17 @@ class CreateAgentExecutor:
         Returns:
             Dict with 'role', 'content', 'agent', and 'stream' key containing iterator
         """
+        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
+            self.agent_obj = None
+        
+        self._last_vector_store_ids = current_vector_ids
+        
         if self.agent_obj is None:
             self._build_agent(llm_client)
         
         langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
         execution_config = config if config is not None else {}
-        # Use stream_mode="messages" for token-by-token streaming
-        # This returns (token, metadata) tuples where token has content_blocks
         stream_iter = self.agent_obj.stream(
             {"messages": langchain_messages}, 
             config=execution_config,
@@ -280,7 +318,6 @@ class CreateAgentExecutor:
         
         langchain_messages: List[BaseMessage] = []
         
-        # Convert existing messages from workflow_state
         if messages:
             for msg in messages:
                 role = msg.get("role", "")
@@ -297,31 +334,23 @@ class CreateAgentExecutor:
                     langchain_messages.append(SystemMessage(content=content))
                 # tool messages are added during tool execution
         
-        # Add file messages if provided (convert OpenAI format to LangChain format)
         if file_messages:
             for file_msg in file_messages:
-                # File messages from OpenAI are typically dicts with role and content
-                # For LangChain, we need to handle file content appropriately
                 if isinstance(file_msg, dict):
                     role = file_msg.get("role", "user")
                     content = file_msg.get("content", "")
                     if role == "user" and content:
-                        # If content is a list (file content blocks), we need to handle it
                         if isinstance(content, list):
-                            # Extract text from file content blocks
                             text_parts = []
                             for block in content:
                                 if isinstance(block, dict):
                                     if block.get("type") == "text":
                                         text_parts.append(block.get("text", ""))
                                     elif block.get("type") == "input_file":
-                                        # File reference - include in message
                                         text_parts.append(f"[File: {block.get('file_id', 'unknown')}]")
                             content = " ".join(text_parts) if text_parts else str(content)
                         langchain_messages.append(LC_HumanMessage(content=content))
         
-        # Add current prompt if it's not already the last message
-        # (This handles the case where prompt is new and not yet in workflow_state)
         if not langchain_messages or not isinstance(langchain_messages[-1], HumanMessage) or langchain_messages[-1].content != current_prompt:
             langchain_messages.append(HumanMessage(content=current_prompt))
         
@@ -345,11 +374,9 @@ class CreateAgentExecutor:
                 for msg in reversed(messages):
                     if isinstance(msg, AIMessage):
                         if hasattr(msg, 'content') and msg.content:
-                            # Handle both string and list content
                             if isinstance(msg.content, str):
                                 return msg.content
                             elif isinstance(msg.content, list):
-                                # Extract text from content blocks
                                 text_parts = []
                                 for block in msg.content:
                                     if isinstance(block, dict) and block.get('type') == 'text':
@@ -358,10 +385,8 @@ class CreateAgentExecutor:
                                         text_parts.append(block)
                                 if text_parts:
                                     return ''.join(text_parts)
-                        # Fallback: try to convert message to string
                         return str(msg) if msg else ""
                 
-                # If no AIMessage found, get the last message
                 last_message = messages[-1]
                 if hasattr(last_message, 'content'):
                     content = last_message.content
@@ -371,11 +396,9 @@ class CreateAgentExecutor:
                         return ''.join(str(c) for c in content if c)
                 return str(last_message) if last_message else ""
         
-        # Handle string output
         elif isinstance(out, str):
             return out
         
-        # Handle objects with content attribute
         elif hasattr(out, 'content'):
             content = out.content
             if isinstance(content, str):

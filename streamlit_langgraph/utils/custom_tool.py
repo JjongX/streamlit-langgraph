@@ -13,7 +13,6 @@ class CustomTool:
     A custom tool that can be used by agents in the multiagent system.
     """
     # Class-level registry for storing all registered tools
-    # Using ClassVar to indicate this is a class variable, not an instance field
     _registry: ClassVar[Dict[str, "CustomTool"]] = {}
     name: str
     description: str
@@ -115,7 +114,6 @@ class CustomTool:
                     param_info["type"] = "object"
                     
             parameters["properties"][param_name] = param_info
-            # Check if parameter is required
             if param.default == inspect.Parameter.empty:
                 parameters["required"].append(param_name)
         

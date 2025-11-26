@@ -72,12 +72,10 @@ class HandoffDelegation:
                                            input_message: str, workers: List[Agent],
                                            allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
-        # Check if we have workers to delegate to
         if not workers:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
-        # Build delegation tool as LangChain StructuredTool
         delegation_tool = HandoffDelegation._build_langchain_delegation_tool(workers, allow_parallel)
         if not delegation_tool:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
@@ -86,11 +84,9 @@ class HandoffDelegation:
         llm_client = AgentManager.get_llm_client(agent)
         from ...utils import CustomTool  # lazy import to avoid circular import
         
-        # Get or create executor with delegation tool temporarily added
         existing_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])
         
-        # Reuse existing executor but temporarily add delegation tool if needed
         if executor.tools and "delegate_task" not in [tool.name for tool in executor.tools]:
             existing_tools = executor.tools.copy() if executor.tools else []
             executor.tools = existing_tools + [delegation_tool]
@@ -100,9 +96,7 @@ class HandoffDelegation:
         if "executors" not in state.get("metadata", {}):
             state["metadata"]["executors"] = {}
         
-        # Get or create executor_key (must be defined before use)
         executor_key = f"workflow_executor_{agent.name}"
-        
         # Use workflow's thread_id (from state metadata) to match checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
         if not workflow_thread_id:
@@ -111,15 +105,12 @@ class HandoffDelegation:
         
         state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
         
-        # Use clean input_message (agent context comes from system_message)
-        # Use the same thread_id as workflow checkpointer - safe because they're separate instances
         config = {"configurable": {"thread_id": workflow_thread_id}}
         
         with st.spinner(f"🤖 {agent.name} is working..."):
             if executor.agent_obj is None:
                 executor._build_agent(llm_client)
             
-            # Check for interrupts first via streaming (only if HITL is enabled)
             interrupt_data = None
             if executor.agent.human_in_loop and executor.agent.interrupt_on:
                 # Convert input_message to LangChain message format
@@ -281,11 +272,9 @@ class HandoffDelegation:
                             }
                             delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
                             if hasattr(msg, 'content') and msg.content:
-                                # Handle both string and list content formats
                                 if isinstance(msg.content, str):
                                     content = msg.content
                                 elif isinstance(msg.content, list):
-                                    # Extract text from content blocks
                                     text_parts = []
                                     for block in msg.content:
                                         if isinstance(block, dict) and block.get('type') == 'text':
@@ -298,11 +287,9 @@ class HandoffDelegation:
                             content = content + delegation_text if content else delegation_text[2:]
                             return routing_decision, content
                 if hasattr(msg, 'content') and msg.content and not content:
-                    # Handle both string and list content formats
                     if isinstance(msg.content, str):
                         content = msg.content
                     elif isinstance(msg.content, list):
-                        # Extract text from content blocks
                         text_parts = []
                         for block in msg.content:
                             if isinstance(block, dict) and block.get('type') == 'text':
@@ -321,11 +308,9 @@ class HandoffDelegation:
                     last_msg = out['messages'][-1]
                     if hasattr(last_msg, 'content'):
                         msg_content = last_msg.content
-                        # Handle both string and list content formats
                         if isinstance(msg_content, str):
                             content = msg_content
                         elif isinstance(msg_content, list):
-                            # Extract text from content blocks
                             text_parts = []
                             for block in msg_content:
                                 if isinstance(block, dict) and block.get('type') == 'text':
@@ -339,7 +324,6 @@ class HandoffDelegation:
                         content = str(last_msg)
             elif hasattr(out, 'content'):
                 out_content = out.content
-                # Handle both string and list content formats
                 if isinstance(out_content, str):
                     content = out_content
                 elif isinstance(out_content, list):

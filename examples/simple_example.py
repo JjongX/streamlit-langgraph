@@ -1,18 +1,22 @@
 import streamlit_langgraph as slg
 
+
 def main():    
     # Create a simple assistant
     assistant = slg.Agent(
         name="assistant",
         role="Helpful Assistant", 
-        instructions="You are a helpful assistant that can answer questions and have conversations.",
+        instructions=(
+            "You are a helpful assistant that can answer questions and have conversations. "
+            "If you do not know the answer, just state that you do not know."
+        ),
         provider="openai",
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         temperature=0.7,
         # Native OpenAI tools are automatically handled via Responses API when enabled
-        # allow_file_search=True,
-        # allow_code_interpreter=True,
-        # allow_web_search=True,
+        allow_file_search=True,
+        allow_code_interpreter=True,
+        allow_web_search=True,
     )
     # Create UI configuration
     config = slg.UIConfig(
@@ -36,7 +40,7 @@ What would you like to talk about?""",
     )
     # Create the chat interface (single agent, no workflow needed)
     chat = slg.LangGraphChat(
-        agents=[assistant],
+        agents=[assistant], # Might update later to not pass agents
         config=config
     )
     # Run the chat

@@ -2,6 +2,7 @@ import os
 
 import streamlit_langgraph as slg
 
+
 def analyze_sentiment(text: str) -> str:
     """Simple sentiment analysis placeholder."""
     # In real implementation, this would use an NLP library
@@ -19,25 +20,23 @@ def analyze_sentiment(text: str) -> str:
     else:
         return "Sentiment: Neutral"
 
+
 def create_parallel_supervisor_workflow():
     """Create a parallel supervisor workflow for comprehensive product analysis."""
     
-    # Register custom tool BEFORE loading agents
     slg.CustomTool.register_tool(
         name="analyze_sentiment",
         description="Perform sentiment analysis on text",
         function=analyze_sentiment
     )
     
-    # Load agent configurations from YAML
-    # Customer_Analyst agent has "analyze_sentiment" in its tools list (see config file)
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
     agents = slg.AgentManager.load_from_yaml(config_path)
-    
     supervisor = agents[0]
     workers = agents[1:]
     
     return supervisor, workers
+
 
 def main():
     """Parallel supervisor example demonstrating simultaneous multi-agent analysis."""
