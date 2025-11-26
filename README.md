@@ -1,6 +1,6 @@
 # streamlit-langgraph
 
-> Recommendation: It is recommended to use this package for production or critical projects only after it reaches beta status (release version 0.2.0 or higher), which is scheduled to be completed and released no later than December 14, 2025. Until then, expect breaking changes and experimental features.
+> Recommendation: It is recommended to use this package for production or critical projects only after it reaches alpha status (release version 0.2.0 or higher), which is scheduled to be completed and released no later than December 14, 2025. Until then, expect breaking changes and experimental features.
 
 [![PyPI version](https://badge.fury.io/py/streamlit-langgraph.svg)](https://badge.fury.io/py/streamlit-langgraph)
 
@@ -78,12 +78,7 @@ With that in mind, this package is designed so users can focus on defining agent
 
 This project is in **pre-alpha**. Features and APIs are subject to change.
 
-> Recommendation:
-It is recommended to use this package for production or critical projects only after it reaches beta status (release version 0.2.0 or higher), which is scheduled to be completed and released no later than December 14, 2025. Until then, expect breaking changes and experimental features.
-
 **Note:** Uses `langchain`/`langgraph` version `1.0.1`.
-
----
 
 ## Supported LLM Providers
 
@@ -102,8 +97,6 @@ It is recommended to use this package for production or critical projects only a
 **Notes:**
 - **OpenAI**: Automatically selects Responses API or ChatCompletion API based on native tool configuration
 - Support depends on LangChain's provider compatibility
-
----
 
 ## Installation
 
