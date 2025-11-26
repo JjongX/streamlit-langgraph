@@ -77,8 +77,7 @@ With that in mind, this package is designed so users can focus on defining agent
 This project is in **pre-alpha**. Features and APIs are subject to change.
 
 > Recommendation:
-It is recommended to use this package for production or critical projects after it reaches beta status (release version 0.2.0 or higher).
-Until then, expect breaking changes and experimental features
+It is recommended to use this package for production or critical projects only after it reaches beta status (release version 0.2.0 or higher), which is scheduled to be completed and released no later than December 14, 2025. Until then, expect breaking changes and experimental features.
 
 **Note:** Uses `langchain`/`langgraph` version `1.0.1`.
 
