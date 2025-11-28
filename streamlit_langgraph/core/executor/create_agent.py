@@ -48,8 +48,7 @@ class CreateAgentExecutor:
             self.tools = custom_tools + mcp_tools
     
     def execute_agent(
-        self, 
-        llm_client: Any, prompt: str, stream: bool = False,
+        self,  llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
     ) -> Dict[str, Any]:
@@ -89,8 +88,7 @@ class CreateAgentExecutor:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
     def execute_workflow(
-        self, 
-        llm_client: Any, prompt: str, stream: bool = False,
+        self, llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None, 
@@ -314,7 +312,6 @@ class CreateAgentExecutor:
         Returns:
             List of LangChain BaseMessage objects
         """
-        from langchain_core.messages import HumanMessage as LC_HumanMessage
         
         langchain_messages: List[BaseMessage] = []
         
@@ -332,7 +329,6 @@ class CreateAgentExecutor:
                     langchain_messages.append(AIMessage(content=content))
                 elif role == "system":
                     langchain_messages.append(SystemMessage(content=content))
-                # tool messages are added during tool execution
         
         if file_messages:
             for file_msg in file_messages:
@@ -349,7 +345,7 @@ class CreateAgentExecutor:
                                     elif block.get("type") == "input_file":
                                         text_parts.append(f"[File: {block.get('file_id', 'unknown')}]")
                             content = " ".join(text_parts) if text_parts else str(content)
-                        langchain_messages.append(LC_HumanMessage(content=content))
+                        langchain_messages.append(HumanMessage(content=content))
         
         if not langchain_messages or not isinstance(langchain_messages[-1], HumanMessage) or langchain_messages[-1].content != current_prompt:
             langchain_messages.append(HumanMessage(content=current_prompt))
@@ -358,7 +354,6 @@ class CreateAgentExecutor:
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
-        from langchain_core.messages import AIMessage
         
         if isinstance(out, dict):
             # Check for 'output' key first (some agent formats)

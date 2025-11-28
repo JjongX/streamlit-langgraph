@@ -157,14 +157,28 @@ class AgentManager:
                 temperature=agent.temperature,
                 use_responses_api=True,
             )
+            
+            tools_to_bind = []
             if agent.allow_file_search and vector_store_ids:
                 file_search_tool = {
                     "type": "file_search",
                     "vector_store_ids": vector_store_ids
                 }
-                # use bind_tools() to bind the tool to the model
-                chat_model = chat_model.bind_tools([file_search_tool])
-                setattr(chat_model, "_vector_store_ids", vector_store_ids)
+                tools_to_bind.append(file_search_tool)
+            if agent.allow_code_interpreter:
+                code_interpreter_tool = {
+                    "type": "code_interpreter",
+                    "container": agent.container_id if agent.container_id else {"type": "auto"}
+                }
+                tools_to_bind.append(code_interpreter_tool)
+            if agent.allow_web_search:
+                web_search_tool = {"type": "web_search_preview"}
+                tools_to_bind.append(web_search_tool)
+            if agent.allow_image_generation:
+                image_generation_tool = {"type": "image_generation"}
+                tools_to_bind.append(image_generation_tool)
+            if tools_to_bind:
+                chat_model = chat_model.bind_tools(tools_to_bind)
         else:
             # Use standard init_chat_model for other cases
             chat_model = init_chat_model(

@@ -49,7 +49,6 @@ class WorkflowExecutor:
         state["metadata"]["workflow_thread_id"] = configurable["thread_id"]
         workflow_config = {"configurable": configurable}
         
-        # Setup display callback with deduplication if provided
         if display_callback:
             display_wrapper = self._create_display_wrapper(display_callback, initial_state)
             return self._execute_streaming(workflow, state, workflow_config, display_wrapper)
@@ -134,8 +133,8 @@ class WorkflowExecutor:
         return response
     
     def _execute_invoke(
-        self, workflow: StateGraph, initial_state: WorkflowState,
-        config: Dict[str, Any]
+        self, workflow: StateGraph,
+        initial_state: WorkflowState, config: Dict[str, Any]
     ) -> WorkflowState:
         """Execute workflow synchronously using invoke() method."""
         final_state = workflow.invoke(initial_state, config=config)
@@ -143,8 +142,9 @@ class WorkflowExecutor:
         return final_state
     
     def _execute_streaming(
-        self, workflow: StateGraph, initial_state: WorkflowState, 
-        config: Dict[str, Any], display_callback: Callable, 
+        self, workflow: StateGraph,
+        initial_state: WorkflowState, config: Dict[str, Any], 
+        display_callback: Callable, 
     ) -> WorkflowState:
         """Execute workflow using stream() method with real-time display updates."""
         accumulated_state = initial_state.copy()

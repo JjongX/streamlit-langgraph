@@ -74,11 +74,16 @@ class StreamProcessor:
         """
         Process a single token from LangChain stream_mode="messages".
         
-        According to LangChain docs, stream_mode="messages" returns (token, metadata) tuples
-        where token is an AIMessage with content_blocks attribute.
+        This method handles LangChain's stream_mode="messages" format, which returns
+        (token, metadata) tuples where token is an AIMessage with content_blocks attribute.
+        
+        Handles various content block types:
+        - text: Regular text content
+        - server_tool_call: Tool calls (code_interpreter, file_search, etc.)
+        - server_tool_result: Tool execution results (text, images, etc.)
         
         Args:
-            token: AIMessage with content_blocks attribute
+            token: AIMessage with content_blocks attribute from stream_mode="messages"
             section: Display section to update
             
         Returns:
@@ -91,8 +96,53 @@ class StreamProcessor:
             text_parts = []
             for block in token.content_blocks:
                 if isinstance(block, dict):
-                    if block.get('type') == 'text' and block.get('text'):
+                    block_type = block.get('type')
+                    if block_type == 'text' and block.get('text'):
                         text_parts.append(block.get('text', ''))
+                    elif block_type == 'server_tool_call':
+                        tool_name = block.get('name', '')
+                        if tool_name == 'code_interpreter':
+                            args = block.get('args', {})
+                            code = args.get('code', '') or args.get('input', '')
+                            if code:
+                                if (not section.empty and 
+                                    section.last_block.category == "code" and 
+                                    section.last_block.content):
+                                    previous_code = section.last_block.content
+                                    if code.startswith(previous_code):
+                                        delta = code[len(previous_code):]
+                                        if delta:
+                                            section.update("code", delta)
+                                            section.stream()
+                                    elif previous_code.startswith(code):
+                                        section.blocks[-1] = section.display_manager.create_block("code", code)
+                                        section.stream()
+                                    else:
+                                        section.blocks[-1] = section.display_manager.create_block("code", code)
+                                        section.stream()
+                                else:
+                                    section.update("code", code)
+                                    section.stream()
+                    elif block_type == 'server_tool_result':
+                        tool_call_id = block.get('tool_call_id', '')
+                        if 'code_interpreter' in str(block):
+                            outputs = block.get('outputs', [])
+                            for output in outputs:
+                                if isinstance(output, dict):
+                                    output_type = output.get('type', '')
+                                    if output_type == 'text':
+                                        output_text = output.get('text', '')
+                                        if output_text:
+                                            section.update("text", output_text)
+                                            section.stream()
+                                            text_parts.append(output_text)
+                                    elif output_type == 'image':
+                                        image_data = output.get('image', {})
+                                        if image_data:
+                                            image_bytes = base64.b64decode(image_data.get('data', ''))
+                                            filename = f"code_output_{tool_call_id}.png"
+                                            section.update("image", image_bytes, filename=filename)
+                                            section.stream()
             if text_parts:
                 delta = ''.join(text_parts)
                 if delta:
@@ -149,7 +199,6 @@ class StreamProcessor:
                             if hasattr(msg, 'content') and msg.content:
                                 if isinstance(msg.content, str):
                                     new_content = msg.content
-                                    # Only append new content (delta)
                                     if new_content.startswith(accumulated_content):
                                         delta = new_content[len(accumulated_content):]
                                         if delta:
@@ -157,7 +206,6 @@ class StreamProcessor:
                                             section.stream()
                                             return new_content
                                     else:
-                                        # Full replacement (new content doesn't start with accumulated)
                                         section.update("text", new_content)
                                         section.stream()
                                         return new_content
@@ -262,8 +310,50 @@ class StreamProcessor:
                 if hasattr(token, 'content_blocks') and token.content_blocks:
                     text_parts = []
                     for block in token.content_blocks:
-                        if isinstance(block, dict) and block.get('type') == 'text':
-                            text_parts.append(block.get('text', ''))
+                        if isinstance(block, dict):
+                            block_type = block.get('type')
+                            if block_type == 'text':
+                                text_parts.append(block.get('text', ''))
+                            elif block_type == 'server_tool_call':
+                                tool_name = block.get('name', '')
+                                if tool_name == 'code_interpreter':
+                                    args = block.get('args', {})
+                                    code = args.get('code', '') or args.get('input', '')
+                                    if code:
+                                        if (not section.empty and 
+                                            section.last_block.category == "code" and 
+                                            section.last_block.content):
+                                            previous_code = section.last_block.content
+                                            if code.startswith(previous_code):
+                                                delta = code[len(previous_code):]
+                                                if delta:
+                                                    section.update("code", delta)
+                                                    section.stream()
+                                            elif previous_code.startswith(code):
+                                                section.blocks[-1] = section.display_manager.create_block("code", code)
+                                                section.stream()
+                                            else:
+                                                section.blocks[-1] = section.display_manager.create_block("code", code)
+                                                section.stream()
+                                        else:
+                                            section.update("code", code)
+                                            section.stream()
+                            elif block_type == 'server_tool_result':
+                                outputs = block.get('outputs', [])
+                                for output in outputs:
+                                    if isinstance(output, dict):
+                                        output_type = output.get('type', '')
+                                        if output_type == 'text':
+                                            output_text = output.get('text', '')
+                                            if output_text:
+                                                text_parts.append(output_text)
+                                        elif output_type == 'image':
+                                            image_data = output.get('image', {})
+                                            if image_data:
+                                                image_bytes = base64.b64decode(image_data.get('data', ''))
+                                                filename = "code_output.png"
+                                                section.update("image", image_bytes, filename=filename)
+                                                section.stream()
                     if text_parts:
                         full_response = ''.join(text_parts)
                 elif hasattr(token, 'content') and token.content:
@@ -272,8 +362,15 @@ class StreamProcessor:
                     elif isinstance(token.content, list):
                         text_parts = []
                         for block in token.content:
-                            if isinstance(block, dict) and block.get('type') == 'text':
-                                text_parts.append(block.get('text', ''))
+                            if isinstance(block, dict):
+                                block_type = block.get('type')
+                                if block_type == 'text':
+                                    text_parts.append(block.get('text', ''))
+                                elif block_type == 'code_interpreter_call':
+                                    code = block.get('code', '')
+                                    if code:
+                                        section.update("code", code)
+                                        section.stream()
                             elif isinstance(block, str):
                                 text_parts.append(block)
                         if text_parts:
