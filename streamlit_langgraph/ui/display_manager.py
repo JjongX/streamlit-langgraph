@@ -2,7 +2,7 @@
 
 import base64
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import streamlit as st
 
@@ -20,15 +20,21 @@ class Block:
         self,
         display_manager: "DisplayManager",
         category: str,
-        content: Optional[str] = None,
+        content: Optional[Union[str, bytes]] = None,
         filename: Optional[str] = None,
         file_id: Optional[str] = None,
     ) -> None:
         self.display_manager = display_manager
         self.category = category
-        self.content = content or ""
+        # Preserve bytes content for image/download blocks
+        if content is None:
+            self.content = "" if category not in ["image", "download"] else b""
+        else:
+            self.content = content
         self.filename = filename
         self.file_id = file_id
+        if category in ["image", "download"]:
+            print(f"[DEBUG] Block created - category: {category}, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {filename}")
 
     def write(self) -> None:
         """Render this block's content to the Streamlit interface."""
@@ -41,8 +47,17 @@ class Block:
             with st.expander("", expanded=False, icon=":material/lightbulb:"):
                 st.markdown(self.content)
         elif self.category == "image":
+            print(f"[DEBUG] Block.write - image block, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {self.filename}")
             if self.content:
-                st.image(self.content, caption=self.filename)
+                try:
+                    st.image(self.content, caption=self.filename)
+                    print(f"[DEBUG] Block.write - image rendered successfully")
+                except Exception as e:
+                    print(f"[DEBUG] Block.write - Error rendering image: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"[DEBUG] Block.write - image block has no content!")
         elif self.category == "download":
             self._render_download()
     
@@ -86,7 +101,7 @@ class Section:
     def last_block(self) -> Optional[Block]:
         return None if self.empty else self.blocks[-1]
     
-    def update(self, category: str, content: str, filename: Optional[str] = None, 
+    def update(self, category: str, content: Union[str, bytes], filename: Optional[str] = None, 
                file_id: Optional[str] = None) -> None:
         """
         Add or append content to this section.
@@ -94,17 +109,21 @@ class Section:
         If the last block has the same category and is streamable, content is appended.
         Otherwise, a new block is created.
         """
+        print(f"[DEBUG] Section.update called - category: {category}, content type: {type(content)}, content length: {len(content) if content else 0}, filename: {filename}")
         if self.empty:
              # Create first block
+            print(f"[DEBUG] Creating first block")
             self.blocks = [self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             )]
         elif (category in ["text", "code", "reasoning"] and 
               self.last_block.category == category):
             # Append to existing block for same category
+            print(f"[DEBUG] Appending to existing {category} block")
             self.last_block.content += content
         else:
             # Create new block for different category
+            print(f"[DEBUG] Creating new {category} block (previous was {self.last_block.category})")
             self.blocks.append(self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             ))
