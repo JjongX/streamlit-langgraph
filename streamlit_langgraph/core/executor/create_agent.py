@@ -18,8 +18,16 @@ class CreateAgentExecutor:
     Uses LangChain's standard `create_agent` function which supports multiple providers
     (OpenAI, Anthropic, Google, etc.) through LangChain's chat model interface.
     
+    This executor is used for:
+    - ChatCompletion API (when native OpenAI tools are not enabled)
+    - HITL (Human-in-the-Loop) scenarios (even if native tools are enabled, HITL requires this executor)
+    - Multi-provider support (Anthropic, Google, etc.)
+    
     HITL Handling: Uses LangChain's built-in `HumanInTheLoopMiddleware` which is automatically
     integrated into the agent during construction (in `_build_agent`)
+    
+    Note: For native OpenAI tools (code_interpreter, file_search, etc.) without HITL,
+    use ResponseAPIExecutor instead.
     """
 
     def __init__(self, agent: Agent, tools: Optional[List] = None):
@@ -47,6 +55,22 @@ class CreateAgentExecutor:
                 mcp_tools = mcp_manager.get_tools()
             self.tools = custom_tools + mcp_tools
     
+    def _check_and_update_vector_store_ids(self, llm_client: Any) -> None:
+        """
+        Check if vector_store_ids have changed and invalidate agent if needed.
+        
+        Args:
+            llm_client: LLM client instance to check for vector_store_ids
+        """
+        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+        if not hasattr(self, '_last_vector_store_ids'):
+            self._last_vector_store_ids = None
+        
+        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
+            self.agent_obj = None
+        
+        self._last_vector_store_ids = current_vector_ids
+    
     def execute_agent(
         self,  llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -68,15 +92,6 @@ class CreateAgentExecutor:
             Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
         try:
-            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-            if not hasattr(self, '_last_vector_store_ids'):
-                self._last_vector_store_ids = None
-            
-            if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-                self.agent_obj = None
-            
-            self._last_vector_store_ids = current_vector_ids
-            
             if stream:
                 return self._stream_agent(llm_client, prompt, messages, file_messages, config={})
             else:
@@ -110,15 +125,6 @@ class CreateAgentExecutor:
         """
         try:
             config, workflow_thread_id = self._prepare_workflow_config(config)
-            
-            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-            if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-                self.agent_obj = None
-            
-            self._last_vector_store_ids = current_vector_ids
-            
-            if self.agent_obj is None:
-                self._build_agent(llm_client)
             
             if stream:
                 return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
@@ -199,7 +205,7 @@ class CreateAgentExecutor:
         Invoke the agent (non-streaming).
 
         Args:
-            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
+            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
             prompt: User's question/prompt
             messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
@@ -208,11 +214,7 @@ class CreateAgentExecutor:
         Returns:
             Agent output (dict or other format)
         """
-        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-            self.agent_obj = None
-        
-        self._last_vector_store_ids = current_vector_ids
+        self._check_and_update_vector_store_ids(llm_client)
         
         if self.agent_obj is None:
             self._build_agent(llm_client)
@@ -233,7 +235,7 @@ class CreateAgentExecutor:
         Invoke the agent with streaming support.
         
         Args:
-            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
+            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
             prompt: User's question/prompt
             file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
@@ -242,11 +244,7 @@ class CreateAgentExecutor:
         Returns:
             Dict with 'role', 'content', 'agent', and 'stream' key containing iterator
         """
-        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-            self.agent_obj = None
-        
-        self._last_vector_store_ids = current_vector_ids
+        self._check_and_update_vector_store_ids(llm_client)
         
         if self.agent_obj is None:
             self._build_agent(llm_client)
@@ -264,8 +262,8 @@ class CreateAgentExecutor:
         """
         Build the agent with optional human-in-the-loop middleware.
         
-        When native OpenAI tools are enabled and use_responses_api=True is set on the model,
-        LangChain will automatically route to Responses API for agentic behavior.
+        This executor uses LangChain's create_agent which works with ChatCompletion API.
+        For native OpenAI tools without HITL, ResponseAPIExecutor should be used instead.
         """
         middleware = []
         if self.agent.human_in_loop and self.agent.interrupt_on:

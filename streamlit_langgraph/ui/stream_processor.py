@@ -1,8 +1,11 @@
 # Stream processor for handling different streaming formats.
 
 import base64
+import logging
 
 from langchain_core.messages import AIMessage
+
+logger = logging.getLogger(__name__)
 
 
 class StreamProcessor:
@@ -278,8 +281,10 @@ class StreamProcessor:
             section.stream()
         elif event.type == "response.image_generation_call.partial_image":
             image_bytes = base64.b64decode(event.partial_image_b64)
-            filename = f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}"
-            section.update("image", image_bytes, filename=filename, file_id=getattr(event, 'item_id', None))
+            item_id = getattr(event, 'item_id', None)
+            filename = f"{item_id}.{getattr(event, 'output_format', 'png')}" if item_id else "image.png"
+            # Use "generated_image" category so partial images update the same block
+            section.update("generated_image", image_bytes, filename=filename, file_id=item_id)
             section.stream()
         elif event.type == "response.output_text.annotation.added":
             annotation = event.annotation
@@ -358,25 +363,25 @@ class StreamProcessor:
                                             section.stream()
                             elif block_type == 'server_tool_result':
                                 tool_call_id = block.get('tool_call_id', '')
-                                print(f"[DEBUG] _extract_final_content - server_tool_result block detected. tool_call_id: {tool_call_id}")
-                                print(f"[DEBUG] _extract_final_content - Full block keys: {list(block.keys())}")
+                                logger.debug(f"_extract_final_content - server_tool_result block detected. tool_call_id: {tool_call_id}")
+                                logger.debug(f"_extract_final_content - Full block keys: {list(block.keys())}")
                                 outputs = block.get('output', block.get('outputs', []))
-                                print(f"[DEBUG] _extract_final_content - Outputs type: {type(outputs)}, Outputs: {outputs}")
+                                logger.debug(f"_extract_final_content - Outputs type: {type(outputs)}, Outputs: {outputs}")
                                 if not isinstance(outputs, list):
                                     outputs = [outputs] if outputs else []
                                 for idx, output in enumerate(outputs):
-                                    print(f"[DEBUG] _extract_final_content - Output {idx}: type={type(output)}, content={output}")
+                                    logger.debug(f"_extract_final_content - Output {idx}: type={type(output)}, content={output}")
                                     if isinstance(output, dict):
                                         output_type = output.get('type', '')
-                                        print(f"[DEBUG] _extract_final_content - Output type: {output_type}")
+                                        logger.debug(f"_extract_final_content - Output type: {output_type}")
                                         if output_type == 'text':
                                             output_text = output.get('text', '')
                                             if output_text:
                                                 text_parts.append(output_text)
                                         elif output_type == 'image':
-                                            print(f"[DEBUG] _extract_final_content - Image output detected!")
+                                            logger.debug("_extract_final_content - Image output detected!")
                                             image_data = output.get('image', {})
-                                            print(f"[DEBUG] _extract_final_content - image_data type: {type(image_data)}")
+                                            logger.debug(f"_extract_final_content - image_data type: {type(image_data)}")
                                             image_data_str = None
                                             if isinstance(image_data, dict):
                                                 image_data_str = image_data.get('data', '') or image_data.get('base64', '')
@@ -385,7 +390,7 @@ class StreamProcessor:
                                             if image_data_str:
                                                 image_bytes = base64.b64decode(image_data_str)
                                                 filename = f"code_output_{tool_call_id}.png"
-                                                print(f"[DEBUG] _extract_final_content - Creating image block")
+                                                logger.debug("_extract_final_content - Creating image block")
                                                 section.update("image", image_bytes, filename=filename)
                                                 section.update("download", image_bytes, filename=filename)
                                                 section.stream()

@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
-import openai
 
 from .agent import Agent, AgentManager
 from .core.executor import WorkflowExecutor
+from .core.executor.registry import ExecutorRegistry
 from .core.state import StateSynchronizer, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
 from .ui import DisplayManager, StreamProcessor
@@ -76,9 +76,16 @@ class LangGraphChat:
         
         first_agent = next(iter(self.agent_manager.agents.values()))
         
+        # FileHandler is only used with ResponseAPIExecutor (when native tools are enabled)
+        # Get the OpenAI client from ResponseAPIExecutor if native tools are enabled
         openai_client = None
-        if first_agent.provider.lower() == "openai":
-            openai_client = openai.OpenAI()
+        if (first_agent.provider.lower() == "openai" and
+            ExecutorRegistry.has_native_tools(first_agent)):
+            executor = ExecutorRegistry().get_or_create(first_agent, executor_type="single_agent")
+            from .core.executor.response_api import ResponseAPIExecutor
+            if isinstance(executor, ResponseAPIExecutor):
+                openai_client = executor.openai_client
+        
         self.file_handler = FileHandler(
             openai_client=openai_client,
             model=first_agent.model,
@@ -89,6 +96,7 @@ class LangGraphChat:
         
         vector_store_ids = self.file_handler.get_vector_store_ids()
         self.llm = AgentManager.get_llm_client(first_agent, vector_store_ids=vector_store_ids)
+        # Use the same client for stream_processor (for container file access)
         self._client = openai_client
         self._container_id = first_agent.container_id
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)

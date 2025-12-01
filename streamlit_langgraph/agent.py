@@ -1,8 +1,10 @@
 # Main agent class.
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
+from logging.handlers import RotatingFileHandler
 
 import yaml
 from langchain.chat_models import init_chat_model
@@ -15,8 +17,10 @@ class Agent:
     Required fields: name, role, instructions.
     provider and model default to 'openai' and 'gpt-4.1-mini' if not specified.
     
-    All agents use CreateAgentExecutor, which automatically uses Responses API
-    when native OpenAI tools are enabled.
+    Executor selection:
+    - If HITL enabled → CreateAgentExecutor (native tools automatically disabled)
+    - If native tools enabled AND HITL disabled → ResponseAPIExecutor
+    - Otherwise → CreateAgentExecutor
     """
     name: str
     role: str
@@ -36,6 +40,7 @@ class Agent:
     human_in_loop: bool = False  # Enable human-in-the-loop approval (multiagent workflows only)
     interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None  # Tool names to interrupt on
     hitl_description_prefix: Optional[str] = "Tool execution pending approval"  # Prefix for interrupt messages
+    enable_logging: bool = False  # Enable file logging to agent_logging.log
 
     def __post_init__(self):
         """Post-initialization processing and validation."""
@@ -50,6 +55,48 @@ class Agent:
             self.allow_web_search = True
         if "image_generation" in self.tools:
             self.allow_image_generation = True
+        
+        # Setup logging if enabled
+        if self.enable_logging:
+            self._setup_logging()
+
+    def _setup_logging(self) -> None:
+        """Setup file logging for this agent."""
+        # Get working directory
+        log_file = os.path.join(os.getcwd(), "agent_logging.log")
+        
+        # Get root logger for streamlit_langgraph package
+        logger = logging.getLogger("streamlit_langgraph")
+        
+        # Only setup if not already configured (avoid duplicate handlers)
+        if not any(isinstance(h, RotatingFileHandler) and h.baseFilename == os.path.abspath(log_file) 
+                   for h in logger.handlers):
+            # Create file handler with rotation (10MB max, 5 backups)
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10*1024*1024,  # 10MB
+                backupCount=5,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(logging.DEBUG)
+            
+            # Create formatter
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            file_handler.setFormatter(formatter)
+            
+            # Add handler to logger
+            logger.addHandler(file_handler)
+            logger.setLevel(logging.DEBUG)
+            
+            # Also ensure console handler exists for immediate feedback
+            if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+                console_handler = logging.StreamHandler()
+                console_handler.setLevel(logging.WARNING)  # Only show warnings and errors in console
+                console_handler.setFormatter(formatter)
+                logger.addHandler(console_handler)
 
     def to_dict(self) -> Dict:
         """Convert agent configuration to dictionary for serialization."""
@@ -72,6 +119,7 @@ class Agent:
             "human_in_loop": self.human_in_loop,
             "interrupt_on": self.interrupt_on,
             "hitl_description_prefix": self.hitl_description_prefix,
+            "enable_logging": self.enable_logging,
         }
     
     @classmethod
@@ -92,6 +140,10 @@ class AgentManager:
         self.agents[agent.name] = agent
         if self.active_agent is None:
             self.active_agent = agent.name
+        
+        # Setup logging if enabled for this agent
+        if agent.enable_logging:
+            agent._setup_logging()
     
     def remove_agent(self, name: str) -> None:
         """Remove an agent from the manager."""
@@ -140,51 +192,57 @@ class AgentManager:
         """
         Get the appropriate LLM client for an agent based on its configuration.
         
-        Uses ChatOpenAI with use_responses_api=True when native OpenAI tools are enabled
-        (code_interpreter, web_search, file_search, image_generation) to leverage
-        OpenAI's Responses API for agentic behavior.
+        When HITL is enabled, native tools are automatically disabled to ensure
+        CreateAgentExecutor is used (Response API does not support HITL).
+        
+        When native tools are enabled (and HITL is disabled), ResponseAPIExecutor will be used.
+        In this case, returns a minimal client object that only holds vector_store_ids,
+        since ResponseAPIExecutor uses its own OpenAI client and doesn't need a LangChain client.
+        
+        Otherwise, uses standard ChatCompletion API via init_chat_model for CreateAgentExecutor.
         """
-        has_native_tools = (
-            agent.allow_code_interpreter or
-            agent.allow_web_search or
-            agent.allow_file_search or
-            agent.allow_image_generation
-        )        
-        if agent.provider.lower() == "openai" and has_native_tools:
-            # Initialize ChatOpenAI with Responses API
-            chat_model = ChatOpenAI(
-                model=agent.model,
-                temperature=agent.temperature,
-                use_responses_api=True,
-            )
-            
-            tools_to_bind = []
-            if agent.allow_file_search and vector_store_ids:
-                file_search_tool = {
-                    "type": "file_search",
-                    "vector_store_ids": vector_store_ids
-                }
-                tools_to_bind.append(file_search_tool)
-            if agent.allow_code_interpreter:
-                code_interpreter_tool = {
-                    "type": "code_interpreter",
-                    "container": agent.container_id if agent.container_id else {"type": "auto"}
-                }
-                tools_to_bind.append(code_interpreter_tool)
-            if agent.allow_web_search:
-                web_search_tool = {"type": "web_search_preview"}
-                tools_to_bind.append(web_search_tool)
-            if agent.allow_image_generation:
-                image_generation_tool = {"type": "image_generation"}
-                tools_to_bind.append(image_generation_tool)
-            if tools_to_bind:
-                chat_model = chat_model.bind_tools(tools_to_bind)
+        # If HITL is enabled, disable native tools
+        if agent.human_in_loop:
+            has_native_tools = False
         else:
-            # Use standard init_chat_model for other cases
+            # Import locally to avoid circular import
+            from .core.executor.registry import ExecutorRegistry
+            has_native_tools = ExecutorRegistry.has_native_tools(agent)
+        
+        if agent.provider.lower() == "openai":
+            if has_native_tools:
+                # When native tools are enabled, ResponseAPIExecutor will be used
+                # ResponseAPIExecutor uses its own OpenAI client, so we only need to pass vector_store_ids
+                # Create a minimal object to hold vector_store_ids for ResponseAPIExecutor
+                class MinimalClient:
+                    """Minimal client object for ResponseAPIExecutor to read vector_store_ids."""
+                    def __init__(self, vector_store_ids: Optional[List[str]] = None):
+                        if vector_store_ids:
+                            self._vector_store_ids = vector_store_ids
+                        self._provider = agent.provider.lower()
+                
+                return MinimalClient(vector_store_ids)
+            else:
+                # OpenAI without native tools: use ChatOpenAI for CreateAgentExecutor
+                chat_model = ChatOpenAI(
+                    model=agent.model,
+                    temperature=agent.temperature,
+                )
+                # Store vector_store_ids on the client if available
+                if vector_store_ids:
+                    setattr(chat_model, "_vector_store_ids", vector_store_ids)
+                
+                setattr(chat_model, "_provider", agent.provider.lower())
+                return chat_model
+        else:
+            # Other providers: use init_chat_model for CreateAgentExecutor
             chat_model = init_chat_model(
                 model=agent.model,
                 temperature=agent.temperature
             )
-        
-        setattr(chat_model, "_provider", agent.provider.lower())
-        return chat_model
+            # Store vector_store_ids on the client if available
+            if vector_store_ids:
+                setattr(chat_model, "_vector_store_ids", vector_store_ids)
+            
+            setattr(chat_model, "_provider", agent.provider.lower())
+            return chat_model

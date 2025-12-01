@@ -14,15 +14,17 @@ def main():
         model="gpt-4.1",
         temperature=0.7,
         # Native OpenAI tools are automatically handled via Responses API when enabled
-        allow_file_search=True,
-        allow_code_interpreter=True,
-        allow_web_search=True,
+        # allow_file_search=True,
+        # allow_code_interpreter=True,
+        # allow_web_search=True,
+        # allow_image_generation=True,
+        enable_logging=True,
     )
     # Create UI configuration
     config = slg.UIConfig(
         title="Simple Chat Assistant",
         page_icon="💬",
-        stream=True,
+        # stream=True,
         welcome_message="""Welcome to the **Simple Chat Assistant**!
 
 💬 **Single Agent Mode**: This example demonstrates direct single-agent interaction without workflow complexity.

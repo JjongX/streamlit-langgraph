@@ -123,7 +123,8 @@ class WorkflowExecutor:
         conversation_messages = st.session_state.workflow_state.get("messages", [])
         executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
         
-        # All executors now use CreateAgentExecutor which supports file_messages and stream
+        # Executor can be either CreateAgentExecutor or ResponseAPIExecutor
+        # Both support file_messages and stream
         response = executor.execute_agent(
             llm_client, prompt,
             stream=config.stream if config else True,

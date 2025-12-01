@@ -1,12 +1,15 @@
 # Display management for Streamlit UI components.
 
 import base64
+import logging
 import os
 from typing import Any, Dict, List, Optional, Union
 
 import streamlit as st
 
 from ..utils import MIME_TYPES
+
+logger = logging.getLogger(__name__)
 
 
 class Block:
@@ -26,15 +29,11 @@ class Block:
     ) -> None:
         self.display_manager = display_manager
         self.category = category
-        # Preserve bytes content for image/download blocks
-        if content is None:
-            self.content = "" if category not in ["image", "download"] else b""
-        else:
-            self.content = content
+        self.content = content if content is not None else ("" if category not in ["image", "generated_image", "download"] else b"")
         self.filename = filename
         self.file_id = file_id
-        if category in ["image", "download"]:
-            print(f"[DEBUG] Block created - category: {category}, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {filename}")
+        if category in ["image", "generated_image", "download"]:
+            logger.debug(f"Block created - category: {category}, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {filename}")
 
     def write(self) -> None:
         """Render this block's content to the Streamlit interface."""
@@ -46,18 +45,16 @@ class Block:
         elif self.category == "reasoning":
             with st.expander("", expanded=False, icon=":material/lightbulb:"):
                 st.markdown(self.content)
-        elif self.category == "image":
-            print(f"[DEBUG] Block.write - image block, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {self.filename}")
+        elif self.category in ["image", "generated_image"]:
+            logger.debug(f"Block.write - {self.category} block, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {self.filename}")
             if self.content:
                 try:
                     st.image(self.content, caption=self.filename)
-                    print(f"[DEBUG] Block.write - image rendered successfully")
+                    logger.debug(f"Block.write - {self.category} rendered successfully")
                 except Exception as e:
-                    print(f"[DEBUG] Block.write - Error rendering image: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Block.write - Error rendering {self.category}: {e}", exc_info=True)
             else:
-                print(f"[DEBUG] Block.write - image block has no content!")
+                logger.debug(f"Block.write - {self.category} block has no content!")
         elif self.category == "download":
             self._render_download()
     
@@ -107,23 +104,31 @@ class Section:
         Add or append content to this section.
         
         If the last block has the same category and is streamable, content is appended.
+        For generated_image, if the last block is also generated_image with the same file_id,
+        the content is replaced (for partial image updates).
         Otherwise, a new block is created.
         """
-        print(f"[DEBUG] Section.update called - category: {category}, content type: {type(content)}, content length: {len(content) if content else 0}, filename: {filename}")
+        logger.debug(f"Section.update called - category: {category}, content type: {type(content)}, content length: {len(content) if content else 0}, filename: {filename}, file_id: {file_id}")
         if self.empty:
              # Create first block
-            print(f"[DEBUG] Creating first block")
+            logger.debug("Creating first block")
             self.blocks = [self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             )]
         elif (category in ["text", "code", "reasoning"] and 
               self.last_block.category == category):
             # Append to existing block for same category
-            print(f"[DEBUG] Appending to existing {category} block")
+            logger.debug(f"Appending to existing {category} block")
             self.last_block.content += content
+        elif (category == "generated_image" and 
+              self.last_block.category == "generated_image" and
+              self.last_block.file_id == file_id and file_id is not None):
+            # Replace content for partial image updates (same file_id)
+            logger.debug(f"Replacing content in existing generated_image block (file_id: {file_id})")
+            self.last_block.content = content
         else:
             # Create new block for different category
-            print(f"[DEBUG] Creating new {category} block (previous was {self.last_block.category})")
+            logger.debug(f"Creating new {category} block (previous was {self.last_block.category})")
             self.blocks.append(self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             ))
@@ -158,7 +163,7 @@ class Section:
                 "filename": block.filename,
                 "file_id": block.file_id
             }
-            if block.category in ["image", "download"] and block.content:
+            if block.category in ["image", "generated_image", "download"] and block.content:
                 import base64
                 if isinstance(block.content, bytes):
                     block_data["content_b64"] = base64.b64encode(block.content).decode('utf-8')
@@ -226,7 +231,7 @@ class DisplayManager:
                     category = block_data.get("category")
                     if category == "text":
                         st.markdown(block_data.get("content", ""))
-                    elif category == "image":
+                    elif category in ["image", "generated_image"]:
                         if "content_b64" in block_data:
                             content = base64.b64decode(block_data["content_b64"])
                             st.image(content, caption=block_data.get("filename"))
