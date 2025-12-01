@@ -68,7 +68,7 @@ With that in mind, this package is designed so users can focus on defining agent
 
 3. **Ready-to-Use Multi-Agent Architectures:** Include standard patterns (supervisor, hierarchical, networked) out of the box.
 
-4. **Automatic OpenAI Responses API Configuration:** Automatically configures OpenAI's Responses API when native tools are enabled, leveraging LangChain's built-in support for advanced capabilities like file search and code execution.
+4. **Dual Executor Architecture:** Automatically selects between ResponseAPIExecutor (for native OpenAI tools) and CreateAgentExecutor (for HITL and multi-provider support), ensuring optimal performance for each use case.
 
 5. **Extensibility to Other LLMs:** Design for easy integration with Gemini, Claude, and local models.
 
@@ -82,7 +82,7 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 
 | Provider | Support | Notes |
 |----------|---------|-------|
-| **OpenAI** | ✅ | Uses **Responses API** when native tools enabled (code_interpreter, web_search, file_search, image_generation). Uses **ChatCompletion API** otherwise. |
+| **OpenAI** | ✅ | Uses **ResponseAPIExecutor** (Responses API) when native tools enabled and HITL disabled. Uses **CreateAgentExecutor** (ChatCompletion API) for HITL or when native tools disabled. |
 | **Anthropic (Claude)** | ❓ | May work but not explicitly tested. |
 | **Google (Gemini)** | ✅ | Full support via LangChain's `init_chat_model` |
 | **Other LangChain Providers** | ❓ | May work but not explicitly tested.|
@@ -93,7 +93,9 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 - ❓ **?** = May work but not explicitly tested
 
 **Notes:**
-- **OpenAI**: Automatically selects Responses API or ChatCompletion API based on native tool configuration
+- **OpenAI**: Automatically selects ResponseAPIExecutor (Responses API) or CreateAgentExecutor (ChatCompletion API) based on native tool configuration and HITL settings
+  - ResponseAPIExecutor: Used when native tools enabled and HITL disabled
+  - CreateAgentExecutor: Used for HITL scenarios or when native tools are disabled
 - Support depends on LangChain's provider compatibility
 
 ## Installation
@@ -258,7 +260,7 @@ pip install fastmcp langchain-mcp-adapters
 **Features**:
 - Connect to MCP servers via stdio or HTTP transport
 - Access tools from external MCP servers
-- All agents use CreateAgentExecutor
+- Works with both ResponseAPIExecutor and CreateAgentExecutor
 - Example MCP servers included (math, weather)
 
 **MCP Server Examples**:
@@ -313,6 +315,7 @@ workflow_state = {
 - **State persistence**: Workflow state persists across Streamlit reruns
 - **Workflow execution**: LangGraph workflows read from and write to `workflow_state`
 - **State synchronization**: `StateSynchronizer` manages updates to `workflow_state`
+- **No fallbacks**: All state operations require `state_manager` - no direct `session_state` access for display sections
 
 ### Streamlit Session State Usage
 
@@ -383,7 +386,7 @@ agent = slg.Agent(
 A supervisor agent coordinates worker agents:
 - **Sequential**: Workers execute one at a time
 - **Parallel**: Workers can execute simultaneously
-- **Handoff**: Full context transfer between agents
+- **Handoff**: Full context transfer between agents (works with both ResponseAPIExecutor and CreateAgentExecutor)
 - **Tool Calling**: Workers called as tools
 
 #### **Hierarchical Pattern**
@@ -402,28 +405,63 @@ Multiple supervisor teams coordinated by a top supervisor:
 
 ### Executor Architecture
 
-All agents use a **CreateAgentExecutor** that automatically selects the appropriate API based on the provider and model configuration. For OpenAI, it utilizes both ChatCompletion API and Responses API based on agent configuration:
+The system uses two executors that are automatically selected based on agent configuration:
 
-- **Automatic API Selection**: 
-  - **Responses API**: Automatically enabled when native OpenAI tools are used (`allow_code_interpreter`, `allow_web_search`, `allow_file_search`, `allow_image_generation`)
-    - Uses LangChain's `ChatOpenAI` with `use_responses_api=True` (LangChain provides the Responses API support)
-  - **ChatCompletion API**: Used when native OpenAI tools are not enabled
-- **LangChain Integration**: Uses LangChain's `create_agent` which handles API routing automatically
-- **Multi-Provider Support**: Works with OpenAI, Anthropic, Google, and other LangChain-supported providers
-- **HITL Support**: Full human-in-the-loop approval workflow support
-- **Streaming**: Supports both standard LangChain streaming and Responses API streaming
-- **Tool Integration**: Supports custom tools, MCP tools, and native OpenAI tools seamlessly
+#### **ResponseAPIExecutor**
+- **When Used**: Native OpenAI tools enabled (`allow_code_interpreter`, `allow_web_search`, `allow_file_search`, `allow_image_generation`) AND HITL disabled
+- **API**: Uses OpenAI's native Responses API directly
+- **Features**:
+  - Native tool support (code_interpreter, file_search, web_search, image_generation)
+  - Custom tools support (converts LangChain tools to OpenAI function format)
+  - MCP tools support (via OpenAI's MCP integration)
+  - Streaming support
+- **Limitations**: Does not support HITL (human-in-the-loop)
 
-**How It Works**:
+#### **CreateAgentExecutor**
+- **When Used**: HITL enabled OR native tools disabled
+- **API**: Uses ChatCompletion API via LangChain's `create_agent`
+- **Features**:
+  - Full HITL support with approval workflows
+  - Multi-provider support (OpenAI, Anthropic, Google, etc.)
+  - Custom tools support (LangChain StructuredTool)
+  - MCP tools support (via LangChain MCP adapters)
+  - Streaming support
+- **Note**: When HITL is enabled, native OpenAI tools are automatically disabled (HITL requires CreateAgentExecutor)
+
+#### **Automatic Selection**
+
+The `ExecutorRegistry` automatically selects the appropriate executor:
+
 ```python
-# When native tools are enabled, Responses API is used automatically
+# Selection logic:
+# - If HITL enabled → CreateAgentExecutor (native tools disabled)
+# - If native tools enabled AND HITL disabled → ResponseAPIExecutor
+# - Otherwise → CreateAgentExecutor
+```
+
+**Example**:
+```python
+# Uses ResponseAPIExecutor (native tools, no HITL)
 agent = slg.Agent(
     name="assistant",
-    allow_code_interpreter=True,  # Enables Responses API
-    allow_web_search=True          # Also uses Responses API
+    allow_code_interpreter=True,
+    allow_web_search=True
 )
 
+# Uses CreateAgentExecutor (HITL enabled)
+agent = slg.Agent(
+    name="assistant",
+    human_in_loop=True,
+    interrupt_on={"tool_name": {"allowed_decisions": ["approve", "reject"]}}
+)
 ```
+
+#### **Handoff Delegation Support**
+
+Both executors work seamlessly with handoff delegation patterns:
+- **ResponseAPIExecutor**: Uses OpenAI ChatCompletion API with function calling for delegation
+- **CreateAgentExecutor**: Uses LangChain tool calling for delegation
+- The delegation system automatically routes to the appropriate execution method based on executor type
 
 ### Context Modes
 
@@ -708,12 +746,13 @@ fastmcp run math_server.py --transport http
 | **sse** | ✅ Supported | Legacy, use HTTP instead |
 
 **Important Notes**:
-- All agents use the unified CreateAgentExecutor
-- When using native OpenAI tools (code_interpreter, web_search, etc.), Responses API is automatically enabled
-- **For Responses API with MCP tools**: MCP servers must be **publicly accessible** (not localhost)
+- Executor selection is automatic based on agent configuration (ResponseAPIExecutor or CreateAgentExecutor)
+- When using native OpenAI tools (code_interpreter, web_search, etc.) without HITL, ResponseAPIExecutor is used
+- **For ResponseAPIExecutor with MCP tools**: MCP servers must be **publicly accessible** (not localhost)
 - OpenAI's servers connect to your MCP server when using Responses API, so `localhost` won't work
 - For local development with native tools, use stdio transport or deploy MCP servers publicly
 - For local development without native tools, stdio or localhost HTTP works fine
+- CreateAgentExecutor supports all MCP transport types (stdio, HTTP, localhost)
 
 #### **Example: Local Development**
 

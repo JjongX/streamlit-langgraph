@@ -8,18 +8,14 @@ def analyze_sentiment(text: str, context: str = None) -> str:
     """
     Analyze the sentiment of a given text. This operation processes text to determine emotional tone and requires approval.
     """
-    # Simulate sentiment analysis
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     analysis_id = f"SENT-{int(time.time())}"
-    
     # Simple keyword-based sentiment detection for testing
     text_lower = text.lower()
     positive_words = ['love', 'great', 'excellent', 'good', 'amazing', 'wonderful', 'perfect', 'happy', 'satisfied', 'fantastic']
     negative_words = ['hate', 'terrible', 'awful', 'bad', 'horrible', 'worst', 'disappointed', 'angry', 'frustrated', 'refund']
-    
     positive_count = sum(1 for word in positive_words if word in text_lower)
     negative_count = sum(1 for word in negative_words if word in text_lower)
-    
     # Calculate sentiment score (-1 to 1)
     if positive_count > negative_count:
         sentiment_label = "POSITIVE"
@@ -30,7 +26,6 @@ def analyze_sentiment(text: str, context: str = None) -> str:
     else:
         sentiment_label = "NEUTRAL"
         sentiment_score = 0.0
-    
     # Determine emotion intensity
     intensity = abs(sentiment_score)
     if intensity > 0.7:
@@ -57,12 +52,9 @@ def escalate_negative_sentiment(text: str, sentiment_score: float, source: str, 
     """
     Escalate cases with negative sentiment for review. This operation flags content for human intervention and requires approval.
     """    
-    # Validate urgency
     valid_urgency = ["low", "medium", "high", "critical"]
     if urgency.lower() not in valid_urgency:
         urgency = "medium"
-    
-    # Generate escalation ticket
     ticket_id = f"ESC-{uuid.uuid4().hex[:8].upper()}"
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     

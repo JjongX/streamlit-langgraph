@@ -32,8 +32,6 @@ class Block:
         self.content = content if content is not None else ("" if category not in ["image", "generated_image", "download"] else b"")
         self.filename = filename
         self.file_id = file_id
-        if category in ["image", "generated_image", "download"]:
-            logger.debug(f"Block created - category: {category}, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {filename}")
 
     def write(self) -> None:
         """Render this block's content to the Streamlit interface."""
@@ -46,15 +44,8 @@ class Block:
             with st.expander("", expanded=False, icon=":material/lightbulb:"):
                 st.markdown(self.content)
         elif self.category in ["image", "generated_image"]:
-            logger.debug(f"Block.write - {self.category} block, content type: {type(self.content)}, content length: {len(self.content) if self.content else 0}, filename: {self.filename}")
             if self.content:
-                try:
-                    st.image(self.content, caption=self.filename)
-                    logger.debug(f"Block.write - {self.category} rendered successfully")
-                except Exception as e:
-                    logger.error(f"Block.write - Error rendering {self.category}: {e}", exc_info=True)
-            else:
-                logger.debug(f"Block.write - {self.category} block has no content!")
+                st.image(self.content, caption=self.filename)
         elif self.category == "download":
             self._render_download()
     
@@ -174,19 +165,11 @@ class Section:
             
             section_data["blocks"].append(block_data)
         
-        if self.display_manager.state_manager:
-            self._section_index = self.display_manager.state_manager.update_display_section(
-                self._section_index, section_data
-            )
-        else:
-            # Fallback to session_state if state_manager not available
-            if "display_sections" not in st.session_state:
-                st.session_state.display_sections = []
-            if self._section_index is not None and self._section_index < len(st.session_state.display_sections):
-                st.session_state.display_sections[self._section_index] = section_data
-            else:
-                st.session_state.display_sections.append(section_data)
-                self._section_index = len(st.session_state.display_sections) - 1
+        if not self.display_manager.state_manager:
+            raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
+        self._section_index = self.display_manager.state_manager.update_display_section(
+            self._section_index, section_data
+        )
 
 
 class DisplayManager:
@@ -217,10 +200,9 @@ class DisplayManager:
     
     def render_message_history(self) -> None:
         """Render historical messages from workflow_state."""
-        if self.state_manager:
-            display_sections = self.state_manager.get_display_sections()
-        else:
-            display_sections = st.session_state.get("display_sections", [])
+        if not self.state_manager:
+            raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
+        display_sections = self.state_manager.get_display_sections()
         
         for section_data in display_sections:
             avatar = (self.config.user_avatar if section_data["role"] == "user" 
@@ -274,11 +256,9 @@ class DisplayManager:
         if not msg_id:
             return False
         
-        if self.state_manager:
-            displayed_ids = self.state_manager.get_displayed_message_ids()
-        else:
-            display_sections = st.session_state.get("display_sections", [])
-            displayed_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
+        if not self.state_manager:
+            raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
+        displayed_ids = self.state_manager.get_displayed_message_ids()
         
         if msg_id in displayed_ids:
             return False
