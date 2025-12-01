@@ -262,9 +262,6 @@ class StreamProcessor:
         """
         Process a single streaming event from OpenAI Responses API.
 
-        This method handles the Responses API stream events directly.
-        It is not currently used in the package, but is maintained for future use.
-
         Args:
             event: Responses API stream event object
             section: Display section to update
@@ -283,7 +280,6 @@ class StreamProcessor:
             image_bytes = base64.b64decode(event.partial_image_b64)
             item_id = getattr(event, 'item_id', None)
             filename = f"{item_id}.{getattr(event, 'output_format', 'png')}" if item_id else "image.png"
-            # Use "generated_image" category so partial images update the same block
             section.update("generated_image", image_bytes, filename=filename, file_id=item_id)
             section.stream()
         elif event.type == "response.output_text.annotation.added":
@@ -327,7 +323,6 @@ class StreamProcessor:
         full_response = ""
         
         if stream_type == 'langchain_messages' and isinstance(last_event, tuple):
-            # Extract from last token in messages mode
             token, metadata = last_event
             if isinstance(token, AIMessage):
                 if hasattr(token, 'content_blocks') and token.content_blocks:

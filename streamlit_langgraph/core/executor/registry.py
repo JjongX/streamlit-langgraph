@@ -8,24 +8,7 @@ from ...agent import Agent
 
 
 class ExecutorRegistry:
-    
-    @staticmethod
-    def has_native_tools(agent: Agent) -> bool:
-        """
-        Check if agent has native OpenAI tools enabled.
-        
-        Args:
-            agent: Agent configuration
-            
-        Returns:
-            True if any native tool is enabled
-        """
-        return (
-            agent.allow_file_search or
-            agent.allow_code_interpreter or
-            agent.allow_web_search or
-            agent.allow_image_generation
-        )
+    """Registry for managing executor instances."""
     
     def get_or_create(
         self, agent: Agent, executor_type: str = "workflow",
@@ -53,15 +36,10 @@ class ExecutorRegistry:
 
         executor_key = "single_agent_executor" if executor_type == "single_agent" else f"workflow_executor_{agent.name}"
         
-        has_native = self.has_native_tools(agent)
+        has_native = ExecutorRegistry.has_native_tools(agent)
         has_hitl = agent.human_in_loop
-        
-        # If HITL is enabled, use CreateAgentExecutor (native tools will be disabled automatically)
-        # If native tools enabled and HITL disabled, use ResponseAPIExecutor
-        # Otherwise, use CreateAgentExecutor
         use_response_api = has_native and not has_hitl
         
-        # Get existing executor or create new one
         if executor_key not in st.session_state.agent_executors:
             if use_response_api:
                 executor = ResponseAPIExecutor(agent, tools=tools)
@@ -71,7 +49,6 @@ class ExecutorRegistry:
         else:
             executor = st.session_state.agent_executors[executor_key]
             
-            # Update tools for CreateAgentExecutor if needed
             if isinstance(executor, CreateAgentExecutor) and hasattr(executor, 'tools'):
                 custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
                 mcp_tools = []
@@ -102,3 +79,21 @@ class ExecutorRegistry:
         
         st.session_state.agent_executors[executor_key] = executor
         return executor
+    
+    @staticmethod
+    def has_native_tools(agent: Agent) -> bool:
+        """
+        Check if agent has native OpenAI tools enabled.
+        
+        Args:
+            agent: Agent configuration
+            
+        Returns:
+            True if any native tool is enabled
+        """
+        return (
+            agent.allow_file_search or
+            agent.allow_code_interpreter or
+            agent.allow_web_search or
+            agent.allow_image_generation
+        )

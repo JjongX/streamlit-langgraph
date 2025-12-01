@@ -12,6 +12,7 @@ from ..prompts import ToolCallingPromptBuilder
 
 
 class ToolCallingDelegation:
+    """Tool calling delegation pattern for supervisor-worker workflows."""
 
     @staticmethod
     def execute_agent_with_tools(agent: Agent, state: WorkflowState, 
@@ -25,8 +26,6 @@ class ToolCallingDelegation:
             )
 
         client = AgentManager.get_llm_client(agent)
-        
-        # Use system message for agent context, clean user message for task
         messages = []
         if agent.system_message:
             messages.append({"role": "system", "content": agent.system_message})
@@ -59,21 +58,6 @@ class ToolCallingDelegation:
         return message.content or "Maximum iterations reached"
     
     @staticmethod
-    def _execute_tool_call(tool_call, tool_agents_map: Dict[str, Agent], state: WorkflowState) -> str:
-        """Execute a tool call by invoking the corresponding agent."""
-        tool_name = tool_call.function.name
-        args = json.loads(tool_call.function.arguments)
-        tool_agent = tool_agents_map.get(tool_name)
-        if not tool_agent:
-            return f"Error: Agent {tool_name} not found"
-        tool_instructions = ToolCallingPromptBuilder.get_worker_tool_instructions(
-            role=tool_agent.role,
-            instructions=tool_agent.instructions,
-            task=args.get("task", "")
-        )
-        return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)
-
-    @staticmethod
     def create_agent_tools(tool_agents: List[Agent]) -> List[Dict[str, Any]]:
         """Create OpenAI function tool definitions for each agent."""
         return [{
@@ -91,3 +75,17 @@ class ToolCallingDelegation:
             }
         } for agent in tool_agents]
     
+    @staticmethod
+    def _execute_tool_call(tool_call, tool_agents_map: Dict[str, Agent], state: WorkflowState) -> str:
+        """Execute a tool call by invoking the corresponding agent."""
+        tool_name = tool_call.function.name
+        args = json.loads(tool_call.function.arguments)
+        tool_agent = tool_agents_map.get(tool_name)
+        if not tool_agent:
+            return f"Error: Agent {tool_name} not found"
+        tool_instructions = ToolCallingPromptBuilder.get_worker_tool_instructions(
+            role=tool_agent.role,
+            instructions=tool_agent.instructions,
+            task=args.get("task", "")
+        )
+        return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)

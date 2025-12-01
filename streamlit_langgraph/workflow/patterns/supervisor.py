@@ -57,10 +57,7 @@ class SupervisorPattern:
             graph.add_edge(supervisor_agent.name, END)
             return graph.compile(checkpointer=workflow_checkpointer)
         
-        # Handoff mode - multiple nodes, structural handoff
         graph = StateGraph(WorkflowState)
-        
-        # Create supervisor node
         allow_parallel = (execution_mode == "parallel")
         supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
             supervisor_agent, worker_agents, allow_parallel=allow_parallel, delegation_mode="handoff"
@@ -96,7 +93,6 @@ class SupervisorPattern:
             
             IMPORTANT: If there's a pending interrupt, route to END to pause workflow.
             """
-            # Check for pending interrupts first - if any exist, route to END to pause
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
             if pending_interrupts:
                 return "__end__"

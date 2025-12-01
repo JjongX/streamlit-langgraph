@@ -55,24 +55,8 @@ class CreateAgentExecutor:
                 mcp_tools = mcp_manager.get_tools()
             self.tools = custom_tools + mcp_tools
     
-    def _check_and_update_vector_store_ids(self, llm_client: Any) -> None:
-        """
-        Check if vector_store_ids have changed and invalidate agent if needed.
-        
-        Args:
-            llm_client: LLM client instance to check for vector_store_ids
-        """
-        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-        if not hasattr(self, '_last_vector_store_ids'):
-            self._last_vector_store_ids = None
-        
-        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-            self.agent_obj = None
-        
-        self._last_vector_store_ids = current_vector_ids
-    
     def execute_agent(
-        self,  llm_client: Any, prompt: str, stream: bool = False,
+        self, llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
     ) -> Dict[str, Any]:
@@ -108,7 +92,6 @@ class CreateAgentExecutor:
         file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None, 
     ) -> Dict[str, Any]:
-        
         """
         Execute prompt for workflow mode (requires config with thread_id).
 
@@ -130,7 +113,6 @@ class CreateAgentExecutor:
                 return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
             else:
                 out = self._invoke_agent(llm_client, prompt, messages, file_messages, config=config)
-                # Check for interrupts in output (HITL)
                 if isinstance(out, dict) and "__interrupt__" in out:
                     return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 result_text = self._extract_response_text(out)
@@ -160,12 +142,9 @@ class CreateAgentExecutor:
             raise ValueError("Cannot resume: human-in-the-loop not enabled or agent not initialized")
         
         config, workflow_thread_id = self._prepare_workflow_config(config)
-        
-        # The checkpointer should have the history, but we ensure consistency
         resume_command = Command(resume={"decisions": decisions})
         out = self.agent_obj.invoke(resume_command, config=config)
         
-        # Check for additional interrupts
         if isinstance(out, dict) and "__interrupt__" in out:
             return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
         
@@ -182,11 +161,9 @@ class CreateAgentExecutor:
             {"messages": messages},
             config=execution_config
         ):
-            # Check for direct interrupt key
             if "__interrupt__" in event:
                 interrupt_data = event["__interrupt__"]
                 return list(interrupt_data) if isinstance(interrupt_data, (tuple, list)) else interrupt_data
-            # Check each node in the event
             for node_state in event.values():
                 if isinstance(node_state, dict) and "__interrupt__" in node_state:
                     return node_state["__interrupt__"]
@@ -285,8 +262,6 @@ class CreateAgentExecutor:
         if middleware:
             agent_kwargs["middleware"] = middleware
         
-        # This is separate from the workflow checkpointer (different InMemorySaver instance)
-        # Using the same thread_id is safe because each checkpointer maintains its own namespace
         if self.agent.human_in_loop and self.agent.interrupt_on:
             agent_checkpointer = InMemorySaver()
             agent_kwargs["checkpointer"] = agent_checkpointer
@@ -310,7 +285,6 @@ class CreateAgentExecutor:
         Returns:
             List of LangChain BaseMessage objects
         """
-        
         langchain_messages: List[BaseMessage] = []
         
         if messages:
@@ -319,7 +293,7 @@ class CreateAgentExecutor:
                 content = msg.get("content", "")
                 
                 if not content:
-                    continue  # Skip empty messages
+                    continue
                 
                 if role == "user":
                     langchain_messages.append(HumanMessage(content=content))
@@ -352,18 +326,14 @@ class CreateAgentExecutor:
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
-        
         if isinstance(out, dict):
-            # Check for 'output' key first (some agent formats)
             if 'output' in out:
                 output = out['output']
                 if output:
                     return str(output)
             
-            # Check for 'messages' key (standard LangChain agent output)
             if 'messages' in out and out['messages']:
                 messages = out['messages']
-                # Find the last AIMessage with content
                 for msg in reversed(messages):
                     if isinstance(msg, AIMessage):
                         if hasattr(msg, 'content') and msg.content:
@@ -400,7 +370,6 @@ class CreateAgentExecutor:
                 return ''.join(str(c) for c in content if c)
             return str(content) if content else ""
         
-        # Fallback: convert to string
         result = str(out) if out else ""
         return result
     
@@ -451,4 +420,19 @@ class CreateAgentExecutor:
             "thread_id": thread_id,
             "config": config
         }
-
+    
+    def _check_and_update_vector_store_ids(self, llm_client: Any) -> None:
+        """
+        Check if vector_store_ids have changed and invalidate agent if needed.
+        
+        Args:
+            llm_client: LLM client instance to check for vector_store_ids
+        """
+        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+        if not hasattr(self, '_last_vector_store_ids'):
+            self._last_vector_store_ids = None
+        
+        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
+            self.agent_obj = None
+        
+        self._last_vector_store_ids = current_vector_ids

@@ -25,79 +25,13 @@ class ResponseAPIExecutor:
         
         Args:
             agent: Agent configuration
-            tools: Optional list of tools (not used for Response API, but kept for interface compatibility)
+            tools: Optional list of tools (stored for interface compatibility, though Response API uses native tools)
         """
         self.agent = agent
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self._vector_store_ids = None
         self._tools_config = None
-    
-    def _build_tools_config(self, vector_store_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Build tools configuration for OpenAI Response API."""
-        tools = []
-        
-        # Use provided vector_store_ids or stored ones
-        vs_ids = vector_store_ids or self._vector_store_ids
-        
-        if self.agent.allow_file_search and vs_ids:
-            tools.append({
-                "type": "file_search",
-                "vector_store_ids": vs_ids if isinstance(vs_ids, list) else [vs_ids]
-            })
-        
-        if self.agent.allow_code_interpreter:
-            tools.append({
-                "type": "code_interpreter",
-                "container": self.agent.container_id if self.agent.container_id else {"type": "auto"}
-            })
-        
-        if self.agent.allow_web_search:
-            tools.append({"type": "web_search_preview"})
-        
-        if self.agent.allow_image_generation:
-            tools.append({"type": "image_generation", "partial_images": 3})
-        
-        # Add MCP tools if configured
-        if self.agent.mcp_servers:
-            from ...utils import MCPToolManager
-            mcp_manager = MCPToolManager()
-            mcp_manager.add_servers(self.agent.mcp_servers)
-            mcp_tools = mcp_manager.get_openai_tools()
-            tools.extend(mcp_tools)
-        
-        return tools
-    
-    def _update_vector_store_ids(self, llm_client: Any) -> None:
-        """Update vector_store_ids from llm_client and invalidate tools config if changed."""
-        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-        if current_vector_ids != self._vector_store_ids:
-            self._vector_store_ids = current_vector_ids
-            self._tools_config = None  # Invalidate cached tools config
-    
-    def _execute(
-        self, llm_client: Any, prompt: str, stream: bool = False,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        file_messages: Optional[List] = None,
-    ) -> Dict[str, Any]:
-        """
-        Common execution logic for both agent and workflow modes.
-        
-        Args:
-            llm_client: Used to get vector_store_ids (kept for interface compatibility)
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
-        """
-        self._update_vector_store_ids(llm_client)
-        
-        if stream:
-            return self._stream_response_api(prompt, messages, file_messages)
-        else:
-            return self._invoke_response_api(prompt, messages, file_messages)
+        self.tools = tools if tools is not None else []
     
     def execute_agent(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -144,79 +78,30 @@ class ResponseAPIExecutor:
         """
         return self._execute(llm_client, prompt, stream, messages, file_messages)
     
-    def _prepare_request_params(self, prompt: str, messages: Optional[List[Dict[str, Any]]] = None,
-                                file_messages: Optional[List] = None, stream: bool = False) -> Dict[str, Any]:
-        """
-        Prepare request parameters for Responses API.
-        
-        Args:
-            prompt: User's question/prompt
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            stream: Whether to enable streaming
-            
-        Returns:
-            Request parameters dictionary
-        """
-        # Convert messages to input string for Responses API
-        input_text = self._convert_messages_to_input(messages, prompt, file_messages)
-        
-        # Get or build tools configuration
-        if self._tools_config is None:
-            self._tools_config = self._build_tools_config(self._vector_store_ids)
-        
-        # Prepare request parameters for Responses API
-        request_params = {
-            "model": self.agent.model,
-            "input": input_text,
-        }
-        
-        if stream:
-            request_params["stream"] = True
-        
-        # Add tools if configured
-        if self._tools_config:
-            request_params["tools"] = self._tools_config
-        
-        return request_params
-    
-    def _call_response_api(
-        self, prompt: str, stream: bool = False,
+    def _execute(
+        self, llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
-        file_messages: Optional[List] = None
+        file_messages: Optional[List] = None,
     ) -> Dict[str, Any]:
         """
-        Call the Response API (streaming or non-streaming).
+        Common execution logic for both agent and workflow modes.
         
         Args:
+            llm_client: Used to get vector_store_ids (kept for interface compatibility)
             prompt: User's question/prompt
             stream: Whether to stream the response
             messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
             
         Returns:
-            Dict with 'role', 'content', 'agent', and optionally 'stream' key
+            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
-        request_params = self._prepare_request_params(prompt, messages, file_messages, stream=stream)
-        
-        # Create response using Responses API
-        response = self.openai_client.responses.create(**request_params)
+        self._update_vector_store_ids(llm_client)
         
         if stream:
-            return {
-                "role": "assistant",
-                "content": "",
-                "agent": self.agent.name,
-                "stream": response
-            }
+            return self._stream_response_api(prompt, messages, file_messages)
         else:
-            # Extract content from response
-            content = self._extract_response_content(response)
-            return {
-                "role": "assistant",
-                "content": content,
-                "agent": self.agent.name
-            }
+            return self._invoke_response_api(prompt, messages, file_messages)
     
     def _invoke_response_api(
         self, prompt: str,
@@ -254,6 +139,151 @@ class ResponseAPIExecutor:
         """
         return self._call_response_api(prompt, stream=True, messages=messages, file_messages=file_messages)
     
+    def _call_response_api(
+        self, prompt: str, stream: bool = False,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        file_messages: Optional[List] = None
+    ) -> Dict[str, Any]:
+        """
+        Call the Response API (streaming or non-streaming).
+        
+        Args:
+            prompt: User's question/prompt
+            stream: Whether to stream the response
+            messages: Conversation history from workflow_state
+            file_messages: Optional file messages (OpenAI format)
+            
+        Returns:
+            Dict with 'role', 'content', 'agent', and optionally 'stream' key
+        """
+        request_params = self._prepare_request_params(prompt, messages, file_messages, stream=stream)
+        response = self.openai_client.responses.create(**request_params)
+        
+        if stream:
+            return {
+                "role": "assistant",
+                "content": "",
+                "agent": self.agent.name,
+                "stream": response
+            }
+        else:
+            content = self._extract_response_content(response)
+            return {
+                "role": "assistant",
+                "content": content,
+                "agent": self.agent.name
+            }
+    
+    def _build_tools_config(self, vector_store_ids: Optional[List[str]] = None, stream: bool = True) -> List[Dict[str, Any]]:
+        """Build tools configuration for OpenAI Response API."""
+        tools = []
+        vs_ids = vector_store_ids or self._vector_store_ids
+        
+        if self.agent.allow_file_search and vs_ids:
+            tools.append({
+                "type": "file_search",
+                "vector_store_ids": vs_ids if isinstance(vs_ids, list) else [vs_ids]
+            })
+        
+        if self.agent.allow_code_interpreter:
+            tools.append({
+                "type": "code_interpreter",
+                "container": self.agent.container_id if self.agent.container_id else {"type": "auto"}
+            })
+        
+        if self.agent.allow_web_search:
+            tools.append({"type": "web_search_preview"})
+        
+        if self.agent.allow_image_generation:
+            if stream:
+                tools.append({"type": "image_generation", "partial_images": 3})
+            else:
+                tools.append({"type": "image_generation"})
+        
+        if self.agent.mcp_servers:
+            from ...utils import MCPToolManager
+            mcp_manager = MCPToolManager()
+            mcp_manager.add_servers(self.agent.mcp_servers)
+            mcp_tools = mcp_manager.get_openai_tools()
+            tools.extend(mcp_tools)
+        
+        if self.tools:
+            for tool in self.tools:
+                openai_tool = self._convert_langchain_tool_to_openai(tool)
+                if openai_tool:
+                    tools.append(openai_tool)
+        
+        return tools
+    
+    def _convert_langchain_tool_to_openai(self, tool: Any) -> Dict[str, Any]:
+        """
+        Convert a LangChain StructuredTool to OpenAI function format.
+        
+        Args:
+            tool: LangChain StructuredTool instance
+            
+        Returns:
+            OpenAI function tool dictionary
+        """
+        from langchain_core.tools import StructuredTool
+        
+        if not isinstance(tool, StructuredTool):
+            if isinstance(tool, dict) and "type" in tool:
+                return tool
+            return None
+        
+        args_schema = tool.args_schema
+        properties = {}
+        required = []
+        
+        if args_schema:
+            schema_dict = args_schema.schema() if hasattr(args_schema, 'schema') else {}
+            properties = schema_dict.get("properties", {})
+            required = schema_dict.get("required", [])
+        
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required
+                }
+            }
+        }
+    
+    def _prepare_request_params(self, prompt: str, messages: Optional[List[Dict[str, Any]]] = None,
+                                file_messages: Optional[List] = None, stream: bool = False) -> Dict[str, Any]:
+        """
+        Prepare request parameters for Responses API.
+        
+        Args:
+            prompt: User's question/prompt
+            messages: Conversation history from workflow_state
+            file_messages: Optional file messages (OpenAI format)
+            stream: Whether to enable streaming
+            
+        Returns:
+            Request parameters dictionary
+        """
+        input_text = self._convert_messages_to_input(messages, prompt, file_messages)
+        self._tools_config = self._build_tools_config(self._vector_store_ids, stream=stream)
+        
+        request_params = {
+            "model": self.agent.model,
+            "input": input_text,
+        }
+        
+        if stream:
+            request_params["stream"] = True
+        
+        if self._tools_config:
+            request_params["tools"] = self._tools_config
+        
+        return request_params
+    
     def _convert_messages_to_input(
         self,
         messages: Optional[List[Dict[str, Any]]],
@@ -275,24 +305,21 @@ class ResponseAPIExecutor:
         """
         input_parts = []
         
-        # Add system message if available
         if self.agent.system_message:
             input_parts.append(self.agent.system_message)
         
-        # Convert conversation history
         if messages:
             for msg in messages:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 
                 if not content:
-                    continue  # Skip empty messages
+                    continue
                 
                 if role == "user":
                     if isinstance(content, str):
                         input_parts.append(f"User: {content}")
                     elif isinstance(content, list):
-                        # Extract text from content blocks
                         text_parts = []
                         for block in content:
                             if isinstance(block, dict):
@@ -317,7 +344,6 @@ class ResponseAPIExecutor:
                     else:
                         input_parts.append(f"Assistant: {str(content)}")
         
-        # Add file messages if provided
         if file_messages:
             for file_msg in file_messages:
                 if isinstance(file_msg, dict):
@@ -334,10 +360,7 @@ class ResponseAPIExecutor:
                         if file_refs:
                             input_parts.append(f"User: {' '.join(file_refs)}")
         
-        # Add current prompt
         input_parts.append(f"User: {current_prompt}")
-        
-        # Combine all parts with newlines
         return "\n\n".join(input_parts)
     
     def _extract_response_content(self, response: Any) -> str:
@@ -353,30 +376,22 @@ class ResponseAPIExecutor:
         if not response:
             return ""
         
-        # Response API returns response with items
         text_parts = []
         
-        # Try to get items from response
         if hasattr(response, 'items') and response.items:
             for item in response.items:
-                if hasattr(item, 'type'):
-                    if item.type == 'output_text':
-                        if hasattr(item, 'text'):
-                            text_parts.append(item.text)
-                        elif hasattr(item, 'content'):
-                            text_parts.append(str(item.content))
-                    elif item.type == 'tool_call':
-                        # Tool calls are handled by the API
-                        pass
+                if hasattr(item, 'type') and item.type == 'output_text':
+                    if hasattr(item, 'text'):
+                        text_parts.append(item.text)
+                    elif hasattr(item, 'content'):
+                        text_parts.append(str(item.content))
         
-        # Try alternative structure (response.output_text or similar)
         if hasattr(response, 'output_text'):
             if isinstance(response.output_text, str):
                 text_parts.append(response.output_text)
             elif hasattr(response.output_text, 'text'):
                 text_parts.append(response.output_text.text)
         
-        # Fallback: try to get text from response directly
         if not text_parts:
             if hasattr(response, 'text'):
                 text_parts.append(response.text)
@@ -385,4 +400,10 @@ class ResponseAPIExecutor:
         
         result = ''.join(text_parts) if text_parts else str(response) if response else ""
         return result
-
+    
+    def _update_vector_store_ids(self, llm_client: Any) -> None:
+        """Update vector_store_ids from llm_client and invalidate tools config if changed."""
+        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+        if current_vector_ids != self._vector_store_ids:
+            self._vector_store_ids = current_vector_ids
+            self._tools_config = None

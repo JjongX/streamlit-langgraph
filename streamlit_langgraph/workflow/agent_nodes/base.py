@@ -53,7 +53,6 @@ class AgentNodeBase:
         if "executors" not in state["metadata"]:
             state["metadata"]["executors"] = {}
         
-        # Use workflow's thread_id (set by WorkflowExecutor) - this matches the checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
         if not workflow_thread_id:
             workflow_thread_id = str(uuid.uuid4())
@@ -62,15 +61,16 @@ class AgentNodeBase:
         executor_key = f"workflow_executor_{executor.agent.name}"
         state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
         
-        # Build execution config with workflow's thread_id (matches checkpointer)
         config = {"configurable": {"thread_id": workflow_thread_id}}
         
         llm_client = AgentManager.get_llm_client(agent)
         conversation_messages = state.get("messages", [])
+        stream = False 
         
         result = executor.execute_workflow(
             llm_client=llm_client,
             prompt=input_message,
+            stream=stream,
             config=config,
             messages=conversation_messages
         )
@@ -95,7 +95,7 @@ class AgentNodeBase:
                 executor_key=executor_key
             )
             state["metadata"].update(interrupt_update["metadata"])
-            return ""  # Empty response for interrupt
+            return ""
         
         return result.get("content", "")
 
