@@ -251,10 +251,6 @@ class FileHandler:
         
         return file_info
     
-    def save_uploaded_file(self, uploaded_file, file_id: Optional[str] = None) -> "FileHandler.FileInfo":
-        """Save an uploaded file and process it for OpenAI integration."""
-        return self.track(uploaded_file)
-    
     def get_openai_input_messages(self) -> List[Dict[str, Any]]:
         """Get OpenAI input messages for all tracked files."""
         messages = []

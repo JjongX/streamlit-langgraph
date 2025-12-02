@@ -26,7 +26,7 @@ class WorkflowExecutor:
         
         Args:
             workflow: Compiled LangGraph workflow
-            display_callback: Optional callback(msg, msg_id) for displaying messages
+            display_callback: Optional callback(msg) for displaying messages
             initial_state: Workflow state (user message should already be added)
             
         Returns:
@@ -87,7 +87,7 @@ class WorkflowExecutor:
                     continue
                 if msg_id and msg_id in displayed_message_ids:
                     continue
-                callback(msg, msg_id)
+                callback(msg)
                 if msg_id:
                     displayed_message_ids.add(msg_id)
         

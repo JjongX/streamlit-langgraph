@@ -221,16 +221,35 @@ class LangGraphChat:
                 response["agent"]
             )
     
+    def _update_file_messages_in_state(self):
+        """Update file messages and vector store IDs in workflow state metadata."""
+        file_messages = self.file_handler.get_openai_input_messages()
+        vector_store_ids = self.file_handler.get_vector_store_ids()
+        workflow_state = st.session_state.workflow_state
+        if "metadata" not in workflow_state:
+            workflow_state["metadata"] = {}
+        workflow_state["metadata"]["file_messages"] = file_messages
+        workflow_state["metadata"]["vector_store_ids"] = vector_store_ids
+    
+    def _get_file_messages_from_state(self):
+        """Get file messages and vector store IDs from workflow state."""
+        workflow_state = st.session_state.workflow_state
+        file_messages = workflow_state.get("metadata", {}).get("file_messages")
+        vector_store_ids = workflow_state.get("metadata", {}).get("vector_store_ids")
+        return file_messages, vector_store_ids
+
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
         for uploaded_file in files:
             if uploaded_file not in st.session_state.uploaded_files:
-                file_info = self.file_handler.save_uploaded_file(uploaded_file)
+                file_info = self.file_handler.track(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
                 self.state_manager.update_workflow_state({
                     "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
                 })
-    
+        
+        self._update_file_messages_in_state()
+
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
         """Generate response using the configured workflow or dynamically selected agents."""
         if self.workflow:
@@ -247,7 +266,9 @@ class LangGraphChat:
             workflow_state["metadata"] = {}
         workflow_state["metadata"]["stream"] = self.config.stream
         
-        def display_callback(msg, msg_id):
+        self._update_file_messages_in_state()
+        
+        def display_callback(msg):
             self.display_manager.render_workflow_message(msg)
         
         result_state = self.workflow_executor.execute_workflow(
@@ -280,8 +301,8 @@ class LangGraphChat:
         
         Note: HITL is not supported for single agents. Use workflows for HITL functionality.
         """
-        file_messages = self.file_handler.get_openai_input_messages()
-        vector_store_ids = self.file_handler.get_vector_store_ids()
+        self._update_file_messages_in_state()
+        file_messages, vector_store_ids = self._get_file_messages_from_state()
         
         if agent.allow_file_search and vector_store_ids:
             current_vector_ids = getattr(self.llm, '_vector_store_ids', None)

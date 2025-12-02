@@ -256,7 +256,7 @@ class HITLHandler:
             st.error("⚠️ Error: Could not extract action details from interrupt.")
             return False
         
-        executor = self.get_or_create_executor(executor_key, agent_name, workflow_state)
+        executor = self.get_or_create_executor(agent_name, workflow_state)
         if executor is None:
             return False
         
@@ -271,13 +271,12 @@ class HITLHandler:
                                         pending_action_index, decisions, workflow_state)
         return True
     
-    def get_or_create_executor(self, executor_key: str, agent_name: str, 
+    def get_or_create_executor(self, agent_name: str, 
                                workflow_state: Dict[str, Any]):
         """
         Get existing executor or create a new one.
         
         Args:
-            executor_key: Key identifying the executor
             agent_name: Name of the agent
             workflow_state: Current workflow state
             
