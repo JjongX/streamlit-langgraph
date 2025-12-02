@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
 from ...core.state import WorkflowState, WorkflowStateManager
-from .base import AgentNodeBase
+from .factory import AgentNodeBase
 
 
 class HandoffDelegation:

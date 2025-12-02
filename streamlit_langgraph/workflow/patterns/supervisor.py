@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
 from ..agent_nodes.factory import AgentNodeFactory
+from ..agent_nodes.routing import RoutingHelper
 from ...core.state import WorkflowState
 
 
@@ -84,32 +85,13 @@ class SupervisorPattern:
         for worker in worker_agents:
             graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
 
-        def supervisor_sequential_route(state: WorkflowState) -> str:
-            """
-            Route based on supervisor's structured routing decision.
-            
-            LangGraph conditional edge function that routes to worker nodes or END
-            based on routing_decision metadata set by supervisor node.
-            
-            IMPORTANT: If there's a pending interrupt, route to END to pause workflow.
-            """
-            pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
-            if pending_interrupts:
-                return "__end__"
-            
-            routing_decision = state["metadata"].get("routing_decision", {})
-            worker_names = [worker.name for worker in worker_agents]
-            action = routing_decision.get("action", "finish")
-            
-            if action == "delegate":
-                target_worker = routing_decision.get("target_worker", "")
-                return target_worker if target_worker in worker_names else "__end__"
-            return "__end__"
+        worker_names = [worker.name for worker in worker_agents]
+        supervisor_sequential_route = RoutingHelper.create_sequential_route(worker_names)
         
         supervisor_routes = {worker.name: worker.name for worker in worker_agents}
         supervisor_routes["__end__"] = END
-
         graph.add_conditional_edges(supervisor_agent.name, supervisor_sequential_route, supervisor_routes)
+        
         for worker in worker_agents:
             graph.add_edge(worker.name, supervisor_agent.name)
         
@@ -129,19 +111,7 @@ class SupervisorPattern:
         for worker in worker_agents:
             graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
         
-        def supervisor_parallel_route(state: WorkflowState) -> str:
-            """
-            Route from supervisor to parallel execution or end.
-            
-            Checks if supervisor delegated with "PARALLEL" target, routes to fan-out node.
-            """
-            routing_decision = state["metadata"].get("routing_decision", {})
-            action = routing_decision.get("action", "finish")
-            target_worker = routing_decision.get("target_worker", "")
-            
-            if action == "delegate" and target_worker == "PARALLEL":
-                return "parallel_fanout"
-            return "__end__"
+        supervisor_parallel_route = RoutingHelper.create_parallel_route()
         
         supervisor_routes = {"parallel_fanout": "parallel_fanout", "__end__": END}
         graph.add_conditional_edges(supervisor_agent.name, supervisor_parallel_route, supervisor_routes)

@@ -8,7 +8,6 @@ from logging.handlers import RotatingFileHandler
 
 import yaml
 from langchain.chat_models import init_chat_model
-from langchain_openai import ChatOpenAI
 
 
 @dataclass
@@ -185,11 +184,12 @@ class AgentManager:
         When HITL is enabled, native tools are automatically disabled to ensure
         CreateAgentExecutor is used (Response API does not support HITL).
         
-        When native tools are enabled (and HITL is disabled), ResponseAPIExecutor will be used.
-        In this case, returns a minimal client object that only holds vector_store_ids,
-        since ResponseAPIExecutor uses its own OpenAI client and doesn't need a LangChain client.
+        When native tools are enabled (and HITL is disabled) with OpenAI provider,
+        ResponseAPIExecutor will be used. In this case, returns a minimal client
+        object that only holds vector_store_ids, since ResponseAPIExecutor uses
+        its own OpenAI client and doesn't need a LangChain client.
         
-        Otherwise, uses standard ChatCompletion API via init_chat_model for CreateAgentExecutor.
+        Otherwise, returns a LangChain chat model via init_chat_model for CreateAgentExecutor.
         """
         if agent.human_in_loop:
             has_native_tools = False
@@ -197,23 +197,15 @@ class AgentManager:
             from .core.executor.registry import ExecutorRegistry
             has_native_tools = ExecutorRegistry.has_native_tools(agent)
         
-        if agent.provider.lower() == "openai":
-            if has_native_tools:
-                class MinimalClient:
-                    """Minimal client object for ResponseAPIExecutor to read vector_store_ids."""
-                    def __init__(self, vector_store_ids: Optional[List[str]] = None):
-                        if vector_store_ids:
-                            self._vector_store_ids = vector_store_ids
-                        self._provider = agent.provider.lower()
-                
-                return MinimalClient(vector_store_ids)
-            else:
-                chat_model = ChatOpenAI(
-                    model=agent.model,
-                    temperature=agent.temperature,
-                )
-                setattr(chat_model, "_provider", agent.provider.lower())
-                return chat_model
+        if agent.provider.lower() == "openai" and has_native_tools:
+            class MinimalClient:
+                """Minimal client object for ResponseAPIExecutor to read vector_store_ids."""
+                def __init__(self, vector_store_ids: Optional[List[str]] = None):
+                    if vector_store_ids:
+                        self._vector_store_ids = vector_store_ids
+                    self._provider = agent.provider.lower()
+            
+            return MinimalClient(vector_store_ids)
         else:
             chat_model = init_chat_model(
                 model=agent.model,

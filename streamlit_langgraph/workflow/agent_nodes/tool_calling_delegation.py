@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import streamlit as st
 
 from ...agent import Agent, AgentManager
-from .base import AgentNodeBase
+from .factory import AgentNodeBase
 from ...core.state.state_schema import WorkflowState
 from ..prompts import ToolCallingPromptBuilder
 
