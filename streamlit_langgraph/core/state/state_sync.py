@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from .state_schema import WorkflowStateManager
-from ...workflow.agent_nodes.base import create_message_with_id
+from ...utils import create_message_with_id
 
 
 class StateSynchronizer:

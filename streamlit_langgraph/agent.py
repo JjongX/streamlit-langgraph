@@ -1,12 +1,14 @@
 # Main agent class.
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
+from logging.handlers import RotatingFileHandler
 
 import yaml
 from langchain.chat_models import init_chat_model
-from langchain_openai import ChatOpenAI
+
 
 @dataclass
 class Agent:
@@ -15,8 +17,10 @@ class Agent:
     Required fields: name, role, instructions.
     provider and model default to 'openai' and 'gpt-4.1-mini' if not specified.
     
-    All agents use CreateAgentExecutor, which automatically uses Responses API
-    when native OpenAI tools are enabled.
+    Executor selection:
+    - If HITL enabled → CreateAgentExecutor (native tools automatically disabled)
+    - If native tools enabled AND HITL disabled → ResponseAPIExecutor
+    - Otherwise → CreateAgentExecutor
     """
     name: str
     role: str
@@ -27,21 +31,21 @@ class Agent:
     temperature: float = 0.0
     allow_file_search: bool = False
     allow_code_interpreter: bool = False
-    container_id: Optional[str] = None  # For code_interpreter functionality
+    container_id: Optional[str] = None # require for code_interpreter functionality
     allow_web_search: bool = False
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
-    mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None  # MCP server configurations
-    context: Optional[str] = "least"  # Context mode: "full", "summary", or "least"
-    human_in_loop: bool = False  # Enable human-in-the-loop approval (multiagent workflows only)
-    interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None  # Tool names to interrupt on
-    hitl_description_prefix: Optional[str] = "Tool execution pending approval"  # Prefix for interrupt messages
+    mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None
+    context: Optional[str] = "least"
+    human_in_loop: bool = False
+    interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None
+    hitl_description_prefix: Optional[str] = "Tool execution pending approval"
+    enable_logging: bool = False
 
     def __post_init__(self):
         """Post-initialization processing and validation."""
         if self.system_message is None:
             self.system_message = f"You are a {self.role}. {self.instructions}"
-        # Auto-enable OpenAI's native tools based on tools list configuration
         if "file_search" in self.tools:
             self.allow_file_search = True
         if "code_interpreter" in self.tools:
@@ -50,6 +54,39 @@ class Agent:
             self.allow_web_search = True
         if "image_generation" in self.tools:
             self.allow_image_generation = True
+        
+        if self.enable_logging:
+            self._setup_logging()
+
+    def _setup_logging(self) -> None:
+        """Setup file logging for this agent."""
+        log_file = os.path.join(os.getcwd(), "agent_logging.log")
+        logger = logging.getLogger("streamlit_langgraph")
+        
+        if not any(isinstance(h, RotatingFileHandler) and h.baseFilename == os.path.abspath(log_file) 
+                   for h in logger.handlers):
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10*1024*1024,
+                backupCount=5,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(logging.DEBUG)
+            
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            file_handler.setFormatter(formatter)
+            
+            logger.addHandler(file_handler)
+            logger.setLevel(logging.DEBUG)
+            
+            if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+                console_handler = logging.StreamHandler()
+                console_handler.setLevel(logging.WARNING)
+                console_handler.setFormatter(formatter)
+                logger.addHandler(console_handler)
 
     def to_dict(self) -> Dict:
         """Convert agent configuration to dictionary for serialization."""
@@ -72,6 +109,7 @@ class Agent:
             "human_in_loop": self.human_in_loop,
             "interrupt_on": self.interrupt_on,
             "hitl_description_prefix": self.hitl_description_prefix,
+            "enable_logging": self.enable_logging,
         }
     
     @classmethod
@@ -92,6 +130,9 @@ class AgentManager:
         self.agents[agent.name] = agent
         if self.active_agent is None:
             self.active_agent = agent.name
+        
+        if agent.enable_logging:
+            agent._setup_logging()
     
     def remove_agent(self, name: str) -> None:
         """Remove an agent from the manager."""
@@ -140,37 +181,35 @@ class AgentManager:
         """
         Get the appropriate LLM client for an agent based on its configuration.
         
-        Uses ChatOpenAI with use_responses_api=True when native OpenAI tools are enabled
-        (code_interpreter, web_search, file_search, image_generation) to leverage
-        OpenAI's Responses API for agentic behavior.
+        When HITL is enabled, native tools are automatically disabled to ensure
+        CreateAgentExecutor is used (Response API does not support HITL).
+        
+        When native tools are enabled (and HITL is disabled) with OpenAI provider,
+        ResponseAPIExecutor will be used. In this case, returns a minimal client
+        object that only holds vector_store_ids, since ResponseAPIExecutor uses
+        its own OpenAI client and doesn't need a LangChain client.
+        
+        Otherwise, returns a LangChain chat model via init_chat_model for CreateAgentExecutor.
         """
-        has_native_tools = (
-            agent.allow_code_interpreter or
-            agent.allow_web_search or
-            agent.allow_file_search or
-            agent.allow_image_generation
-        )        
-        if agent.provider.lower() == "openai" and has_native_tools:
-            # Initialize ChatOpenAI with Responses API
-            chat_model = ChatOpenAI(
-                model=agent.model,
-                temperature=agent.temperature,
-                use_responses_api=True,
-            )
-            if agent.allow_file_search and vector_store_ids:
-                file_search_tool = {
-                    "type": "file_search",
-                    "vector_store_ids": vector_store_ids
-                }
-                # use bind_tools() to bind the tool to the model
-                chat_model = chat_model.bind_tools([file_search_tool])
-                setattr(chat_model, "_vector_store_ids", vector_store_ids)
+        if agent.human_in_loop:
+            has_native_tools = False
         else:
-            # Use standard init_chat_model for other cases
+            from .core.executor.registry import ExecutorRegistry
+            has_native_tools = ExecutorRegistry.has_native_tools(agent)
+        
+        if agent.provider.lower() == "openai" and has_native_tools:
+            class MinimalClient:
+                """Minimal client object for ResponseAPIExecutor to read vector_store_ids."""
+                def __init__(self, vector_store_ids: Optional[List[str]] = None):
+                    if vector_store_ids:
+                        self._vector_store_ids = vector_store_ids
+                    self._provider = agent.provider.lower()
+            
+            return MinimalClient(vector_store_ids)
+        else:
             chat_model = init_chat_model(
                 model=agent.model,
                 temperature=agent.temperature
             )
-        
-        setattr(chat_model, "_provider", agent.provider.lower())
-        return chat_model
+            setattr(chat_model, "_provider", agent.provider.lower())
+            return chat_model

@@ -32,7 +32,6 @@ def main():
     config = slg.UIConfig(
         title="Supervised Research Team",
         page_icon="🎓",
-        stream=True,
         welcome_message="""Welcome to the **Supervised Research Team**!
 
 **Sequential Supervised Workflow**: Our research supervisor coordinates a team of specialist agents to handle complex research projects.

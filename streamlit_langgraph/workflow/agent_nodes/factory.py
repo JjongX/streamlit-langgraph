@@ -1,16 +1,107 @@
 # Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes.
 
+import uuid
 from typing import Any, Callable, Dict, List
 
-from ...agent import Agent
+from ...agent import Agent, AgentManager
+from ...core.executor.registry import ExecutorRegistry
+from ...core.middleware.interrupts import InterruptManager
 from ...core.state import WorkflowState, WorkflowStateManager
-from .base import AgentNodeBase, create_message_with_id
-from .handoff_delegation import HandoffDelegation
-from .tool_calling_delegation import ToolCallingDelegation
+from ...utils import create_message_with_id
 from ..prompts import SupervisorPromptBuilder
 
 
+class AgentNodeBase:
+    """Base class providing common functionality for agent node operations."""
+    
+    @staticmethod
+    def execute_agent(agent: Agent, state: WorkflowState, input_message: str) -> str:
+        """
+        Execute an agent and return the response.
+                
+        Args:
+            agent: Agent to execute
+            state: Current workflow state
+            input_message: Input message/prompt for the agent
+            
+        Returns:
+            Agent response content as string (empty string if interrupted)
+        """
+        from ...utils import CustomTool, MCPToolManager  # lazy import to avoid circular import
+        
+        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
+        
+        if hasattr(executor, 'tools'):
+            custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+            mcp_tools = []
+            if agent.mcp_servers:
+                mcp_manager = MCPToolManager()
+                mcp_manager.add_servers(agent.mcp_servers)
+                mcp_tools = mcp_manager.get_tools()
+            executor.tools = custom_tools + mcp_tools
+        
+        if "metadata" not in state:
+            state["metadata"] = {}
+        if "executors" not in state["metadata"]:
+            state["metadata"]["executors"] = {}
+        
+        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
+        if not workflow_thread_id:
+            workflow_thread_id = str(uuid.uuid4())
+            state["metadata"]["workflow_thread_id"] = workflow_thread_id
+        
+        executor_key = f"workflow_executor_{executor.agent.name}"
+        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
+        
+        config = {"configurable": {"thread_id": workflow_thread_id}}
+        
+        llm_client = AgentManager.get_llm_client(agent)
+        conversation_messages = state.get("messages", [])
+        stream = False 
+        
+        result = executor.execute_workflow(
+            llm_client=llm_client,
+            prompt=input_message,
+            stream=stream,
+            config=config,
+            messages=conversation_messages
+        )
+        
+        if InterruptManager.should_interrupt(result):
+            interrupt_data = InterruptManager.extract_interrupt_data(result)
+            
+            if "assistant_message" in result:
+                assistant_msg = result["assistant_message"]
+                if "id" not in assistant_msg:
+                    assistant_msg["id"] = str(uuid.uuid4())
+                if "agent" not in assistant_msg:
+                    assistant_msg["agent"] = agent.name
+                if "messages" not in state:
+                    state["messages"] = []
+                state["messages"].append(assistant_msg)
+            
+            interrupt_update = InterruptManager.store_interrupt(
+                state=state,
+                agent_name=agent.name,
+                interrupt_data=interrupt_data,
+                executor_key=executor_key
+            )
+            state["metadata"].update(interrupt_update["metadata"])
+            return ""
+        
+        return result.get("content", "")
+
+    @staticmethod
+    def extract_user_query(state: WorkflowState) -> str:
+        """Extract user query from state messages."""
+        for msg in reversed(state["messages"]):
+            if msg["role"] == "user":
+                return msg["content"]
+        return ""
+
+
 class AgentNodeFactory:
+    """Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes."""
 
     @staticmethod
     def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent], 
@@ -18,6 +109,8 @@ class AgentNodeFactory:
                                      delegation_mode: str = "handoff") -> Callable:
         """Create a supervisor agent node with structured routing."""
         if delegation_mode == "handoff":
+            from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
+            
             def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
                 pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
                 if pending_interrupts:
@@ -43,6 +136,8 @@ class AgentNodeFactory:
                 }
             return supervisor_agent_node
         else:  # tool calling delegation mode
+            from .tool_calling_delegation import ToolCallingDelegation  # lazy import to avoid circular import
+            
             tool_agents_map = {agent.name: agent for agent in workers}
             def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
                 user_query = AgentNodeBase.extract_user_query(state)
@@ -60,6 +155,8 @@ class AgentNodeFactory:
     @staticmethod
     def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
         """Create a worker agent node for supervisor workflows."""
+        from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
+        
         def worker_agent_node(state: WorkflowState) -> Dict[str, Any]:
             user_query = AgentNodeBase.extract_user_query(state)
             context_data, previous_worker_outputs = HandoffDelegation.build_worker_context(
@@ -84,4 +181,3 @@ class AgentNodeFactory:
                 "agent_outputs": {worker.name: response}
             }
         return worker_agent_node
-

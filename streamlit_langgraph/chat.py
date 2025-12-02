@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
-import openai
 
 from .agent import Agent, AgentManager
 from .core.executor import WorkflowExecutor
+from .core.executor.registry import ExecutorRegistry
 from .core.state import StateSynchronizer, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
 from .ui import DisplayManager, StreamProcessor
@@ -20,9 +20,9 @@ class UIConfig:
     title: str
     page_icon: Optional[str] = "🤖"
     page_layout: str = "wide"
-    stream: bool = True  # Enable/disable streaming responses
+    stream: bool = True
     enable_file_upload: bool = True
-    show_sidebar: bool = True  # Show default sidebar
+    show_sidebar: bool = True
     user_avatar: Optional[str] = "👤"
     assistant_avatar: Optional[str] = "🤖"
     placeholder: str = "Type your message here..."
@@ -77,8 +77,13 @@ class LangGraphChat:
         first_agent = next(iter(self.agent_manager.agents.values()))
         
         openai_client = None
-        if first_agent.provider.lower() == "openai":
-            openai_client = openai.OpenAI()
+        if (first_agent.provider.lower() == "openai" and
+            ExecutorRegistry.has_native_tools(first_agent)):
+            executor = ExecutorRegistry().get_or_create(first_agent, executor_type="single_agent")
+            from .core.executor.response_api import ResponseAPIExecutor
+            if isinstance(executor, ResponseAPIExecutor):
+                openai_client = executor.openai_client
+        
         self.file_handler = FileHandler(
             openai_client=openai_client,
             model=first_agent.model,
@@ -102,7 +107,7 @@ class LangGraphChat:
         if "agent_executors" not in st.session_state:
             st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
-            st.session_state.uploaded_files = []  # File objects (not in workflow_state)
+            st.session_state.uploaded_files = []
 
     def run(self):
         """Run the main chat interface."""
@@ -198,14 +203,12 @@ class LangGraphChat:
             st.rerun()
         
         if response and "stream" in response:
-            # Handle streaming response - detect format and route to appropriate handler
             section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             stream_iter = response["stream"]
             full_response = self.stream_processor.process_stream(section, stream_iter)
             response["content"] = full_response
         else:
-            # Handle non-streaming response from agent
             section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             section.update("text", response["content"])
@@ -239,6 +242,11 @@ class LangGraphChat:
     
     def _run_workflow(self, prompt: str) -> Dict[str, Any]:
         """Run the multiagent workflow and orchestrate UI updates."""
+        workflow_state = st.session_state.workflow_state
+        if "metadata" not in workflow_state:
+            workflow_state["metadata"] = {}
+        workflow_state["metadata"]["stream"] = self.config.stream
+        
         def display_callback(msg, msg_id):
             self.display_manager.render_workflow_message(msg)
         

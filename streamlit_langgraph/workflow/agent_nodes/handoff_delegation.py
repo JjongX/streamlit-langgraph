@@ -12,11 +12,12 @@ from pydantic import BaseModel, Field
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
 from ...core.state import WorkflowState, WorkflowStateManager
-from .base import AgentNodeBase
+from .factory import AgentNodeBase
 
 
 class HandoffDelegation:
-        
+    """Handoff delegation pattern for supervisor-worker workflows."""
+    
     @staticmethod
     def execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
                                         input_message: str, workers: List[Agent],
@@ -24,7 +25,9 @@ class HandoffDelegation:
         """
         Execute supervisor agent with structured routing via function calling.
         
-        Always uses CreateAgentExecutor with LangChain tool calling.
+        Routes to appropriate executor based on executor type:
+        - ResponseAPIExecutor -> uses OpenAI ChatCompletion API with function calling
+        - CreateAgentExecutor -> uses LangChain tool calling
         
         Args:
             agent: Supervisor agent
@@ -36,9 +39,18 @@ class HandoffDelegation:
         Returns:
             Tuple of (response_content, routing_decision_dict)
         """
-        return HandoffDelegation._execute_with_create_agent_executor(
-            agent, state, input_message, workers, allow_parallel
-        )
+        from ...core.executor.response_api import ResponseAPIExecutor
+        
+        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
+        
+        if isinstance(executor, ResponseAPIExecutor):
+            return HandoffDelegation._execute_with_response_api_executor(
+                agent, state, input_message, workers, allow_parallel
+            )
+        else:
+            return HandoffDelegation._execute_with_create_agent_executor(
+                agent, state, input_message, workers, allow_parallel
+            )
     
     @staticmethod
     def build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
@@ -66,7 +78,41 @@ class HandoffDelegation:
                 output = state['agent_outputs'][worker_name]
                 worker_outputs.append(f"**{worker_name}**: {output}")
         return worker_outputs
+    
+    @staticmethod
+    def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
+                                           input_message: str, workers: List[Agent],
+                                           allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
+        """Execute supervisor using ResponseAPIExecutor approach with OpenAI function calling."""
+        if not workers:
+            content = AgentNodeBase.execute_agent(agent, state, input_message)
+            return content, {"action": "finish"}
         
+        import os
+        from openai import OpenAI
+        
+        tools = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
+        
+        messages = []
+        if agent.system_message:
+            messages.append({"role": "system", "content": agent.system_message})
+        messages.append({"role": "user", "content": input_message})
+        
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        with st.spinner(f"🤖 {agent.name} is working..."):
+            response = client.chat.completions.create(
+                model=agent.model,
+                messages=messages,
+                temperature=agent.temperature,
+                tools=tools if tools else None,
+                tool_choice="auto" if tools else None
+            )
+        
+        message = response.choices[0].message
+        content = message.content or ""
+        routing_decision = HandoffDelegation._extract_openai_routing_decision(message, content)
+        return routing_decision[1], routing_decision[0]
+    
     @staticmethod
     def _execute_with_create_agent_executor(agent: Agent, state: WorkflowState,
                                            input_message: str, workers: List[Agent],
@@ -97,7 +143,6 @@ class HandoffDelegation:
             state["metadata"]["executors"] = {}
         
         executor_key = f"workflow_executor_{agent.name}"
-        # Use workflow's thread_id (from state metadata) to match checkpointer
         workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
         if not workflow_thread_id:
             workflow_thread_id = str(uuid.uuid4())
@@ -113,7 +158,6 @@ class HandoffDelegation:
             
             interrupt_data = None
             if executor.agent.human_in_loop and executor.agent.interrupt_on:
-                # Convert input_message to LangChain message format
                 langchain_messages = [HumanMessage(content=input_message)]
                 interrupt_data = executor.detect_interrupt_in_stream(config, langchain_messages)
             
@@ -122,31 +166,27 @@ class HandoffDelegation:
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
-            # Invoke agent and get raw output
+            
             out = executor.agent_obj.invoke(
                 {"messages": [{"role": "user", "content": input_message}]}, config=config
             )
-            # Check for interrupts in output
+            
             if isinstance(out, dict) and "__interrupt__" in out:
                 result = executor._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
-        # Extract routing decision from LangChain output
+        
         routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
-        
+    
     @staticmethod
     def _build_openai_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
         """Build OpenAI function tool definition for delegation."""
         if not workers:
             return []
         
-        worker_name_options = [w.name for w in workers]
-        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
-        if allow_parallel and len(workers) > 1:
-            worker_name_options.append("PARALLEL")
-            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
+        worker_name_options, worker_desc_parts = HandoffDelegation._build_worker_options(workers, allow_parallel)
         
         return [{
             "type": "function",
@@ -182,14 +222,8 @@ class HandoffDelegation:
         if not workers:
             return None
         
-        worker_name_options = [w.name for w in workers]
-        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
-        if allow_parallel and len(workers) > 1:
-            worker_name_options.append("PARALLEL")
-            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
+        worker_name_options, worker_desc_parts = HandoffDelegation._build_worker_options(workers, allow_parallel)
         
-        # Create a dummy function that will be called when tool is invoked
-        # Function required by StructuredTool - return value is not used, routing decision is extracted from tool call
         def delegate_task(worker_name: str, task_description: str, priority: str = "medium") -> str:
             return f"Task delegated to {worker_name}: {task_description}"
         tool_description = (
@@ -219,7 +253,7 @@ class HandoffDelegation:
     def _extract_openai_routing_decision(message, content: str) -> Tuple[Dict[str, Any], str]:
         """Extract routing decision from OpenAI function call response."""
         routing_decision = {"action": "finish"}
-        if message.tool_calls:
+        if hasattr(message, 'tool_calls') and message.tool_calls:
             tool_call = message.tool_calls[0]
             if tool_call.function.name == "delegate_task":
                 args = json.loads(tool_call.function.arguments)
@@ -272,33 +306,11 @@ class HandoffDelegation:
                             }
                             delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
                             if hasattr(msg, 'content') and msg.content:
-                                if isinstance(msg.content, str):
-                                    content = msg.content
-                                elif isinstance(msg.content, list):
-                                    text_parts = []
-                                    for block in msg.content:
-                                        if isinstance(block, dict) and block.get('type') == 'text':
-                                            text_parts.append(block.get('text', ''))
-                                        elif isinstance(block, str):
-                                            text_parts.append(block)
-                                    content = ''.join(text_parts) if text_parts else ""
-                                else:
-                                    content = str(msg.content) if msg.content else ""
+                                content = HandoffDelegation._extract_text_from_content(msg.content)
                             content = content + delegation_text if content else delegation_text[2:]
                             return routing_decision, content
                 if hasattr(msg, 'content') and msg.content and not content:
-                    if isinstance(msg.content, str):
-                        content = msg.content
-                    elif isinstance(msg.content, list):
-                        text_parts = []
-                        for block in msg.content:
-                            if isinstance(block, dict) and block.get('type') == 'text':
-                                text_parts.append(block.get('text', ''))
-                            elif isinstance(block, str):
-                                text_parts.append(block)
-                        content = ''.join(text_parts) if text_parts else ""
-                    else:
-                        content = str(msg.content) if msg.content else ""
+                    content = HandoffDelegation._extract_text_from_content(msg.content)
         
         if not content:
             if isinstance(out, dict):
@@ -307,34 +319,16 @@ class HandoffDelegation:
                 elif 'messages' in out and out['messages']:
                     last_msg = out['messages'][-1]
                     if hasattr(last_msg, 'content'):
-                        msg_content = last_msg.content
-                        if isinstance(msg_content, str):
-                            content = msg_content
-                        elif isinstance(msg_content, list):
-                            text_parts = []
-                            for block in msg_content:
-                                if isinstance(block, dict) and block.get('type') == 'text':
-                                    text_parts.append(block.get('text', ''))
-                                elif isinstance(block, str):
-                                    text_parts.append(block)
-                            content = ''.join(text_parts) if text_parts else ""
-                        else:
-                            content = str(msg_content) if msg_content else ""
+                        content = HandoffDelegation._extract_text_from_content(last_msg.content)
                     else:
                         content = str(last_msg)
             elif hasattr(out, 'content'):
-                out_content = out.content
-                if isinstance(out_content, str):
-                    content = out_content
-                elif isinstance(out_content, list):
-                    content = ''.join(str(c) for c in out_content if c)
-                else:
-                    content = str(out_content) if out_content else ""
+                content = HandoffDelegation._extract_text_from_content(out.content)
             else:
                 content = str(out)
         
         return routing_decision, content or ""
-        
+    
     @staticmethod
     def _get_previous_worker_outputs(state: WorkflowState, supervisor_name: str, current_worker_name: str) -> Optional[List[str]]:
         """Get formatted list of previous worker outputs."""
@@ -344,3 +338,29 @@ class HandoffDelegation:
             if name not in (supervisor_name, current_worker_name):
                 worker_outputs.append(f"**{name}**: {output}")
         return worker_outputs if worker_outputs else None
+
+    @staticmethod
+    def _extract_text_from_content(content: Any) -> str:
+        """Extract text from content that may be str, list, or other format."""
+        if isinstance(content, str):
+            return content
+        elif isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get('type') == 'text':
+                    text_parts.append(block.get('text', ''))
+                elif isinstance(block, str):
+                    text_parts.append(block)
+            return ''.join(text_parts) if text_parts else ""
+        else:
+            return str(content) if content else ""
+    
+    @staticmethod
+    def _build_worker_options(workers: List[Agent], allow_parallel: bool) -> Tuple[List[str], List[str]]:
+        """Build worker name options and description parts for delegation tools."""
+        worker_name_options = [w.name for w in workers]
+        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
+        if allow_parallel and len(workers) > 1:
+            worker_name_options.append("PARALLEL")
+            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
+        return worker_name_options, worker_desc_parts

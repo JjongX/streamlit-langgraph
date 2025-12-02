@@ -35,7 +35,6 @@ class WorkflowExecutor:
         if initial_state is None:
             initial_state = st.session_state.workflow_state
         
-        # Deep copy to avoid modifying the original workflow_state
         state = copy.deepcopy(initial_state)
         if "metadata" not in state:
             state["metadata"] = {}
@@ -49,7 +48,6 @@ class WorkflowExecutor:
         state["metadata"]["workflow_thread_id"] = configurable["thread_id"]
         workflow_config = {"configurable": configurable}
         
-        # Setup display callback with deduplication if provided
         if display_callback:
             display_wrapper = self._create_display_wrapper(display_callback, initial_state)
             return self._execute_streaming(workflow, state, workflow_config, display_wrapper)
@@ -79,23 +77,17 @@ class WorkflowExecutor:
             if not state or "messages" not in state:
                 return
             
-            # Only process messages that come after the last user message
             found_last_user = last_user_msg_id is None
             for msg in state["messages"]:
                 msg_id = msg.get("id")
-                # Track when we've reached the last user message
                 if last_user_msg_id and msg_id == last_user_msg_id:
                     found_last_user = True
                     continue
-                # Only process messages after the last user message
                 if not found_last_user:
                     continue
-                # Skip if message has already been displayed
                 if msg_id and msg_id in displayed_message_ids:
                     continue
-                # Use display callback if provided
                 callback(msg, msg_id)
-                # Mark as displayed
                 if msg_id:
                     displayed_message_ids.add(msg_id)
         
@@ -123,8 +115,6 @@ class WorkflowExecutor:
         
         conversation_messages = st.session_state.workflow_state.get("messages", [])
         executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
-        
-        # All executors now use CreateAgentExecutor which supports file_messages and stream
         response = executor.execute_agent(
             llm_client, prompt,
             stream=config.stream if config else True,
@@ -134,8 +124,8 @@ class WorkflowExecutor:
         return response
     
     def _execute_invoke(
-        self, workflow: StateGraph, initial_state: WorkflowState,
-        config: Dict[str, Any]
+        self, workflow: StateGraph,
+        initial_state: WorkflowState, config: Dict[str, Any]
     ) -> WorkflowState:
         """Execute workflow synchronously using invoke() method."""
         final_state = workflow.invoke(initial_state, config=config)
@@ -143,8 +133,9 @@ class WorkflowExecutor:
         return final_state
     
     def _execute_streaming(
-        self, workflow: StateGraph, initial_state: WorkflowState, 
-        config: Dict[str, Any], display_callback: Callable, 
+        self, workflow: StateGraph,
+        initial_state: WorkflowState, config: Dict[str, Any], 
+        display_callback: Callable, 
     ) -> WorkflowState:
         """Execute workflow using stream() method with real-time display updates."""
         accumulated_state = initial_state.copy()

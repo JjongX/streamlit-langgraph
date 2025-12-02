@@ -35,9 +35,7 @@ def create_hierarchical_workflow_example():
 def main():
     """Hierarchical workflow example with multiple supervisor teams."""
     
-    # Create hierarchical workflow components
     top_supervisor, supervisor_teams, all_agents = create_hierarchical_workflow_example()
-    # Create the hierarchical workflow
     builder = slg.WorkflowBuilder()
     hierarchical_workflow = builder.create_hierarchical_workflow(
         top_supervisor=top_supervisor,

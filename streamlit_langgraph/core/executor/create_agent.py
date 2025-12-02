@@ -18,8 +18,16 @@ class CreateAgentExecutor:
     Uses LangChain's standard `create_agent` function which supports multiple providers
     (OpenAI, Anthropic, Google, etc.) through LangChain's chat model interface.
     
+    This executor is used for:
+    - ChatCompletion API (when native OpenAI tools are not enabled)
+    - HITL (Human-in-the-Loop) scenarios (even if native tools are enabled, HITL requires this executor)
+    - Multi-provider support (Anthropic, Google, etc.)
+    
     HITL Handling: Uses LangChain's built-in `HumanInTheLoopMiddleware` which is automatically
     integrated into the agent during construction (in `_build_agent`)
+    
+    Note: For native OpenAI tools (code_interpreter, file_search, etc.) without HITL,
+    use ResponseAPIExecutor instead.
     """
 
     def __init__(self, agent: Agent, tools: Optional[List] = None):
@@ -48,8 +56,7 @@ class CreateAgentExecutor:
             self.tools = custom_tools + mcp_tools
     
     def execute_agent(
-        self, 
-        llm_client: Any, prompt: str, stream: bool = False,
+        self, llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
     ) -> Dict[str, Any]:
@@ -69,15 +76,6 @@ class CreateAgentExecutor:
             Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
         try:
-            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-            if not hasattr(self, '_last_vector_store_ids'):
-                self._last_vector_store_ids = None
-            
-            if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-                self.agent_obj = None
-            
-            self._last_vector_store_ids = current_vector_ids
-            
             if stream:
                 return self._stream_agent(llm_client, prompt, messages, file_messages, config={})
             else:
@@ -89,13 +87,11 @@ class CreateAgentExecutor:
             return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
     
     def execute_workflow(
-        self, 
-        llm_client: Any, prompt: str, stream: bool = False,
+        self, llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
         config: Optional[Dict[str, Any]] = None, 
     ) -> Dict[str, Any]:
-        
         """
         Execute prompt for workflow mode (requires config with thread_id).
 
@@ -113,20 +109,10 @@ class CreateAgentExecutor:
         try:
             config, workflow_thread_id = self._prepare_workflow_config(config)
             
-            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-            if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-                self.agent_obj = None
-            
-            self._last_vector_store_ids = current_vector_ids
-            
-            if self.agent_obj is None:
-                self._build_agent(llm_client)
-            
             if stream:
                 return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
             else:
                 out = self._invoke_agent(llm_client, prompt, messages, file_messages, config=config)
-                # Check for interrupts in output (HITL)
                 if isinstance(out, dict) and "__interrupt__" in out:
                     return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 result_text = self._extract_response_text(out)
@@ -156,12 +142,9 @@ class CreateAgentExecutor:
             raise ValueError("Cannot resume: human-in-the-loop not enabled or agent not initialized")
         
         config, workflow_thread_id = self._prepare_workflow_config(config)
-        
-        # The checkpointer should have the history, but we ensure consistency
         resume_command = Command(resume={"decisions": decisions})
         out = self.agent_obj.invoke(resume_command, config=config)
         
-        # Check for additional interrupts
         if isinstance(out, dict) and "__interrupt__" in out:
             return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
         
@@ -178,11 +161,9 @@ class CreateAgentExecutor:
             {"messages": messages},
             config=execution_config
         ):
-            # Check for direct interrupt key
             if "__interrupt__" in event:
                 interrupt_data = event["__interrupt__"]
                 return list(interrupt_data) if isinstance(interrupt_data, (tuple, list)) else interrupt_data
-            # Check each node in the event
             for node_state in event.values():
                 if isinstance(node_state, dict) and "__interrupt__" in node_state:
                     return node_state["__interrupt__"]
@@ -201,7 +182,7 @@ class CreateAgentExecutor:
         Invoke the agent (non-streaming).
 
         Args:
-            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
+            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
             prompt: User's question/prompt
             messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
@@ -210,11 +191,7 @@ class CreateAgentExecutor:
         Returns:
             Agent output (dict or other format)
         """
-        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-            self.agent_obj = None
-        
-        self._last_vector_store_ids = current_vector_ids
+        self._check_and_update_vector_store_ids(llm_client)
         
         if self.agent_obj is None:
             self._build_agent(llm_client)
@@ -235,7 +212,7 @@ class CreateAgentExecutor:
         Invoke the agent with streaming support.
         
         Args:
-            llm_client: A LangChain chat model instance (with use_responses_api=True if native tools enabled)
+            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
             prompt: User's question/prompt
             file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
@@ -244,11 +221,7 @@ class CreateAgentExecutor:
         Returns:
             Dict with 'role', 'content', 'agent', and 'stream' key containing iterator
         """
-        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
-            self.agent_obj = None
-        
-        self._last_vector_store_ids = current_vector_ids
+        self._check_and_update_vector_store_ids(llm_client)
         
         if self.agent_obj is None:
             self._build_agent(llm_client)
@@ -266,8 +239,8 @@ class CreateAgentExecutor:
         """
         Build the agent with optional human-in-the-loop middleware.
         
-        When native OpenAI tools are enabled and use_responses_api=True is set on the model,
-        LangChain will automatically route to Responses API for agentic behavior.
+        This executor uses LangChain's create_agent which works with ChatCompletion API.
+        For native OpenAI tools without HITL, ResponseAPIExecutor should be used instead.
         """
         middleware = []
         if self.agent.human_in_loop and self.agent.interrupt_on:
@@ -289,8 +262,6 @@ class CreateAgentExecutor:
         if middleware:
             agent_kwargs["middleware"] = middleware
         
-        # This is separate from the workflow checkpointer (different InMemorySaver instance)
-        # Using the same thread_id is safe because each checkpointer maintains its own namespace
         if self.agent.human_in_loop and self.agent.interrupt_on:
             agent_checkpointer = InMemorySaver()
             agent_kwargs["checkpointer"] = agent_checkpointer
@@ -314,8 +285,6 @@ class CreateAgentExecutor:
         Returns:
             List of LangChain BaseMessage objects
         """
-        from langchain_core.messages import HumanMessage as LC_HumanMessage
-        
         langchain_messages: List[BaseMessage] = []
         
         if messages:
@@ -324,7 +293,7 @@ class CreateAgentExecutor:
                 content = msg.get("content", "")
                 
                 if not content:
-                    continue  # Skip empty messages
+                    continue
                 
                 if role == "user":
                     langchain_messages.append(HumanMessage(content=content))
@@ -332,7 +301,6 @@ class CreateAgentExecutor:
                     langchain_messages.append(AIMessage(content=content))
                 elif role == "system":
                     langchain_messages.append(SystemMessage(content=content))
-                # tool messages are added during tool execution
         
         if file_messages:
             for file_msg in file_messages:
@@ -349,7 +317,7 @@ class CreateAgentExecutor:
                                     elif block.get("type") == "input_file":
                                         text_parts.append(f"[File: {block.get('file_id', 'unknown')}]")
                             content = " ".join(text_parts) if text_parts else str(content)
-                        langchain_messages.append(LC_HumanMessage(content=content))
+                        langchain_messages.append(HumanMessage(content=content))
         
         if not langchain_messages or not isinstance(langchain_messages[-1], HumanMessage) or langchain_messages[-1].content != current_prompt:
             langchain_messages.append(HumanMessage(content=current_prompt))
@@ -358,19 +326,14 @@ class CreateAgentExecutor:
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
-        from langchain_core.messages import AIMessage
-        
         if isinstance(out, dict):
-            # Check for 'output' key first (some agent formats)
             if 'output' in out:
                 output = out['output']
                 if output:
                     return str(output)
             
-            # Check for 'messages' key (standard LangChain agent output)
             if 'messages' in out and out['messages']:
                 messages = out['messages']
-                # Find the last AIMessage with content
                 for msg in reversed(messages):
                     if isinstance(msg, AIMessage):
                         if hasattr(msg, 'content') and msg.content:
@@ -407,7 +370,6 @@ class CreateAgentExecutor:
                 return ''.join(str(c) for c in content if c)
             return str(content) if content else ""
         
-        # Fallback: convert to string
         result = str(out) if out else ""
         return result
     
@@ -458,4 +420,19 @@ class CreateAgentExecutor:
             "thread_id": thread_id,
             "config": config
         }
-
+    
+    def _check_and_update_vector_store_ids(self, llm_client: Any) -> None:
+        """
+        Check if vector_store_ids have changed and invalidate agent if needed.
+        
+        Args:
+            llm_client: LLM client instance to check for vector_store_ids
+        """
+        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
+        if not hasattr(self, '_last_vector_store_ids'):
+            self._last_vector_store_ids = None
+        
+        if self.agent_obj is not None and current_vector_ids != self._last_vector_store_ids:
+            self.agent_obj = None
+        
+        self._last_vector_store_ids = current_vector_ids

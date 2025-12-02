@@ -2,7 +2,6 @@ import streamlit_langgraph as slg
 
 
 def main():    
-    # Create a simple assistant
     assistant = slg.Agent(
         name="assistant",
         role="Helpful Assistant", 
@@ -17,12 +16,12 @@ def main():
         allow_file_search=True,
         allow_code_interpreter=True,
         allow_web_search=True,
+        allow_image_generation=True,
+        enable_logging=True,
     )
-    # Create UI configuration
     config = slg.UIConfig(
         title="Simple Chat Assistant",
         page_icon="💬",
-        stream=True,
         welcome_message="""Welcome to the **Simple Chat Assistant**!
 
 💬 **Single Agent Mode**: This example demonstrates direct single-agent interaction without workflow complexity.
@@ -38,12 +37,10 @@ I'm a helpful AI assistant ready to chat with you about anything. I can help wit
 What would you like to talk about?""",
         enable_file_upload=True,
     )
-    # Create the chat interface (single agent, no workflow needed)
     chat = slg.LangGraphChat(
-        agents=[assistant], # Might update later to not pass agents
+        agents=[assistant],
         config=config
     )
-    # Run the chat
     chat.run()
 
 if __name__ == "__main__":
