@@ -2,12 +2,14 @@
 
 import json
 import uuid
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
+from openai import OpenAI
 
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
@@ -87,9 +89,6 @@ class HandoffDelegation:
         if not workers:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
-        
-        import os
-        from openai import OpenAI
         
         tools = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
         
