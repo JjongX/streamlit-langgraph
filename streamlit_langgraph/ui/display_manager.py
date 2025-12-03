@@ -139,8 +139,8 @@ class Section:
         # Always save section to session state for persistence across reruns
         self._save_to_session_state()
     
-    def _save_to_session_state(self) -> None:
-        """Save section data to workflow_state."""
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert section to dictionary format for serialization."""
         section_data = {
             "role": self.role,
             "blocks": [],
@@ -165,6 +165,12 @@ class Section:
             
             section_data["blocks"].append(block_data)
         
+        return section_data
+    
+    def _save_to_session_state(self) -> None:
+        """Save section data to workflow_state."""
+        section_data = self.to_dict()
+        
         if not self.display_manager.state_manager:
             raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
         self._section_index = self.display_manager.state_manager.update_display_section(
@@ -175,12 +181,12 @@ class Section:
 class DisplayManager:
     """Manages UI rendering for chat messages."""
     
-    def __init__(self, config, state_manager=None):
+    def __init__(self, config=None, state_manager=None):
         """
         Initialize DisplayManager with UI configuration.
         
         Args:
-            config: UI configuration
+            config: UI configuration (optional, for non-UI use cases like executors)
             state_manager: StateSynchronizer instance for accessing workflow_state
         """
         self.config = config

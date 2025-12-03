@@ -1,14 +1,16 @@
 # ResponseAPIExecutor for OpenAI Responses API
 
+import json
 import os
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
 from ...agent import Agent
+from .conversation_history import ConversationHistoryMixin
 
 
-class ResponseAPIExecutor:
+class ResponseAPIExecutor(ConversationHistoryMixin):
     """
     Executor that uses OpenAI's native Responses API directly.
     
@@ -32,6 +34,7 @@ class ResponseAPIExecutor:
         self._vector_store_ids = None
         self._tools_config = None
         self.tools = tools if tools is not None else []
+        self._init_conversation_history(agent)
     
     def execute_agent(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -160,6 +163,7 @@ class ResponseAPIExecutor:
         response = self.openai_client.responses.create(**request_params)
         
         if stream:
+            # For streaming, we'll add the response to history after streaming completes
             return {
                 "role": "assistant",
                 "content": "",
@@ -168,6 +172,8 @@ class ResponseAPIExecutor:
             }
         else:
             content = self._extract_response_content(response)
+            blocks = self._convert_message_to_blocks(content)
+            self._add_to_conversation_history("assistant", blocks)
             return {
                 "role": "assistant",
                 "content": content,
@@ -180,25 +186,13 @@ class ResponseAPIExecutor:
         vs_ids = vector_store_ids or self._vector_store_ids
         
         if self.agent.allow_file_search and vs_ids:
-            tools.append({
-                "type": "file_search",
-                "vector_store_ids": vs_ids if isinstance(vs_ids, list) else [vs_ids]
-            })
-        
+            tools.append({"type": "file_search", "vector_store_ids": vs_ids if isinstance(vs_ids, list) else [vs_ids]})
         if self.agent.allow_code_interpreter:
-            tools.append({
-                "type": "code_interpreter",
-                "container": self.agent.container_id if self.agent.container_id else {"type": "auto"}
-            })
-        
+            tools.append({"type": "code_interpreter", "container": self.agent.container_id if self.agent.container_id else {"type": "auto"}})
         if self.agent.allow_web_search:
-            tools.append({"type": "web_search_preview"})
-        
+            tools.append({"type": "web_search"})
         if self.agent.allow_image_generation:
-            if stream:
-                tools.append({"type": "image_generation", "partial_images": 3})
-            else:
-                tools.append({"type": "image_generation"})
+            tools.append({"type": "image_generation", "partial_images": 3} if stream else {"type": "image_generation"})
         
         if self.agent.mcp_servers:
             from ...utils import MCPToolManager
@@ -256,29 +250,13 @@ class ResponseAPIExecutor:
     
     def _prepare_request_params(self, prompt: str, messages: Optional[List[Dict[str, Any]]] = None,
                                 file_messages: Optional[List] = None, stream: bool = False) -> Dict[str, Any]:
-        """
-        Prepare request parameters for Responses API.
-        
-        Args:
-            prompt: User's question/prompt
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            stream: Whether to enable streaming
-            
-        Returns:
-            Request parameters dictionary
-        """
+        """Prepare request parameters for Responses API."""
         input_text = self._convert_messages_to_input(messages, prompt, file_messages)
         self._tools_config = self._build_tools_config(self._vector_store_ids, stream=stream)
         
-        request_params = {
-            "model": self.agent.model,
-            "input": input_text,
-        }
-        
+        request_params = {"model": self.agent.model, "input": input_text}
         if stream:
             request_params["stream"] = True
-        
         if self._tools_config:
             request_params["tools"] = self._tools_config
         
@@ -291,9 +269,8 @@ class ResponseAPIExecutor:
         file_messages: Optional[List] = None
     ) -> str:
         """
-        Convert workflow_state messages to a single input string for Responses API.
-        
-        The Responses API uses 'input' as a string parameter instead of 'messages' array.
+        Convert workflow_state messages to input string.
+        Conversation history is added as system message in input, current prompt is also included.
         
         Args:
             messages: List of message dicts from workflow_state
@@ -301,67 +278,40 @@ class ResponseAPIExecutor:
             file_messages: Optional file messages (OpenAI format) to include
             
         Returns:
-            Single input string combining all messages
+            Input string with system message (conversation history) and current prompt
         """
+        # Update conversation history from messages
+        self._update_conversation_history_from_messages(messages, file_messages)
+        
+        # Add current prompt to conversation history if not already there
+        if not self._conversation_history or not (
+            self._conversation_history[-1].role == "user" and
+            any(block.content == current_prompt for block in self._conversation_history[-1].blocks)
+        ):
+            current_blocks = self._convert_message_to_blocks(current_prompt)
+            if current_blocks:
+                self._add_to_conversation_history("user", current_blocks)
+        
+        # Build input with system message (conversation history) and current prompt
         input_parts = []
         
-        if self.agent.system_message:
-            input_parts.append(self.agent.system_message)
+        # Add original system message if present
+        if self._original_system_message:
+            input_parts.append(self._original_system_message)
         
-        if messages:
-            for msg in messages:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                
-                if not content:
-                    continue
-                
-                if role == "user":
-                    if isinstance(content, str):
-                        input_parts.append(f"User: {content}")
-                    elif isinstance(content, list):
-                        text_parts = []
-                        for block in content:
-                            if isinstance(block, dict):
-                                if block.get("type") == "input_text":
-                                    text_parts.append(block.get("text", ""))
-                                elif block.get("type") == "input_file":
-                                    text_parts.append(f"[File: {block.get('file_id', 'unknown')}]")
-                        if text_parts:
-                            input_parts.append(f"User: {' '.join(text_parts)}")
-                    else:
-                        input_parts.append(f"User: {str(content)}")
-                elif role == "assistant":
-                    if isinstance(content, str):
-                        input_parts.append(f"Assistant: {content}")
-                    elif isinstance(content, list):
-                        text_parts = []
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "output_text":
-                                text_parts.append(block.get("text", ""))
-                        if text_parts:
-                            input_parts.append(f"Assistant: {' '.join(text_parts)}")
-                    else:
-                        input_parts.append(f"Assistant: {str(content)}")
+        # Add conversation history as system message
+        sections_dict = self._get_conversation_history_sections_dict()
+        if sections_dict:
+            system_content = json.dumps(sections_dict, ensure_ascii=False)
+            # For Response API string input, include as system message JSON
+            system_msg = json.dumps({"role": "system", "content": system_content}, ensure_ascii=False)
+            input_parts.append(system_msg)
         
-        if file_messages:
-            for file_msg in file_messages:
-                if isinstance(file_msg, dict):
-                    role = file_msg.get("role", "user")
-                    content = file_msg.get("content", [])
-                    if role == "user" and content:
-                        file_refs = []
-                        for block in content if isinstance(content, list) else [content]:
-                            if isinstance(block, dict):
-                                if block.get("type") == "input_file":
-                                    file_refs.append(f"[File: {block.get('file_id', 'unknown')}]")
-                                elif block.get("type") == "input_text":
-                                    file_refs.append(block.get("text", ""))
-                        if file_refs:
-                            input_parts.append(f"User: {' '.join(file_refs)}")
+        # Add current prompt
+        input_parts.append(current_prompt)
         
-        input_parts.append(f"User: {current_prompt}")
-        return "\n\n".join(input_parts)
+        return "\n\n".join(input_parts) if input_parts else current_prompt
+    
     
     def _extract_response_content(self, response: Any) -> str:
         """
