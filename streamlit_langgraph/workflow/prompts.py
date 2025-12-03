@@ -69,12 +69,10 @@ class SupervisorPromptBuilder:
     def get_worker_agent_instructions(
         role: str, instructions: str, user_query: str, 
         supervisor_output: Optional[str] = None, previous_worker_outputs: Optional[List[str]] = None) -> str:
-        """
-        Get instructions for worker agents in supervisor workflows.
-        """
+        """Get instructions for worker agents in supervisor workflows."""
         instruction_parts = [
             f"Original Request: {user_query}",
-            f"Your Role: {role} - {instructions}"
+            f"Your Role: {role}"
         ]
         
         if supervisor_output:

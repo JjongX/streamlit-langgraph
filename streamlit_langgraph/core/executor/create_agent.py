@@ -308,16 +308,13 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             if current_blocks:
                 self._add_to_conversation_history("user", current_blocks)
         
-        # Build messages list with system message (conversation history) and current prompt
         langchain_messages: List[BaseMessage] = []
-        
+        langchain_messages.append(HumanMessage(content=current_prompt))
+        # Add conversation history as system message after current prompt
         sections_dict = self._get_conversation_history_sections_dict()
         if sections_dict:
             system_content = json.dumps(sections_dict, ensure_ascii=False)
             langchain_messages.append(SystemMessage(content=system_content))
-        
-        # Add current prompt
-        langchain_messages.append(HumanMessage(content=current_prompt))
         
         return langchain_messages
     

@@ -111,17 +111,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None
     ) -> Dict[str, Any]:
-        """
-        Invoke the Response API (non-streaming).
-        
-        Args:
-            prompt: User's question/prompt
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            
-        Returns:
-            Dict with 'role', 'content', and 'agent' keys
-        """
+        """Invoke the Response API."""
         return self._call_response_api(prompt, stream=False, messages=messages, file_messages=file_messages)
     
     def _stream_response_api(
@@ -129,17 +119,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None
     ) -> Dict[str, Any]:
-        """
-        Invoke the Response API with streaming.
-        
-        Args:
-            prompt: User's question/prompt
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            
-        Returns:
-            Dict with 'role', 'content', 'agent', and 'stream' key containing iterator
-        """
+        """Stream the Response API."""
         return self._call_response_api(prompt, stream=True, messages=messages, file_messages=file_messages)
     
     def _call_response_api(
@@ -159,8 +139,18 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         Returns:
             Dict with 'role', 'content', 'agent', and optionally 'stream' key
         """
-        request_params = self._prepare_request_params(prompt, messages, file_messages, stream=stream)
-        response = self.openai_client.responses.create(**request_params)
+        input_text = self._convert_messages_to_input(messages, prompt, file_messages)
+        tools_config = self._build_tools_config(self._vector_store_ids, stream=stream)
+        
+        response = self.openai_client.responses.create(
+            model=self.agent.model,
+            input=input_text,
+            instructions=self._original_system_message,
+            temperature=self.agent.temperature,
+            tools=tools_config if tools_config else [],
+            stream=stream,
+            reasoning={"summary": "auto"},
+        )
         
         if stream:
             # For streaming, we'll add the response to history after streaming completes
@@ -210,15 +200,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         return tools
     
     def _convert_langchain_tool_to_openai(self, tool: Any) -> Dict[str, Any]:
-        """
-        Convert a LangChain StructuredTool to OpenAI function format.
-        
-        Args:
-            tool: LangChain StructuredTool instance
-            
-        Returns:
-            OpenAI function tool dictionary
-        """
+        """Convert a LangChain StructuredTool to OpenAI function format."""
         from langchain_core.tools import StructuredTool
         
         if not isinstance(tool, StructuredTool):
@@ -247,20 +229,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                 }
             }
         }
-    
-    def _prepare_request_params(self, prompt: str, messages: Optional[List[Dict[str, Any]]] = None,
-                                file_messages: Optional[List] = None, stream: bool = False) -> Dict[str, Any]:
-        """Prepare request parameters for Responses API."""
-        input_text = self._convert_messages_to_input(messages, prompt, file_messages)
-        self._tools_config = self._build_tools_config(self._vector_store_ids, stream=stream)
-        
-        request_params = {"model": self.agent.model, "input": input_text}
-        if stream:
-            request_params["stream"] = True
-        if self._tools_config:
-            request_params["tools"] = self._tools_config
-        
-        return request_params
     
     def _convert_messages_to_input(
         self,
@@ -292,23 +260,14 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             if current_blocks:
                 self._add_to_conversation_history("user", current_blocks)
         
-        # Build input with system message (conversation history) and current prompt
         input_parts = []
-        
-        # Add original system message if present
-        if self._original_system_message:
-            input_parts.append(self._original_system_message)
-        
-        # Add conversation history as system message
+        input_parts.append(current_prompt)
+        # Add conversation history as system message after current prompt
         sections_dict = self._get_conversation_history_sections_dict()
         if sections_dict:
             system_content = json.dumps(sections_dict, ensure_ascii=False)
-            # For Response API string input, include as system message JSON
             system_msg = json.dumps({"role": "system", "content": system_content}, ensure_ascii=False)
             input_parts.append(system_msg)
-        
-        # Add current prompt
-        input_parts.append(current_prompt)
         
         return "\n\n".join(input_parts) if input_parts else current_prompt
     
