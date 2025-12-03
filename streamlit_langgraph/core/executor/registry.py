@@ -40,14 +40,32 @@ class ExecutorRegistry:
         has_hitl = agent.human_in_loop
         use_response_api = has_native and not has_hitl
         
-        if executor_key not in st.session_state.agent_executors:
+        # Check if executor exists and is the correct type for this agent's configuration
+        existing_executor = st.session_state.agent_executors.get(executor_key)
+        executor_needs_recreation = False
+        
+        if existing_executor is not None:
+            # Verify the existing executor is the correct type for current agent configuration
+            is_response_api = isinstance(existing_executor, ResponseAPIExecutor)
+            is_create_agent = isinstance(existing_executor, CreateAgentExecutor)
+            
+            # Recreate if executor type doesn't match current agent configuration
+            if use_response_api and not is_response_api:
+                executor_needs_recreation = True
+            elif not use_response_api and not is_create_agent:
+                executor_needs_recreation = True
+            # Also recreate if the agent configuration changed (different agent object)
+            elif hasattr(existing_executor, 'agent') and existing_executor.agent.name != agent.name:
+                executor_needs_recreation = True
+        
+        if executor_key not in st.session_state.agent_executors or executor_needs_recreation:
             if use_response_api:
                 executor = ResponseAPIExecutor(agent, tools=tools)
             else:
                 executor = CreateAgentExecutor(agent, tools=tools)
             st.session_state.agent_executors[executor_key] = executor
         else:
-            executor = st.session_state.agent_executors[executor_key]
+            executor = existing_executor
             
             if isinstance(executor, CreateAgentExecutor) and hasattr(executor, 'tools'):
                 custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
