@@ -1,5 +1,6 @@
 """CreateAgentExecutor for LangChain agents."""
 
+import json
 from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
@@ -9,9 +10,10 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langgraph.types import Command
 
 from ...agent import Agent
+from .conversation_history import ConversationHistoryMixin
 
 
-class CreateAgentExecutor:
+class CreateAgentExecutor(ConversationHistoryMixin):
     """
     Executor that builds LangChain agents using `create_agent`.
     
@@ -19,7 +21,7 @@ class CreateAgentExecutor:
     (OpenAI, Anthropic, Google, etc.) through LangChain's chat model interface.
     
     This executor is used for:
-    - ChatCompletion API (when native OpenAI tools are not enabled)
+    - create_agent: LangChain's create_agent function
     - HITL (Human-in-the-Loop) scenarios (even if native tools are enabled, HITL requires this executor)
     - Multi-provider support (Anthropic, Google, etc.)
     
@@ -41,6 +43,7 @@ class CreateAgentExecutor:
         self.agent = agent
         self.agent_obj = None
         self._last_vector_store_ids = None
+        self._init_conversation_history(agent)
         
         if tools is not None:
             self.tools = tools
@@ -81,6 +84,8 @@ class CreateAgentExecutor:
             else:
                 out = self._invoke_agent(llm_client, prompt, messages, file_messages, config={})
                 result_text = self._extract_response_text(out)
+                blocks = self._convert_message_to_blocks(result_text)
+                self._add_to_conversation_history("assistant", blocks)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
                 
         except Exception as e:
@@ -116,6 +121,8 @@ class CreateAgentExecutor:
                 if isinstance(out, dict) and "__interrupt__" in out:
                     return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 result_text = self._extract_response_text(out)
+                blocks = self._convert_message_to_blocks(result_text)
+                self._add_to_conversation_history("assistant", blocks)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
 
         except Exception as e:
@@ -149,6 +156,8 @@ class CreateAgentExecutor:
             return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
         
         result_text = self._extract_response_text(out)
+        blocks = self._convert_message_to_blocks(result_text)
+        self._add_to_conversation_history("assistant", blocks)
         return {"role": "assistant", "content": result_text, "agent": self.agent.name}
     
     def detect_interrupt_in_stream(
@@ -182,7 +191,7 @@ class CreateAgentExecutor:
         Invoke the agent (non-streaming).
 
         Args:
-            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
+            llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
@@ -212,7 +221,7 @@ class CreateAgentExecutor:
         Invoke the agent with streaming support.
         
         Args:
-            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
+            llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state
@@ -253,10 +262,11 @@ class CreateAgentExecutor:
         
         all_tools = list(self.tools) if self.tools else []
         
+        # Use original system message (conversation history will be in input messages)
         agent_kwargs = {
             "model": llm_chat_model,
             "tools": all_tools,
-            "system_prompt": self.agent.system_message,
+            "system_prompt": self._original_system_message,
         }
         
         if middleware:
@@ -276,99 +286,67 @@ class CreateAgentExecutor:
         file_messages: Optional[List] = None) -> List[BaseMessage]:
         """
         Convert workflow_state messages to LangChain message format.
+        Conversation history is added as system message in input, current prompt is also included.
         
         Args:
             messages: List of message dicts from workflow_state
-            current_prompt: Current user prompt (will be added if not already in messages)
+            current_prompt: Current user prompt
             file_messages: Optional file messages (OpenAI format) to include
             
         Returns:
-            List of LangChain BaseMessage objects
+            List containing system message (conversation history) and current prompt as HumanMessage
         """
+        # Update conversation history from messages
+        self._update_conversation_history_from_messages(messages, file_messages)
+        
+        # Add current prompt to conversation history if not already there
+        if not self._conversation_history or not (
+            self._conversation_history[-1].role == "user" and
+            any(block.content == current_prompt for block in self._conversation_history[-1].blocks)
+        ):
+            current_blocks = self._convert_message_to_blocks(current_prompt)
+            if current_blocks:
+                self._add_to_conversation_history("user", current_blocks)
+        
         langchain_messages: List[BaseMessage] = []
-        
-        if messages:
-            for msg in messages:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                
-                if not content:
-                    continue
-                
-                if role == "user":
-                    langchain_messages.append(HumanMessage(content=content))
-                elif role == "assistant":
-                    langchain_messages.append(AIMessage(content=content))
-                elif role == "system":
-                    langchain_messages.append(SystemMessage(content=content))
-        
-        if file_messages:
-            for file_msg in file_messages:
-                if isinstance(file_msg, dict):
-                    role = file_msg.get("role", "user")
-                    content = file_msg.get("content", "")
-                    if role == "user" and content:
-                        if isinstance(content, list):
-                            text_parts = []
-                            for block in content:
-                                if isinstance(block, dict):
-                                    if block.get("type") == "text":
-                                        text_parts.append(block.get("text", ""))
-                                    elif block.get("type") == "input_file":
-                                        text_parts.append(f"[File: {block.get('file_id', 'unknown')}]")
-                            content = " ".join(text_parts) if text_parts else str(content)
-                        langchain_messages.append(HumanMessage(content=content))
-        
-        if not langchain_messages or not isinstance(langchain_messages[-1], HumanMessage) or langchain_messages[-1].content != current_prompt:
-            langchain_messages.append(HumanMessage(content=current_prompt))
+        langchain_messages.append(HumanMessage(content=current_prompt))
+        # Add conversation history as system message after current prompt
+        sections_dict = self._get_conversation_history_sections_dict()
+        if sections_dict:
+            system_content = json.dumps(sections_dict, ensure_ascii=False)
+            langchain_messages.append(SystemMessage(content=system_content))
         
         return langchain_messages
     
+    
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
+        from .conversation_history import extract_text_from_content
+        
         if isinstance(out, dict):
             if 'output' in out:
                 output = out['output']
                 if output:
-                    return str(output)
+                    return extract_text_from_content(output)
             
             if 'messages' in out and out['messages']:
                 messages = out['messages']
                 for msg in reversed(messages):
                     if isinstance(msg, AIMessage):
                         if hasattr(msg, 'content') and msg.content:
-                            if isinstance(msg.content, str):
-                                return msg.content
-                            elif isinstance(msg.content, list):
-                                text_parts = []
-                                for block in msg.content:
-                                    if isinstance(block, dict) and block.get('type') == 'text':
-                                        text_parts.append(block.get('text', ''))
-                                    elif isinstance(block, str):
-                                        text_parts.append(block)
-                                if text_parts:
-                                    return ''.join(text_parts)
+                            return extract_text_from_content(msg.content)
                         return str(msg) if msg else ""
                 
                 last_message = messages[-1]
                 if hasattr(last_message, 'content'):
-                    content = last_message.content
-                    if isinstance(content, str):
-                        return content
-                    elif isinstance(content, list):
-                        return ''.join(str(c) for c in content if c)
+                    return extract_text_from_content(last_message.content)
                 return str(last_message) if last_message else ""
         
         elif isinstance(out, str):
             return out
         
         elif hasattr(out, 'content'):
-            content = out.content
-            if isinstance(content, str):
-                return content
-            elif isinstance(content, list):
-                return ''.join(str(c) for c in content if c)
-            return str(content) if content else ""
+            return extract_text_from_content(out.content)
         
         result = str(out) if out else ""
         return result

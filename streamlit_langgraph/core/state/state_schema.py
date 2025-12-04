@@ -1,7 +1,8 @@
 # Single source of truth for all agents and workflows.
 
 import operator
-from typing import Any, Dict, List, Optional, TypedDict
+import uuid
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from typing_extensions import Annotated
 
 
@@ -167,6 +168,23 @@ class WorkflowStateManager:
             if block.get("category") == "text":
                 return block.get("content", "")
         return ""
+    
+    @staticmethod
+    def get_or_create_workflow_config(state: "WorkflowState", executor_key: str) -> Tuple[Dict[str, Any], str]:
+        """Get or create workflow thread_id and config."""
+        if "metadata" not in state:
+            state["metadata"] = {}
+        if "executors" not in state["metadata"]:
+            state["metadata"]["executors"] = {}
+        
+        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
+        if not workflow_thread_id:
+            workflow_thread_id = str(uuid.uuid4())
+            state["metadata"]["workflow_thread_id"] = workflow_thread_id
+        
+        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
+        config = {"configurable": {"thread_id": workflow_thread_id}}
+        return config, workflow_thread_id
 
 class WorkflowState(TypedDict):
     """

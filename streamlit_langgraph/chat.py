@@ -108,6 +108,15 @@ class LangGraphChat:
             st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []
+        if "uploaded_files_set" not in st.session_state:
+            st.session_state.uploaded_files_set = set()
+    
+    def _get_workflow_state(self) -> Dict[str, Any]:
+        """Get workflow state with metadata initialization (cached access)."""
+        workflow_state = st.session_state.workflow_state
+        if "metadata" not in workflow_state:
+            workflow_state["metadata"] = {}
+        return workflow_state
 
     def run(self):
         """Run the main chat interface."""
@@ -156,7 +165,7 @@ class LangGraphChat:
         if not display_sections:
             self.display_manager.render_welcome_message()
 
-        workflow_state = st.session_state.workflow_state
+        workflow_state = self._get_workflow_state()
         if HITLUtils.has_pending_interrupts(workflow_state):
             interrupt_handled = self.interrupt_handler.handle_pending_interrupts(workflow_state)
             if interrupt_handled:
@@ -177,21 +186,18 @@ class LangGraphChat:
             prompt = str(chat_input)
             files = []
 
-        if files:
-            self._process_file_uploads(files)
-        
-        workflow_state = st.session_state.workflow_state
-        if "metadata" not in workflow_state:
-            workflow_state["metadata"] = {}
-        
+        # Add user message to state
         self.state_manager.add_user_message(prompt)
-        
         section = self.display_manager.add_section("user")
         section.update("text", prompt)
         for uploaded_file in files:
             section.update("text", f"\n:material/attach_file: `{uploaded_file.name}`")
         section.stream()
-
+        
+        if files:
+            with st.spinner("Processing files..."):
+                self._process_file_uploads(files)
+        
         self.state_manager.clear_hitl_state()
         
         with st.spinner("Thinking..."):
@@ -221,58 +227,61 @@ class LangGraphChat:
                 response["agent"]
             )
     
-    def _update_file_messages_in_state(self):
+    def _update_file_messages_in_state(self, force: bool = False):
         """Update file messages and vector store IDs in workflow state metadata."""
+        workflow_state = self._get_workflow_state()
+        
+        # Check if file messages have changed (skip if unchanged and not forced)
+        if not force:
+            current_file_messages = self.file_handler.get_openai_input_messages()
+            cached_messages = workflow_state["metadata"].get("file_messages")
+            if cached_messages == current_file_messages:
+                return  # No change, skip update
+        
         file_messages = self.file_handler.get_openai_input_messages()
         vector_store_ids = self.file_handler.get_vector_store_ids()
-        workflow_state = st.session_state.workflow_state
-        if "metadata" not in workflow_state:
-            workflow_state["metadata"] = {}
         workflow_state["metadata"]["file_messages"] = file_messages
         workflow_state["metadata"]["vector_store_ids"] = vector_store_ids
     
     def _get_file_messages_from_state(self):
         """Get file messages and vector store IDs from workflow state."""
-        workflow_state = st.session_state.workflow_state
-        file_messages = workflow_state.get("metadata", {}).get("file_messages")
-        vector_store_ids = workflow_state.get("metadata", {}).get("vector_store_ids")
-        return file_messages, vector_store_ids
+        workflow_state = self._get_workflow_state()
+        metadata = workflow_state["metadata"]
+        return metadata.get("file_messages"), metadata.get("vector_store_ids")
 
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
         for uploaded_file in files:
-            if uploaded_file not in st.session_state.uploaded_files:
+            # Use set for O(1) lookup instead of O(n) list membership check
+            file_id = getattr(uploaded_file, 'file_id', None) or uploaded_file.name
+            if file_id not in st.session_state.uploaded_files_set:
                 file_info = self.file_handler.track(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
-                self.state_manager.update_workflow_state({
-                    "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
-                })
+                st.session_state.uploaded_files_set.add(file_id)
+                # Optimize dict creation
+                file_dict = {k: v for k, v in file_info.__dict__.items() if k != "content"}
+                self.state_manager.update_workflow_state({"files": [file_dict]})
         
-        self._update_file_messages_in_state()
+        self._update_file_messages_in_state(force=True)
 
     def _generate_response(self, prompt: str) -> Dict[str, Any]:
         """Generate response using the configured workflow or dynamically selected agents."""
         if self.workflow:
             return self._run_workflow(prompt)
         elif self.agent_manager.agents:
-            agent = list(self.agent_manager.agents.values())[0]
+            agent = next(iter(self.agent_manager.agents.values()))
             return self._run_agent(prompt, agent)
         return {"role": "assistant", "content": "", "agent": "system"}
     
     def _run_workflow(self, prompt: str) -> Dict[str, Any]:
         """Run the multiagent workflow and orchestrate UI updates."""
-        workflow_state = st.session_state.workflow_state
-        if "metadata" not in workflow_state:
-            workflow_state["metadata"] = {}
+        workflow_state = self._get_workflow_state()
         workflow_state["metadata"]["stream"] = self.config.stream
         
         self._update_file_messages_in_state()
         
-        def display_callback(msg):
-            self.display_manager.render_workflow_message(msg)
-        
         result_state = self.workflow_executor.execute_workflow(
-            self.workflow, display_callback=display_callback
+            self.workflow, display_callback=self.display_manager.render_workflow_message
         )
 
         if HITLUtils.has_pending_interrupts(result_state):

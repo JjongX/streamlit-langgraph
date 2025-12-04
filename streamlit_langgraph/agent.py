@@ -41,6 +41,7 @@ class Agent:
     interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None
     hitl_description_prefix: Optional[str] = "Tool execution pending approval"
     enable_logging: bool = False
+    conversation_history_mode: str = "filtered"  # Options: "full", "filtered", "disable"
 
     def __post_init__(self):
         """Post-initialization processing and validation."""
@@ -54,6 +55,13 @@ class Agent:
             self.allow_web_search = True
         if "image_generation" in self.tools:
             self.allow_image_generation = True
+        
+        valid_modes = ["full", "filtered", "disable"]
+        if self.conversation_history_mode not in valid_modes:
+            raise ValueError(
+                f"conversation_history_mode must be one of {valid_modes}, "
+                f"got '{self.conversation_history_mode}'"
+            )
         
         if self.enable_logging:
             self._setup_logging()
@@ -110,6 +118,7 @@ class Agent:
             "interrupt_on": self.interrupt_on,
             "hitl_description_prefix": self.hitl_description_prefix,
             "enable_logging": self.enable_logging,
+            "conversation_history_mode": self.conversation_history_mode,
         }
     
     @classmethod

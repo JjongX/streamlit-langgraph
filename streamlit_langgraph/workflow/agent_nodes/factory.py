@@ -40,20 +40,8 @@ class AgentNodeBase:
                 mcp_tools = mcp_manager.get_tools()
             executor.tools = custom_tools + mcp_tools
         
-        if "metadata" not in state:
-            state["metadata"] = {}
-        if "executors" not in state["metadata"]:
-            state["metadata"]["executors"] = {}
-        
-        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
-        if not workflow_thread_id:
-            workflow_thread_id = str(uuid.uuid4())
-            state["metadata"]["workflow_thread_id"] = workflow_thread_id
-        
         executor_key = f"workflow_executor_{executor.agent.name}"
-        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
-        
-        config = {"configurable": {"thread_id": workflow_thread_id}}
+        config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
         llm_client = AgentManager.get_llm_client(agent)
         conversation_messages = state.get("messages", [])
@@ -117,6 +105,8 @@ class AgentNodeFactory:
                                      allow_parallel: bool = False,
                                      delegation_mode: str = "handoff") -> Callable:
         """Create a supervisor agent node with structured routing."""
+        from .tool_calling_delegation import ToolCallingDelegation  # lazy import to avoid circular import
+
         if delegation_mode == "handoff":
             from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
             
@@ -137,15 +127,16 @@ class AgentNodeFactory:
                 response, routing_decision = HandoffDelegation.execute_supervisor_with_routing(
                     supervisor, state, supervisor_instructions, workers, allow_parallel
                 )
+                # Always create message
+                messages_update = [create_message_with_id("assistant", response, supervisor.name)]
                 return {
                     "current_agent": supervisor.name,
-                    "messages": [create_message_with_id("assistant", response, supervisor.name)],
+                    "messages": messages_update,
                     "agent_outputs": {supervisor.name: response},
                     "metadata": WorkflowStateManager.merge_metadata(state.get("metadata", {}), {"routing_decision": routing_decision})
                 }
             return supervisor_agent_node
         else:  # tool calling delegation mode
-            from .tool_calling_delegation import ToolCallingDelegation  # lazy import to avoid circular import
             
             tool_agents_map = {agent.name: agent for agent in workers}
             def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
