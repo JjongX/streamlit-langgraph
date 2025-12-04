@@ -2,13 +2,11 @@
 
 import json
 import uuid
-import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
-from openai import OpenAI
 
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
@@ -84,31 +82,36 @@ class HandoffDelegation:
     def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
                                            input_message: str, workers: List[Agent],
                                            allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
-        """Execute supervisor using ResponseAPIExecutor approach with OpenAI function calling."""
+        """Execute supervisor using ResponseAPIExecutor approach with Response API function calling."""
         if not workers:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
-        tools = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
+        delegation_tool = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
+        if not delegation_tool:
+            content = AgentNodeBase.execute_agent(agent, state, input_message)
+            return content, {"action": "finish"}
         
-        messages = []
-        if agent.system_message:
-            messages.append({"role": "system", "content": agent.system_message})
-        messages.append({"role": "user", "content": input_message})
+        llm_client = AgentManager.get_llm_client(agent)
         
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
+        
+        # Update vector_store_ids before invoking
+        executor._update_vector_store_ids(llm_client)
+        
+        # Extract conversation history and file messages from workflow state
+        conversation_messages = state.get("messages", [])
+        file_messages = state.get("metadata", {}).get("file_messages")
         with st.spinner(f"🤖 {agent.name} is working..."):
-            response = client.chat.completions.create(
-                model=agent.model,
-                messages=messages,
-                temperature=agent.temperature,
-                tools=tools if tools else None,
-                tool_choice="auto" if tools else None
+            out = executor._invoke_response_api(
+                prompt=input_message,
+                messages=conversation_messages,
+                file_messages=file_messages,
+                tools=delegation_tool if delegation_tool else None
             )
         
-        message = response.choices[0].message
-        content = message.content or ""
-        routing_decision = HandoffDelegation._extract_openai_routing_decision(message, content)
+        # Extract routing decision from Response API output
+        routing_decision = HandoffDelegation._extract_response_api_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
     
     @staticmethod
@@ -194,37 +197,36 @@ class HandoffDelegation:
     
     @staticmethod
     def _build_openai_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
-        """Build OpenAI function tool definition for delegation."""
+        """Build OpenAI function tool definition for delegation in Response API format."""
         if not workers:
             return []
         
         worker_name_options, worker_desc_parts = HandoffDelegation._build_worker_options(workers, allow_parallel)
         
+        # Return Response API format
         return [{
             "type": "function",
-            "function": {
-                "name": "delegate_task",
-                "description": "Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "worker_name": {
-                            "type": "string",
-                            "enum": worker_name_options,
-                            "description": f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}"
-                        },
-                        "task_description": {
-                            "type": "string",
-                            "description": "Clear description of what the worker should do"
-                        },
-                        "priority": {
-                            "type": "string",
-                            "enum": ["high", "medium", "low"],
-                            "description": "Priority level of this task"
-                        }
+            "name": "delegate_task",
+            "description": "Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "worker_name": {
+                        "type": "string",
+                        "enum": worker_name_options,
+                        "description": f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}"
                     },
-                    "required": ["worker_name", "task_description"]
-                }
+                    "task_description": {
+                        "type": "string",
+                        "description": "Clear description of what the worker should do"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                        "description": "Priority level of this task"
+                    }
+                },
+                "required": ["worker_name", "task_description"]
             }
         }]
     
@@ -263,7 +265,7 @@ class HandoffDelegation:
     
     @staticmethod
     def _extract_openai_routing_decision(message, content: str) -> Tuple[Dict[str, Any], str]:
-        """Extract routing decision from OpenAI function call response."""
+        """Extract routing decision from OpenAI ChatCompletion function call response."""
         routing_decision = {"action": "finish"}
         if hasattr(message, 'tool_calls') and message.tool_calls:
             tool_call = message.tool_calls[0]
@@ -278,6 +280,86 @@ class HandoffDelegation:
                 delegation_text = f"\n\n**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
                 content = content + delegation_text if content else delegation_text[2:]
         return routing_decision, content
+    
+    @staticmethod
+    def _extract_response_api_routing_decision(out: Any, prompt: str) -> Tuple[Dict[str, Any], str]:
+        """Extract routing decision from Response API output."""
+        routing_decision = {"action": "finish"}
+        content = ""
+        
+        # Response API output is a list of items
+        output_items = out.get("output", []) if isinstance(out, dict) else []
+        
+        # Look for function_call items in the output
+        for item in output_items:
+            # Handle both dict format and object format
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            
+            if item_type == "function_call":
+                # Extract function call details
+                if isinstance(item, dict):
+                    function_name = item.get("name")
+                    arguments = item.get("arguments", "{}")
+                else:
+                    function_name = getattr(item, "name", None)
+                    arguments = getattr(item, "arguments", "{}")
+                
+                if function_name == "delegate_task":
+                    # Parse arguments
+                    if isinstance(arguments, str):
+                        args = json.loads(arguments)
+                    else:
+                        args = arguments
+                    
+                    routing_decision = {
+                        "action": "delegate",
+                        "target_worker": args.get("worker_name"),
+                        "task_description": args.get("task_description"),
+                        "priority": args.get("priority", "medium")
+                    }
+                    delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
+                    content = delegation_text[2:] if not content else content + delegation_text
+                    return routing_decision, content
+            
+            # Also check for output_text and message items for content
+            elif item_type == "output_text":
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content", "")
+                else:
+                    text = getattr(item, "text", "") or getattr(item, "content", "")
+                if text and not content:
+                    content = str(text)
+            elif item_type == "message":
+                # Response API message items contain content blocks (ResponseOutputText objects)
+                if isinstance(item, dict):
+                    content_blocks = item.get("content", [])
+                else:
+                    content_blocks = getattr(item, "content", [])
+                
+                # Extract text from content blocks
+                # Blocks can be ResponseOutputText objects (with .text attribute) or dicts
+                if content_blocks and not content:
+                    text_parts = []
+                    for block in content_blocks:
+                        # Handle ResponseOutputText objects (from OpenAI SDK)
+                        if hasattr(block, 'text'):
+                            text_parts.append(str(block.text))
+                        # Handle dict format
+                        elif isinstance(block, dict):
+                            block_type = block.get("type")
+                            if block_type == "output_text":
+                                text_parts.append(block.get("text", ""))
+                            elif block_type == "text":
+                                text_parts.append(block.get("text", ""))
+                            elif "text" in block:
+                                text_parts.append(block.get("text", ""))
+                        # Handle string format
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    if text_parts:
+                        content = ''.join(text_parts)
+        
+        return routing_decision, content or ""
     
     @staticmethod
     def _extract_langchain_routing_decision(out: Any, prompt: str) -> Tuple[Dict[str, Any], str]:

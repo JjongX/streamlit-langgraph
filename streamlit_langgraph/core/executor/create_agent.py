@@ -21,7 +21,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
     (OpenAI, Anthropic, Google, etc.) through LangChain's chat model interface.
     
     This executor is used for:
-    - ChatCompletion API (when native OpenAI tools are not enabled)
+    - create_agent: LangChain's create_agent function
     - HITL (Human-in-the-Loop) scenarios (even if native tools are enabled, HITL requires this executor)
     - Multi-provider support (Anthropic, Google, etc.)
     
@@ -191,7 +191,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         Invoke the agent (non-streaming).
 
         Args:
-            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
+            llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
@@ -221,7 +221,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         Invoke the agent with streaming support.
         
         Args:
-            llm_client: A LangChain chat model instance (ChatCompletion API, not Response API)
+            llm_client: A LangChain chat model instance
             prompt: User's question/prompt
             file_messages: Optional file messages (OpenAI format)
             messages: Conversation history from workflow_state

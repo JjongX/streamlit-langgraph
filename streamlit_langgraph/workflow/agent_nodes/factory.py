@@ -139,9 +139,11 @@ class AgentNodeFactory:
                 response, routing_decision = HandoffDelegation.execute_supervisor_with_routing(
                     supervisor, state, supervisor_instructions, workers, allow_parallel
                 )
+                # Always create message
+                messages_update = [create_message_with_id("assistant", response, supervisor.name)]
                 return {
                     "current_agent": supervisor.name,
-                    "messages": [create_message_with_id("assistant", response, supervisor.name)],
+                    "messages": messages_update,
                     "agent_outputs": {supervisor.name: response},
                     "metadata": WorkflowStateManager.merge_metadata(state.get("metadata", {}), {"routing_decision": routing_decision})
                 }

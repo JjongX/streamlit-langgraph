@@ -109,23 +109,32 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     def _invoke_response_api(
         self, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
-        file_messages: Optional[List] = None
+        file_messages: Optional[List] = None,
+        tools: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Invoke the Response API."""
-        return self._call_response_api(prompt, stream=False, messages=messages, file_messages=file_messages)
+        return self._call_response_api(
+            prompt, stream=False, messages=messages, file_messages=file_messages,
+            tools=tools
+        )
     
     def _stream_response_api(
         self, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
-        file_messages: Optional[List] = None
+        file_messages: Optional[List] = None,
+        tools: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Stream the Response API."""
-        return self._call_response_api(prompt, stream=True, messages=messages, file_messages=file_messages)
+        return self._call_response_api(
+            prompt, stream=True, messages=messages, file_messages=file_messages,
+            tools=tools
+        )
     
     def _call_response_api(
         self, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
-        file_messages: Optional[List] = None
+        file_messages: Optional[List] = None,
+        tools: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
         Call the Response API (streaming or non-streaming).
@@ -135,16 +144,22 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             stream: Whether to stream the response
             messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
+            tools: Optional additional tools (e.g., delegation tool)
             
         Returns:
-            Dict with 'role', 'content', 'agent', and optionally 'stream' key
+            Dict with 'role', 'content', 'agent', and optionally 'stream' or 'output' key
         """
-        input_text = self._convert_messages_to_input(messages, prompt, file_messages)
-        tools_config = self._build_tools_config(self._vector_store_ids, stream=stream)
+        api_input = self._convert_messages_to_input(messages, prompt, file_messages)
+        
+        # Build tools config
+        if tools:
+            tools_config = self._build_tools_config_for_delegation(tools)
+        else:
+            tools_config = self._build_base_tools_config(self._vector_store_ids, stream=stream)
         
         response = self.openai_client.responses.create(
             model=self.agent.model,
-            input=input_text,
+            input=api_input,
             instructions=self._original_system_message,
             temperature=self.agent.temperature,
             tools=tools_config if tools_config else [],
@@ -161,6 +176,11 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                 "stream": response
             }
         else:
+            # For delegation scenarios (when tools are provided), return output items directly
+            if tools:
+                return {"output": response.output if hasattr(response, 'output') else []}
+            
+            # For regular execution, extract content and update history
             content = self._extract_response_content(response)
             blocks = self._convert_message_to_blocks(content)
             self._add_to_conversation_history("assistant", blocks)
@@ -170,8 +190,12 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                 "agent": self.agent.name
             }
     
-    def _build_tools_config(self, vector_store_ids: Optional[List[str]] = None, stream: bool = True) -> List[Dict[str, Any]]:
-        """Build tools configuration for OpenAI Response API."""
+    def _build_base_tools_config(
+        self, 
+        vector_store_ids: Optional[List[str]] = None, 
+        stream: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Build base tools configuration (native OpenAI tools, MCP tools, custom tools)."""
         from ...utils import MCPToolManager
 
         tools = []
@@ -199,13 +223,25 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                     tools.append(openai_tool)
         
         return tools
-    
+        
     def _convert_langchain_tool_to_openai(self, tool: Any) -> Dict[str, Any]:
-        """Convert a LangChain StructuredTool to OpenAI function format."""
+        """Convert a LangChain StructuredTool to Response API format."""
         from langchain_core.tools import StructuredTool
         
         if not isinstance(tool, StructuredTool):
             if isinstance(tool, dict) and "type" in tool:
+                # If already in Response API format, return as-is
+                if "name" in tool and tool.get("type") == "function":
+                    return tool
+                # If in ChatCompletion format, convert to Response API format
+                if "function" in tool and tool.get("type") == "function":
+                    function_def = tool["function"]
+                    return {
+                        "type": "function",
+                        "name": function_def.get("name"),
+                        "description": function_def.get("description", ""),
+                        "parameters": function_def.get("parameters", {})
+                    }
                 return tool
             return None
         
@@ -218,16 +254,15 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             properties = schema_dict.get("properties", {})
             required = schema_dict.get("required", [])
         
+        # Return Response API format directly (flattened, not nested)
         return {
             "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description or "",
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required
-                }
+            "name": tool.name,
+            "description": tool.description or "",
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required
             }
         }
     
@@ -236,10 +271,10 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         messages: Optional[List[Dict[str, Any]]],
         current_prompt: str,
         file_messages: Optional[List] = None
-    ) -> str:
+    ) -> List[Dict[str, Any]]:
         """
-        Convert workflow_state messages to input string.
-        Conversation history is added as system message in input, current prompt is also included.
+        Convert workflow_state messages to Response API input format.
+        Response API uses a list of message dicts with 'role' and 'content' keys.
         
         Args:
             messages: List of message dicts from workflow_state
@@ -247,42 +282,27 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             file_messages: Optional file messages (OpenAI format) to include
             
         Returns:
-            Input string with system message (conversation history) and current prompt
+            List of messages in Response API input format
         """
+        input_list = []
+        
         # Update conversation history from messages
         self._update_conversation_history_from_messages(messages, file_messages)
         
-        # Add current prompt to conversation history if not already there
-        if not self._conversation_history or not (
-            self._conversation_history[-1].role == "user" and
-            any(block.content == current_prompt for block in self._conversation_history[-1].blocks)
-        ):
-            current_blocks = self._convert_message_to_blocks(current_prompt)
-            if current_blocks:
-                self._add_to_conversation_history("user", current_blocks)
-        
-        input_parts = []
-        input_parts.append(current_prompt)
-        # Add conversation history as system message after current prompt
+        # Add current prompt as user message
+        input_list.append({"role": "user", "content": current_prompt})
+
+        # Add conversation history as system message if available
         sections_dict = self._get_conversation_history_sections_dict()
         if sections_dict:
             system_content = json.dumps(sections_dict, ensure_ascii=False)
-            system_msg = json.dumps({"role": "system", "content": system_content}, ensure_ascii=False)
-            input_parts.append(system_msg)
-        
-        return "\n\n".join(input_parts) if input_parts else current_prompt
+            input_list.append({"role": "system", "content": system_content})
+
+        return input_list
     
     
     def _extract_response_content(self, response: Any) -> str:
-        """
-        Extract text content from OpenAI Response API response.
-        
-        Args:
-            response: OpenAI Response API response object
-            
-        Returns:
-            Extracted text content
-        """
+        """Extract text content from OpenAI Response API response."""
         if not response:
             return ""
         
@@ -317,3 +337,42 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         if current_vector_ids != self._vector_store_ids:
             self._vector_store_ids = current_vector_ids
             self._tools_config = None
+    
+    def _build_tools_config_for_delegation(
+        self, additional_tools: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Build tools configuration for Response API with delegation support.
+        
+        Response API expects tools in format:
+        {
+            "type": "function",
+            "name": "function_name",
+            "description": "...",
+            "parameters": {...}
+        }
+        
+        Args:
+            additional_tools: Additional tools to include (e.g., delegation tool in Response API format)
+            
+        Returns:
+            List of tools in Response API format
+        """
+        tools = []
+        
+        if additional_tools:
+            tools_to_process = additional_tools if isinstance(additional_tools, list) else [additional_tools]
+            for tool in tools_to_process:
+                if isinstance(tool, dict):
+                    # If already in Response API format, use as-is
+                    if "name" in tool and tool.get("type") == "function":
+                        tools.append(tool)
+        
+        # Add base tools (native OpenAI tools, MCP tools, custom tools)
+        base_tools = self._build_base_tools_config(
+            vector_store_ids=None,
+            stream=False  # Delegation doesn't use streaming
+        )
+        tools.extend(base_tools)
+        
+        return tools

@@ -151,6 +151,8 @@ class WorkflowExecutor:
         if "pending_interrupts" in accumulated_state.get("metadata", {}):
             return accumulated_state
         
+        # Ensure final state is displayed
+        display_callback(accumulated_state)
         return accumulated_state
     
     def _apply_state_update(self, accumulated_state: WorkflowState, state_update: Dict[str, Any]) -> None:
