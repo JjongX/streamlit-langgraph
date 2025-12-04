@@ -3,7 +3,7 @@
 from typing import List, Optional
 
 # Supervisor Prompt Templates
-SUPERVISOR_PROMPT_TEMPLATE = """You are {role}. {instructions}
+SUPERVISOR_PROMPT_TEMPLATE = """You are {role}.
 
 You are supervising the following workers: {worker_list}
 
@@ -59,7 +59,6 @@ class SupervisorPromptBuilder:
         outputs_text = "\n".join(worker_outputs) if worker_outputs else "No worker outputs yet"
         return SUPERVISOR_PROMPT_TEMPLATE.format(
             role=role,
-            instructions=instructions,
             user_query=user_query,
             worker_list=worker_list,
             worker_outputs=outputs_text

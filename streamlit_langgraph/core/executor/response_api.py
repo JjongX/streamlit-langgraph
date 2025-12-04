@@ -172,6 +172,8 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     
     def _build_tools_config(self, vector_store_ids: Optional[List[str]] = None, stream: bool = True) -> List[Dict[str, Any]]:
         """Build tools configuration for OpenAI Response API."""
+        from ...utils import MCPToolManager
+
         tools = []
         vs_ids = vector_store_ids or self._vector_store_ids
         
@@ -185,7 +187,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             tools.append({"type": "image_generation", "partial_images": 3} if stream else {"type": "image_generation"})
         
         if self.agent.mcp_servers:
-            from ...utils import MCPToolManager
             mcp_manager = MCPToolManager()
             mcp_manager.add_servers(self.agent.mcp_servers)
             mcp_tools = mcp_manager.get_openai_tools()

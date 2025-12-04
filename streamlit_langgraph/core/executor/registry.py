@@ -79,16 +79,7 @@ class ExecutorRegistry:
         return executor
     
     def create_for_hitl(self, agent: Agent, executor_key: Optional[str] = None) -> Any:
-        """
-        Create executor for HITL scenarios.
-        
-        Args:
-            agent: Agent configuration
-            executor_key: Optional custom executor key
-            
-        Returns:
-            CreateAgentExecutor instance
-        """
+        """Create executor for HITL scenarios."""
         from .create_agent import CreateAgentExecutor
 
         if executor_key is None:
@@ -100,15 +91,7 @@ class ExecutorRegistry:
     
     @staticmethod
     def has_native_tools(agent: Agent) -> bool:
-        """
-        Check if agent has native OpenAI tools enabled.
-        
-        Args:
-            agent: Agent configuration
-            
-        Returns:
-            True if any native tool is enabled
-        """
+        """Check if agent has native OpenAI tools enabled."""
         return (
             agent.allow_file_search or
             agent.allow_code_interpreter or

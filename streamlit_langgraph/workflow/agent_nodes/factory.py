@@ -117,6 +117,8 @@ class AgentNodeFactory:
                                      allow_parallel: bool = False,
                                      delegation_mode: str = "handoff") -> Callable:
         """Create a supervisor agent node with structured routing."""
+        from .tool_calling_delegation import ToolCallingDelegation  # lazy import to avoid circular import
+
         if delegation_mode == "handoff":
             from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
             
@@ -145,7 +147,6 @@ class AgentNodeFactory:
                 }
             return supervisor_agent_node
         else:  # tool calling delegation mode
-            from .tool_calling_delegation import ToolCallingDelegation  # lazy import to avoid circular import
             
             tool_agents_map = {agent.name: agent for agent in workers}
             def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
