@@ -40,20 +40,8 @@ class AgentNodeBase:
                 mcp_tools = mcp_manager.get_tools()
             executor.tools = custom_tools + mcp_tools
         
-        if "metadata" not in state:
-            state["metadata"] = {}
-        if "executors" not in state["metadata"]:
-            state["metadata"]["executors"] = {}
-        
-        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
-        if not workflow_thread_id:
-            workflow_thread_id = str(uuid.uuid4())
-            state["metadata"]["workflow_thread_id"] = workflow_thread_id
-        
         executor_key = f"workflow_executor_{executor.agent.name}"
-        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
-        
-        config = {"configurable": {"thread_id": workflow_thread_id}}
+        config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
         llm_client = AgentManager.get_llm_client(agent)
         conversation_messages = state.get("messages", [])

@@ -5,6 +5,45 @@ from typing import Any, Dict, List, Optional
 from ...ui.display_manager import Block, Section, DisplayManager
 
 
+def extract_text_from_content(content: Any) -> str:
+    """Extract text from content."""
+    if not content:
+        return ""
+    
+    if isinstance(content, str):
+        return content
+    
+    if isinstance(content, list):
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                block_type = block.get('type')
+                if block_type == 'text':
+                    text_parts.append(block.get('text', ''))
+                elif 'text' in block:
+                    text_parts.append(block.get('text', ''))
+            elif isinstance(block, str):
+                text_parts.append(block)
+        return ''.join(text_parts) if text_parts else ""
+    
+    if isinstance(content, dict):
+        # Try common dict patterns
+        if 'text' in content:
+            return str(content.get('text', ''))
+        if 'content' in content:
+            return extract_text_from_content(content.get('content'))
+        # Try to extract from nested structures
+        return str(content) if content else ""
+    
+    # Handle objects with attributes
+    if hasattr(content, 'content'):
+        return extract_text_from_content(content.content)
+    if hasattr(content, 'text'):
+        return str(content.text) if content.text else ""
+    
+    return str(content) if content else ""
+
+
 class ConversationHistoryMixin:
     """Mixin class providing conversation history management for executors."""
     

@@ -321,49 +321,32 @@ class CreateAgentExecutor(ConversationHistoryMixin):
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
+        from .conversation_history import extract_text_from_content
+        
         if isinstance(out, dict):
             if 'output' in out:
                 output = out['output']
                 if output:
-                    return str(output)
+                    return extract_text_from_content(output)
             
             if 'messages' in out and out['messages']:
                 messages = out['messages']
                 for msg in reversed(messages):
                     if isinstance(msg, AIMessage):
                         if hasattr(msg, 'content') and msg.content:
-                            if isinstance(msg.content, str):
-                                return msg.content
-                            elif isinstance(msg.content, list):
-                                text_parts = []
-                                for block in msg.content:
-                                    if isinstance(block, dict) and block.get('type') == 'text':
-                                        text_parts.append(block.get('text', ''))
-                                    elif isinstance(block, str):
-                                        text_parts.append(block)
-                                if text_parts:
-                                    return ''.join(text_parts)
+                            return extract_text_from_content(msg.content)
                         return str(msg) if msg else ""
                 
                 last_message = messages[-1]
                 if hasattr(last_message, 'content'):
-                    content = last_message.content
-                    if isinstance(content, str):
-                        return content
-                    elif isinstance(content, list):
-                        return ''.join(str(c) for c in content if c)
+                    return extract_text_from_content(last_message.content)
                 return str(last_message) if last_message else ""
         
         elif isinstance(out, str):
             return out
         
         elif hasattr(out, 'content'):
-            content = out.content
-            if isinstance(content, str):
-                return content
-            elif isinstance(content, list):
-                return ''.join(str(c) for c in content if c)
-            return str(content) if content else ""
+            return extract_text_from_content(out.content)
         
         result = str(out) if out else ""
         return result

@@ -303,30 +303,30 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     
     def _extract_response_content(self, response: Any) -> str:
         """Extract text content from OpenAI Response API response."""
+        from .conversation_history import extract_text_from_content
+
         if not response:
             return ""
-        
+
         text_parts = []
-        
+        # Check response.items first (Response API format)
         if hasattr(response, 'items') and response.items:
             for item in response.items:
                 if hasattr(item, 'type') and item.type == 'output_text':
                     if hasattr(item, 'text'):
-                        text_parts.append(item.text)
+                        text_parts.append(str(item.text))
                     elif hasattr(item, 'content'):
-                        text_parts.append(str(item.content))
-        
+                        text_parts.append(extract_text_from_content(item.content))
+        # Check response.output_text
         if hasattr(response, 'output_text'):
-            if isinstance(response.output_text, str):
-                text_parts.append(response.output_text)
-            elif hasattr(response.output_text, 'text'):
-                text_parts.append(response.output_text.text)
+            text_parts.append(extract_text_from_content(response.output_text))
         
+        # Fallback to direct attributes
         if not text_parts:
             if hasattr(response, 'text'):
-                text_parts.append(response.text)
+                text_parts.append(str(response.text))
             elif hasattr(response, 'content'):
-                text_parts.append(str(response.content))
+                text_parts.append(extract_text_from_content(response.content))
         
         result = ''.join(text_parts) if text_parts else str(response) if response else ""
         return result

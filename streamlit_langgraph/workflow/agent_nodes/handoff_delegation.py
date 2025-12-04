@@ -1,7 +1,6 @@
 # Handoff delegation pattern implementation for agent nodes.
 
 import json
-import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
@@ -9,6 +8,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from ...agent import Agent, AgentManager
+from ...core.executor.conversation_history import extract_text_from_content
 from ...core.executor.registry import ExecutorRegistry
 from ...core.state import WorkflowState, WorkflowStateManager
 from .factory import AgentNodeBase
@@ -119,7 +119,7 @@ class HandoffDelegation:
                                            input_message: str, workers: List[Agent],
                                            allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
-        from ...utils import CustomTool  # lazy import to avoid circular import
+        from ...utils import CustomTool
 
         if not workers:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
@@ -144,18 +144,8 @@ class HandoffDelegation:
         if hasattr(executor, 'agent_obj'):
             executor.agent_obj = None
         
-        if "executors" not in state.get("metadata", {}):
-            state["metadata"]["executors"] = {}
-        
         executor_key = f"workflow_executor_{agent.name}"
-        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
-        if not workflow_thread_id:
-            workflow_thread_id = str(uuid.uuid4())
-            state["metadata"]["workflow_thread_id"] = workflow_thread_id
-        
-        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
-        
-        config = {"configurable": {"thread_id": workflow_thread_id}}
+        config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
         conversation_messages = state.get("messages", [])
         file_messages = state.get("metadata", {}).get("file_messages")
@@ -196,38 +186,50 @@ class HandoffDelegation:
         return routing_decision[1], routing_decision[0]
     
     @staticmethod
+    def _build_delegation_parameters(workers: List[Agent], allow_parallel: bool) -> Dict[str, Any]:
+        """Build common delegation parameters for both tool formats."""
+        worker_name_options, worker_desc_parts = HandoffDelegation._build_worker_options(workers, allow_parallel)
+        
+        parameters_dict = {
+            "type": "object",
+            "properties": {
+                "worker_name": {
+                    "type": "string",
+                    "enum": worker_name_options,
+                    "description": f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}"
+                },
+                "task_description": {
+                    "type": "string",
+                    "description": "Clear description of what the worker should do"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"],
+                    "description": "Priority level of this task"
+                }
+            },
+            "required": ["worker_name", "task_description"]
+        }
+        
+        return {
+            "worker_name_options": worker_name_options,
+            "worker_desc_parts": worker_desc_parts,
+            "parameters_dict": parameters_dict
+        }
+    
+    @staticmethod
     def _build_openai_delegation_tool(workers: List[Agent], allow_parallel: bool) -> List[Dict[str, Any]]:
         """Build OpenAI function tool definition for delegation in Response API format."""
         if not workers:
             return []
         
-        worker_name_options, worker_desc_parts = HandoffDelegation._build_worker_options(workers, allow_parallel)
-        
+        params = HandoffDelegation._build_delegation_parameters(workers, allow_parallel)
         # Return Response API format
         return [{
             "type": "function",
             "name": "delegate_task",
             "description": "Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "worker_name": {
-                        "type": "string",
-                        "enum": worker_name_options,
-                        "description": f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}"
-                    },
-                    "task_description": {
-                        "type": "string",
-                        "description": "Clear description of what the worker should do"
-                    },
-                    "priority": {
-                        "type": "string",
-                        "enum": ["high", "medium", "low"],
-                        "description": "Priority level of this task"
-                    }
-                },
-                "required": ["worker_name", "task_description"]
-            }
+            "parameters": params["parameters_dict"]
         }]
     
     @staticmethod
@@ -236,14 +238,18 @@ class HandoffDelegation:
         if not workers:
             return None
         
-        worker_name_options, worker_desc_parts = HandoffDelegation._build_worker_options(workers, allow_parallel)
+        params = HandoffDelegation._build_delegation_parameters(workers, allow_parallel)
+        worker_name_options = params["worker_name_options"]
+        worker_desc_parts = params["worker_desc_parts"]
         
         def delegate_task(worker_name: str, task_description: str, priority: str = "medium") -> str:
             return f"Task delegated to {worker_name}: {task_description}"
+        
         tool_description = (
             f"Delegate a task to a specialist worker agent. Use this when you need a specialist to handle specific work. "
             f"Available workers: {', '.join(worker_desc_parts)}"
         )
+        
         class DelegationParams(BaseModel):
             worker_name: str = Field(
                 description=f"The name of the worker to delegate to. Available: {', '.join(worker_desc_parts)}",
@@ -407,12 +413,12 @@ class HandoffDelegation:
                             
                             delegation_text = f"\n\n**🔄 Delegating to {tool_args.get('worker_name')}**: {tool_args.get('task_description')}"
                             if hasattr(msg, 'content') and msg.content:
-                                content = HandoffDelegation._extract_text_from_content(msg.content)
+                                content = extract_text_from_content(msg.content)
                             content = content + delegation_text if content else delegation_text[2:]
                             return routing_decision, content
                 
                 if hasattr(msg, 'content') and msg.content and not content:
-                    content = HandoffDelegation._extract_text_from_content(msg.content)
+                    content = extract_text_from_content(msg.content)
         
         if not content:
             if isinstance(out, dict):
@@ -421,11 +427,11 @@ class HandoffDelegation:
                 elif 'messages' in out and out['messages']:
                     last_msg = out['messages'][-1]
                     if hasattr(last_msg, 'content'):
-                        content = HandoffDelegation._extract_text_from_content(last_msg.content)
+                        content = extract_text_from_content(last_msg.content)
                     else:
                         content = str(last_msg)
             elif hasattr(out, 'content'):
-                content = HandoffDelegation._extract_text_from_content(out.content)
+                content = extract_text_from_content(out.content)
             else:
                 content = str(out)
         
@@ -440,22 +446,6 @@ class HandoffDelegation:
             if name not in (supervisor_name, current_worker_name):
                 worker_outputs.append(f"**{name}**: {output}")
         return worker_outputs if worker_outputs else None
-
-    @staticmethod
-    def _extract_text_from_content(content: Any) -> str:
-        """Extract text from content that may be str, list, or other format."""
-        if isinstance(content, str):
-            return content
-        elif isinstance(content, list):
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get('type') == 'text':
-                    text_parts.append(block.get('text', ''))
-                elif isinstance(block, str):
-                    text_parts.append(block)
-            return ''.join(text_parts) if text_parts else ""
-        else:
-            return str(content) if content else ""
     
     @staticmethod
     def _build_worker_options(workers: List[Agent], allow_parallel: bool) -> Tuple[List[str], List[str]]:
