@@ -128,6 +128,7 @@ your-project/
 ### Single Agent (Simple)
 
 ```python
+import streamlit as st
 import streamlit_langgraph as slg
 
 # Define your agent
@@ -146,8 +147,12 @@ config = slg.UIConfig(
 )
 
 # Create and run chat interface
-chat = slg.LangGraphChat(agents=[assistant], config=config)
-chat.run()
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(
+        agents=[assistant],
+        config=config
+    )
+st.session_state.chat.run()
 ```
 
 Run with: `streamlit run your_app.py`
@@ -155,6 +160,7 @@ Run with: `streamlit run your_app.py`
 ### Multi-Agent Workflow
 
 ```python
+import streamlit as st
 import streamlit_langgraph as slg
 
 # Load agents from YAML
@@ -173,8 +179,12 @@ workflow = builder.create_supervisor_workflow(
 )
 
 # Create chat with workflow
-chat = slg.LangGraphChat(workflow=workflow, agents=agents)
-chat.run()
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(
+        workflow=workflow,
+        agents=agents
+    )
+st.session_state.chat.run()
 ```
 
 ## Examples
@@ -924,6 +934,7 @@ Agents can be configured using YAML files:
 ### UI Configuration
 
 ```python
+import streamlit as st
 import streamlit_langgraph as slg
 
 config = slg.UIConfig(
@@ -939,8 +950,9 @@ config = slg.UIConfig(
     file_callback=None  # Optional: function to preprocess files before upload
 )
 
-chat = slg.LangGraphChat(workflow=workflow, agents=agents, config=config)
-chat.run()
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(workflow=workflow, agents=agents)
+st.session_state.chat.run()
 ```
 
 #### File Upload Configuration
@@ -992,7 +1004,6 @@ import streamlit as st
 import streamlit_langgraph as slg
 
 config = slg.UIConfig(show_sidebar=False)  # Disable default sidebar
-chat = slg.LangGraphChat(workflow=workflow, agents=agents, config=config)
 
 # Define your own sidebar
 with st.sidebar:
@@ -1000,7 +1011,13 @@ with st.sidebar:
     option = st.selectbox("Choose option", ["A", "B", "C"])
     # Your custom controls
 
-chat.run()
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(
+        workflow=workflow,
+        agents=agents,
+        config=config
+    )
+st.session_state.chat.run()
 ```
 
 ## API Reference
@@ -1154,22 +1171,25 @@ config = slg.UIConfig(
 
 **Example**:
 ```python
+import streamlit as st
 import streamlit_langgraph as slg
 
 # Single agent
-chat = slg.LangGraphChat(
-    agents=[assistant],
-    config=config
-)
-chat.run()
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(
+        agents=[assistant],
+        config=config
+    )
+st.session_state.chat.run()
 
 # Multi-agent with workflow
-chat = slg.LangGraphChat(
-    workflow=compiled_workflow,
-    agents=all_agents,
-    config=config
-)
-chat.run()
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(
+        workflow=compiled_workflow,
+        agents=all_agents,
+        config=config
+    )
+st.session_state.chat.run()
 ```
 
 ---
