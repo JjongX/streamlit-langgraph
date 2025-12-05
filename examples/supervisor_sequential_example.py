@@ -1,5 +1,6 @@
 import os
 
+import streamlit as st
 import streamlit_langgraph as slg
 
 
@@ -55,16 +56,16 @@ def main():
 - *"Research and write a business proposal for AI implementation"*
 - *"Develop an academic research proposal for climate change studies"*
 """,
-        enable_file_upload=True,
         placeholder="Describe your research project or proposal needs..."
     )
     
-    chat = slg.LangGraphChat(
-        workflow=supervisor_workflow,
-        agents=[supervisor] + workers,
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            workflow=supervisor_workflow,
+            agents=[supervisor] + workers,
+            config=config
+        )
+    st.session_state.chat.run()
 
 if __name__ == "__main__":
     main()

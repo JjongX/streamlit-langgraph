@@ -87,6 +87,7 @@ class FileHandler:
         allow_file_search: Optional[bool] = False,
         allow_code_interpreter: Optional[bool] = False,
         container_id: Optional[str] = None,
+        preprocessing_callback: Optional[Any] = None,
     ):
         self.temp_dir = temp_dir or tempfile.mkdtemp()
         self.files: Dict[str, FileHandler.FileInfo] = {}
@@ -97,6 +98,15 @@ class FileHandler:
         self._container_id = container_id
         self._tracked_files: List[FileHandler.FileInfo] = []
         self._dynamic_vector_store = None
+        self.preprocessing_callback = preprocessing_callback
+        
+        # Auto-create container if code_interpreter is enabled but no container_id provided
+        if self.allow_code_interpreter and not self._container_id and self.openai_client:
+            try:
+                container = self.openai_client.containers.create(name="streamlit-langgraph")
+                self._container_id = container.id
+            except Exception:
+                pass
         
         if "file_handler_vector_stores" not in st.session_state:
             st.session_state.file_handler_vector_stores = []
@@ -131,6 +141,13 @@ class FileHandler:
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getvalue())
 
+        # Apply preprocessing callback if provided
+        if self.preprocessing_callback:
+            processed_path = self.preprocessing_callback(str(file_path))
+            file_path = Path(processed_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"Preprocessing callback did not produce a valid file at: {processed_path}")
+
         file_ext = file_path.suffix.lower()
         file_type = MIME_TYPES.get(file_ext.lstrip("."), "application/octet-stream")
         
@@ -142,17 +159,9 @@ class FileHandler:
             size=file_path.stat().st_size if file_path.exists() else 0,
             type=file_type,
             content=None,
-            metadata={
-                'file_id': file_id,
-                'extension': file_ext,
-                'uploaded_at': None
-            }
+            metadata={'file_id': file_id, 'extension': file_ext, 'uploaded_at': None}
         )
         
-        file_info.input_messages.append(
-            {"role": "user", "content": [{"type": "input_text", "text": f"File locally available at: {file_path}"}]}
-        )
-
         if not self.openai_client:
             self._tracked_files.append(file_info)
             if file_id:
@@ -198,6 +207,10 @@ class FileHandler:
                 container_id=self._container_id,
                 file_id=openai_file.id,
             )
+            
+            # Store file info for conversation context
+            file_info.metadata['container_file_id'] = openai_file.id
+            file_info.metadata['container_id'] = self._container_id
 
         if (self.allow_file_search and 
             not skip_file_search and 
@@ -244,6 +257,21 @@ class FileHandler:
             file_info.openai_file_id = openai_file.id
         if vision_file:
             file_info.vision_file_id = vision_file.id
+        
+        # Add comprehensive file message for conversation context
+        # This helps the model understand what files are available across turns
+        file_context_parts = [f"Uploaded file: {file_path.name}"]
+        if file_info.metadata.get('container_file_id'):
+            file_context_parts.append("Available in code interpreter container")
+            file_context_parts.append(f"File ID: {file_info.metadata['container_file_id']}")
+            file_context_parts.append("You can access this file using Python code in the code interpreter")
+        elif file_info.openai_file_id:
+            file_context_parts.append(f"File ID: {file_info.openai_file_id}")
+        
+        file_info.input_messages.append({
+            "role": "user",
+            "content": [{"type": "input_text", "text": " | ".join(file_context_parts)}]
+        })
 
         self._tracked_files.append(file_info)
         if file_id:

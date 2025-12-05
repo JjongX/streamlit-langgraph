@@ -1,7 +1,7 @@
 # Main chat interface.
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import streamlit as st
 
@@ -21,12 +21,14 @@ class UIConfig:
     page_icon: Optional[str] = "🤖"
     page_layout: str = "wide"
     stream: bool = True
-    enable_file_upload: bool = True
+    # Might change to a boolean and default to getting multiple if set to True.
+    enable_file_upload: Union[bool, Literal["multiple", "directory"]] = "multiple"
     show_sidebar: bool = True
     user_avatar: Optional[str] = "👤"
     assistant_avatar: Optional[str] = "🤖"
     placeholder: str = "Type your message here..."
     welcome_message: Optional[str] = None
+    file_callback: Optional[Callable[[str], str]] = None
 
 
 class LangGraphChat:
@@ -90,7 +92,12 @@ class LangGraphChat:
             allow_file_search=first_agent.allow_file_search,
             allow_code_interpreter=first_agent.allow_code_interpreter,
             container_id=first_agent.container_id,
+            preprocessing_callback=self.config.file_callback,
         )
+        
+        # Sync container_id from FileHandler back to agent if it was auto-created
+        if self.file_handler._container_id and not first_agent.container_id:
+            first_agent.container_id = self.file_handler._container_id
         
         vector_store_ids = self.file_handler.get_vector_store_ids()
         self.llm = AgentManager.get_llm_client(first_agent, vector_store_ids=vector_store_ids)
@@ -247,7 +254,9 @@ class LangGraphChat:
         """Get file messages and vector store IDs from workflow state."""
         workflow_state = self._get_workflow_state()
         metadata = workflow_state["metadata"]
-        return metadata.get("file_messages"), metadata.get("vector_store_ids")
+        file_messages = metadata.get("file_messages")
+        vector_store_ids = metadata.get("vector_store_ids")
+        return file_messages, vector_store_ids
 
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
