@@ -1,7 +1,7 @@
 # Main chat interface.
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import streamlit as st
 
@@ -27,6 +27,7 @@ class UIConfig:
     assistant_avatar: Optional[str] = "🤖"
     placeholder: str = "Type your message here..."
     welcome_message: Optional[str] = None
+    file_callback: Optional[Callable[[str], str]] = None
 
 
 class LangGraphChat:
@@ -90,6 +91,7 @@ class LangGraphChat:
             allow_file_search=first_agent.allow_file_search,
             allow_code_interpreter=first_agent.allow_code_interpreter,
             container_id=first_agent.container_id,
+            preprocessing_callback=self.config.file_callback,
         )
         
         # Sync container_id from FileHandler back to agent if it was auto-created

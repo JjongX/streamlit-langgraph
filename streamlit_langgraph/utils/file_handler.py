@@ -87,6 +87,7 @@ class FileHandler:
         allow_file_search: Optional[bool] = False,
         allow_code_interpreter: Optional[bool] = False,
         container_id: Optional[str] = None,
+        preprocessing_callback: Optional[Any] = None,
     ):
         self.temp_dir = temp_dir or tempfile.mkdtemp()
         self.files: Dict[str, FileHandler.FileInfo] = {}
@@ -97,6 +98,7 @@ class FileHandler:
         self._container_id = container_id
         self._tracked_files: List[FileHandler.FileInfo] = []
         self._dynamic_vector_store = None
+        self.preprocessing_callback = preprocessing_callback
         
         # Auto-create container if code_interpreter is enabled but no container_id provided
         if self.allow_code_interpreter and not self._container_id and self.openai_client:
@@ -138,6 +140,13 @@ class FileHandler:
         file_path = Path(os.path.join(self.temp_dir, uploaded_file.name))
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getvalue())
+
+        # Apply preprocessing callback if provided
+        if self.preprocessing_callback:
+            processed_path = self.preprocessing_callback(str(file_path))
+            file_path = Path(processed_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"Preprocessing callback did not produce a valid file at: {processed_path}")
 
         file_ext = file_path.suffix.lower()
         file_type = MIME_TYPES.get(file_ext.lstrip("."), "application/octet-stream")
