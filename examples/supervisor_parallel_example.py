@@ -1,5 +1,6 @@
 import os
 
+import streamlit as st
 import streamlit_langgraph as slg
 
 
@@ -92,12 +93,13 @@ def main():
         placeholder="What product would you like our team to analyze?"
     )
     
-    chat = slg.LangGraphChat(
-        workflow=parallel_workflow,
-        agents=[supervisor] + workers,
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            workflow=parallel_workflow,
+            agents=[supervisor] + workers,
+            config=config
+        )
+    st.session_state.chat.run()
 
 if __name__ == "__main__":
     main()

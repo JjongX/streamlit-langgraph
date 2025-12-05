@@ -1,4 +1,4 @@
-"""Shared conversation history management for executors."""
+# Shared conversation history management for executors.
 
 from typing import Any, Dict, List, Optional
 

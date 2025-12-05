@@ -1,3 +1,4 @@
+import streamlit as st
 import streamlit_langgraph as slg
 
 
@@ -37,11 +38,12 @@ I'm a helpful AI assistant ready to chat with you about anything. I can help wit
 What would you like to talk about?""",
         enable_file_upload=True,
     )
-    chat = slg.LangGraphChat(
-        agents=[assistant],
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            agents=[assistant],
+            config=config
+        )
+    st.session_state.chat.run()
 
 if __name__ == "__main__":
     main()

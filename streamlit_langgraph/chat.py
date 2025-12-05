@@ -92,6 +92,10 @@ class LangGraphChat:
             container_id=first_agent.container_id,
         )
         
+        # Sync container_id from FileHandler back to agent if it was auto-created
+        if self.file_handler._container_id and not first_agent.container_id:
+            first_agent.container_id = self.file_handler._container_id
+        
         vector_store_ids = self.file_handler.get_vector_store_ids()
         self.llm = AgentManager.get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
@@ -247,7 +251,9 @@ class LangGraphChat:
         """Get file messages and vector store IDs from workflow state."""
         workflow_state = self._get_workflow_state()
         metadata = workflow_state["metadata"]
-        return metadata.get("file_messages"), metadata.get("vector_store_ids")
+        file_messages = metadata.get("file_messages")
+        vector_store_ids = metadata.get("vector_store_ids")
+        return file_messages, vector_store_ids
 
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""

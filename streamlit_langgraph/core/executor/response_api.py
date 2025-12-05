@@ -110,31 +110,31 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         self, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
-        tools: Optional[List[Dict[str, Any]]] = None
+        delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Invoke the Response API."""
         return self._call_response_api(
             prompt, stream=False, messages=messages, file_messages=file_messages,
-            tools=tools
+            delegation_tool=delegation_tool
         )
     
     def _stream_response_api(
         self, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
-        tools: Optional[List[Dict[str, Any]]] = None
+        delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Stream the Response API."""
         return self._call_response_api(
             prompt, stream=True, messages=messages, file_messages=file_messages,
-            tools=tools
+            delegation_tool=delegation_tool
         )
     
     def _call_response_api(
         self, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
-        tools: Optional[List[Dict[str, Any]]] = None
+        delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
         Call the Response API (streaming or non-streaming).
@@ -144,7 +144,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             stream: Whether to stream the response
             messages: Conversation history from workflow_state
             file_messages: Optional file messages (OpenAI format)
-            tools: Optional additional tools (e.g., delegation tool)
+            delegation_tool: Optional delegation tool for supervisor routing
             
         Returns:
             Dict with 'role', 'content', 'agent', and optionally 'stream' or 'output' key
@@ -152,8 +152,8 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         api_input = self._convert_messages_to_input(messages, prompt, file_messages)
         
         # Build tools config
-        if tools:
-            tools_config = self._build_tools_config_for_delegation(tools)
+        if delegation_tool:
+            tools_config = self._build_tools_config_for_delegation(delegation_tool)
         else:
             tools_config = self._build_base_tools_config(self._vector_store_ids, stream=stream)
         
@@ -168,16 +168,15 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         )
         
         if stream:
-            # For streaming, we'll add the response to history after streaming completes
             return {
                 "role": "assistant",
                 "content": "",
                 "agent": self.agent.name,
                 "stream": response
             }
-        else:
-            # For delegation scenarios (when tools are provided), return output items directly
-            if tools:
+        else:            
+            # For delegation scenarios (when delegation_tool is provided), return output items directly
+            if delegation_tool:
                 return {"output": response.output if hasattr(response, 'output') else []}
             
             # For regular execution, extract content and update history
@@ -204,7 +203,8 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         if self.agent.allow_file_search and vs_ids:
             tools.append({"type": "file_search", "vector_store_ids": vs_ids if isinstance(vs_ids, list) else [vs_ids]})
         if self.agent.allow_code_interpreter:
-            tools.append({"type": "code_interpreter", "container": self.agent.container_id if self.agent.container_id else {"type": "auto"}})
+            container_config = self.agent.container_id if self.agent.container_id else {"type": "auto"}
+            tools.append({"type": "code_interpreter", "container": container_config})
         if self.agent.allow_web_search:
             tools.append({"type": "web_search"})
         if self.agent.allow_image_generation:
@@ -276,6 +276,8 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         Convert workflow_state messages to Response API input format.
         Response API uses a list of message dicts with 'role' and 'content' keys.
         
+        Like the reference code, conversation history (including file context) is sent as a system message.
+        
         Args:
             messages: List of message dicts from workflow_state
             current_prompt: Current user prompt
@@ -286,13 +288,14 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         """
         input_list = []
         
-        # Update conversation history from messages
+        # Update conversation history from messages (this includes file messages)
         self._update_conversation_history_from_messages(messages, file_messages)
         
-        # Add current prompt as user message
+        # Add current prompt as user message (like reference code does)
         input_list.append({"role": "user", "content": current_prompt})
 
-        # Add conversation history as system message if available
+        # Add conversation history as system message (like reference code does)
+        # This includes file information from previous turns
         sections_dict = self._get_conversation_history_sections_dict()
         if sections_dict:
             system_content = json.dumps(sections_dict, ensure_ascii=False)

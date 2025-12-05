@@ -1,5 +1,6 @@
 import os
 
+import streamlit as st
 import streamlit_langgraph as slg
 
 
@@ -87,12 +88,13 @@ def main():
         placeholder="Describe your project that requires research and content creation..."
     )
     
-    chat = slg.LangGraphChat(
-        workflow=hierarchical_workflow,
-        agents=all_agents,
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            workflow=hierarchical_workflow,
+            agents=all_agents,
+            config=config
+        )
+    st.session_state.chat.run()
 
 
 if __name__ == "__main__":

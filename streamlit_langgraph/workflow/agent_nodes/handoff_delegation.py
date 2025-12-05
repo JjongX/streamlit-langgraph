@@ -107,7 +107,7 @@ class HandoffDelegation:
                 prompt=input_message,
                 messages=conversation_messages,
                 file_messages=file_messages,
-                tools=delegation_tool if delegation_tool else None
+                delegation_tool=delegation_tool if delegation_tool else None
             )
         
         # Extract routing decision from Response API output

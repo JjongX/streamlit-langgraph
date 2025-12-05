@@ -1,6 +1,7 @@
 import time
 import uuid
 
+import streamlit as st
 import streamlit_langgraph as slg
 
 
@@ -137,12 +138,13 @@ def main():
         stream=False
     )
     
-    chat = slg.LangGraphChat(
-        workflow=workflow,
-        agents=agents,
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            workflow=workflow,
+            agents=agents,
+            config=config
+        )
+    st.session_state.chat.run()
 
 if __name__ == "__main__":
     main()

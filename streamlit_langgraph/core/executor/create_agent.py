@@ -1,4 +1,4 @@
-"""CreateAgentExecutor for LangChain agents."""
+# CreateAgentExecutor for LangChain agents.
 
 import json
 from typing import Any, Dict, List, Optional
