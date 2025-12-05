@@ -18,6 +18,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 - [Quick Start](#quick-start)
 - [Examples](#examples)
   - [Simple Single Agent](#simple-single-agent)
+  - [File Preprocessing Callback](#file-preprocessing-callback)
   - [Supervisor Sequential](#supervisor-sequential)
   - [Supervisor Parallel](#supervisor-parallel)
   - [Hierarchical Workflow](#hierarchical-workflow)
@@ -31,6 +32,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Agent Configuration](#agent-configuration)
   - [Workflow Patterns](#workflow-patterns)
   - [Executor Architecture](#executor-architecture)
+  - [Conversation History Modes](#conversation-history-modes)
   - [Context Modes](#context-modes)
   - [Human-in-the-Loop](#human-in-the-loop-hitl)
   - [Custom Tools](#custom-tools)
@@ -187,6 +189,45 @@ Basic chat interface with a single agent. No workflow orchestration.
 
 ```bash
 streamlit run examples/simple_example.py
+```
+
+### File Preprocessing Callback
+
+**File**: `examples/file_callback_example.py`
+
+Demonstrates how to use the `file_callback` parameter to preprocess uploaded files before they are sent to OpenAI. The callback receives the file path and returns a processed file path.
+
+```bash
+streamlit run examples/file_callback_example.py
+```
+
+**Features**:
+- Preprocess files (e.g., filter CSV columns) before upload
+- Works with single agent and multi-agent workflows
+- Only the processed file is uploaded to OpenAI
+
+**Example**:
+```python
+import pandas as pd
+import streamlit_langgraph as slg
+
+def filter_columns(file_path: str) -> str:
+    """Filter CSV to keep only columns starting with 'num_'."""
+    if not file_path.endswith('.csv'):
+        return file_path
+    
+    df = pd.read_csv(file_path)
+    num_cols = [col for col in df.columns if col.startswith('num_')]
+    df_filtered = df[num_cols] if num_cols else df
+    
+    processed_path = file_path.replace('.csv', '_filtered.csv')
+    df_filtered.to_csv(processed_path, index=False)
+    return processed_path
+
+config = slg.UIConfig(
+    title="File Preprocessing Example",
+    file_callback=filter_columns,
+)
 ```
 
 ### Supervisor Sequential
@@ -463,11 +504,41 @@ Both executors work seamlessly with handoff delegation patterns:
 - **CreateAgentExecutor**: Uses LangChain tool calling for delegation
 - The delegation system automatically routes to the appropriate execution method based on executor type
 
+### Conversation History Modes
+
+Control how conversation history is managed for agents:
+
+#### **`full`**
+- Agent sees **all previous messages** in the conversation
+- Best for: Tasks requiring complete conversation context
+- Use case: Long-running conversations, context-dependent tasks
+
+#### **`filtered`** (Default)
+- Agent sees **filtered conversation history** (system messages and relevant context)
+- Best for: Most use cases, balances context with efficiency
+- Use case: General purpose agents, standard workflows
+
+#### **`disable`**
+- Agent sees **no conversation history** (only current turn)
+- Best for: Stateless operations, independent tasks
+- Use case: One-off computations, API calls, isolated operations
+
+```python
+import streamlit_langgraph as slg
+
+agent = slg.Agent(
+    name="analyst",
+    role="Data Analyst",
+    instructions="Analyze data",
+    conversation_history_mode="filtered"  # Default
+)
+```
+
 ### Context Modes
 
-Control how much context each agent receives:
+Control how much context each agent receives from workflow execution:
 
-#### **`full`** (Default)
+#### **`full`**
 - Agent sees **all messages** and previous worker outputs
 - Best for: Tasks requiring complete conversation history
 - Use case: Analysis, synthesis, decision-making
@@ -477,7 +548,7 @@ Control how much context each agent receives:
 - Best for: Tasks that need overview but not details
 - Use case: High-level coordination, routing decisions
 
-#### **`least`**
+#### **`least`** (Default)
 - Agent sees **only supervisor instructions** for their task
 - Best for: Focused, independent tasks
 - Use case: Specialized computations, API calls
@@ -489,7 +560,8 @@ analyst = slg.Agent(
     name="analyst",
     role="Data Analyst",
     instructions="Analyze the provided data",
-    context="least"  # Sees only task instructions
+    context="least",  # Default: sees only task instructions
+    conversation_history_mode="filtered"  # Default: filtered conversation history
 )
 ```
 
@@ -860,13 +932,58 @@ config = slg.UIConfig(
     user_avatar="👤",
     assistant_avatar="🤖",
     page_icon="🤖",
+    enable_file_upload="multiple",  # Allow multiple file uploads
     show_sidebar=True,  # Set to False to define custom sidebar
-    stream=True
+    stream=True,
+    enable_file_upload="multiple",  # False, True, "multiple" (default), or "directory"
+    file_callback=None  # Optional: function to preprocess files before upload
 )
 
 chat = slg.LangGraphChat(workflow=workflow, agents=agents, config=config)
 chat.run()
 ```
+
+#### File Upload Configuration
+
+The `enable_file_upload` parameter supports multiple options:
+
+- `False`: No file uploads allowed
+- `True`: Single file upload (for backward compatibility, converted to "multiple")
+- `"multiple"` (Default): Multiple files can be uploaded simultaneously
+- `"directory"`: Users can select a directory containing multiple files
+
+#### File Preprocessing Callback
+
+Use `file_callback` to preprocess files before they are uploaded to OpenAI:
+
+```python
+def preprocess_file(file_path: str) -> str:
+    """
+    Process uploaded file before sending to OpenAI.
+    
+    Args:
+        file_path: Path to the uploaded file
+        
+    Returns:
+        Path to the processed file
+    """
+    # Your preprocessing logic here
+    # Example: filter CSV columns, transform data, convert format
+    processed_path = file_path.replace('.csv', '_processed.csv')
+    # ... process and save ...
+    return processed_path
+
+config = slg.UIConfig(
+    title="My App",
+    file_callback=preprocess_file
+)
+```
+
+**Notes**:
+- The callback is executed immediately when files are uploaded
+- Only the processed file is uploaded to OpenAI (replaces original)
+- Works with both single agent and multi-agent workflows
+- If callback returns the original path unchanged, the original file is used
 
 #### Custom Sidebar
 
@@ -905,13 +1022,17 @@ chat.run()
 | `model` | `str` | `"gpt-4o-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
 | `tools` | `List[str]` | `[]` | List of tool names available to the agent |
-| `context` | `str` | `"full"` | Context mode: `"full"`, `"summary"`, or `"least"` |
+| `context` | `str` | `"least"` | Context mode: `"full"`, `"summary"`, or `"least"` |
 | `human_in_loop` | `bool` | `False` | Enable human-in-the-loop approval for tool execution |
 | `interrupt_on` | `Dict` | `{}` | HITL configuration per tool |
-| `hitl_description_prefix` | `str` | `""` | Prefix for HITL approval messages |
+| `hitl_description_prefix` | `str` | `"Tool execution pending approval"` | Prefix for HITL approval messages |
 | `allow_code_interpreter` | `bool` | `False` | Enable code interpreter (Responses API only) |
+| `container_id` | `str` | `None` | OpenAI container ID for code interpreter (auto-created if not provided) |
 | `allow_file_search` | `bool` | `False` | Enable file search (Responses API only) |
 | `allow_web_search` | `bool` | `False` | Enable web search (Responses API only) |
+| `allow_image_generation` | `bool` | `False` | Enable image generation (Responses API only) |
+| `enable_logging` | `bool` | `False` | Enable file logging for agent interactions |
+| `conversation_history_mode` | `str` | `"filtered"` | Conversation history mode: `"full"`, `"filtered"`, or `"disable"` |
 
 **Example**:
 ```python
@@ -925,7 +1046,8 @@ agent = slg.Agent(
     model="gpt-4o-mini",
     temperature=0.0,
     tools=["analyze_data", "visualize"],
-    context="full",
+    context="full",  # See all messages and previous outputs
+    conversation_history_mode="filtered",  # Use filtered conversation history
     human_in_loop=True,
     interrupt_on={
         "analyze_data": {
@@ -985,10 +1107,11 @@ agent = manager.get_agent("analyst")
 | `user_avatar` | `str` | `"👤"` | Avatar for user messages (emoji or image path) |
 | `assistant_avatar` | `str` | `"🤖"` | Avatar for assistant messages (emoji or image path) |
 | `stream` | `bool` | `True` | Enable streaming responses |
-| `enable_file_upload` | `bool` | `False` | Show file upload widget |
+| `enable_file_upload` | `bool` or `str` | `"multiple"` | File upload configuration: `False`, `True`, `"multiple"`, or `"directory"` |
+| `file_callback` | `Callable[[str], str]` | `None` | Optional callback to preprocess files before upload |
 | `show_sidebar` | `bool` | `True` | Show default sidebar (set False for custom) |
-| `placeholder` | `str` | `None` | Placeholder text for chat input |
-| `show_agent_info` | `bool` | `True` | Show agent name in messages |
+| `placeholder` | `str` | `"Type your message here..."` | Placeholder text for chat input |
+| `welcome_message` | `str` | `None` | Welcome message shown at start (supports Markdown) |
 
 **Example**:
 ```python
@@ -1001,6 +1124,8 @@ config = slg.UIConfig(
     user_avatar="👨‍💼",
     assistant_avatar="🤖",
     stream=True,
+    enable_file_upload="multiple",  # Allow multiple file uploads
+    file_callback=None,  # Optional: preprocess files before upload
     show_sidebar=True,
     placeholder="Ask me anything..."
 )
