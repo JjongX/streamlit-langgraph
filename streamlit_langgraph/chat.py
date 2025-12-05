@@ -1,7 +1,7 @@
 # Main chat interface.
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import streamlit as st
 
@@ -21,7 +21,8 @@ class UIConfig:
     page_icon: Optional[str] = "🤖"
     page_layout: str = "wide"
     stream: bool = True
-    enable_file_upload: bool = True
+    # Might change to a boolean and default to getting multiple if set to True.
+    enable_file_upload: Union[bool, Literal["multiple", "directory"]] = "multiple"
     show_sidebar: bool = True
     user_avatar: Optional[str] = "👤"
     assistant_avatar: Optional[str] = "🤖"

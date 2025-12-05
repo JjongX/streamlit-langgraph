@@ -56,7 +56,6 @@ def main():
 - *"Research and write a business proposal for AI implementation"*
 - *"Develop an academic research proposal for climate change studies"*
 """,
-        enable_file_upload=True,
         placeholder="Describe your research project or proposal needs..."
     )
     

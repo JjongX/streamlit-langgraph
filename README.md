@@ -860,7 +860,6 @@ config = slg.UIConfig(
     user_avatar="👤",
     assistant_avatar="🤖",
     page_icon="🤖",
-    enable_file_upload=True,
     show_sidebar=True,  # Set to False to define custom sidebar
     stream=True
 )
@@ -1002,7 +1001,6 @@ config = slg.UIConfig(
     user_avatar="👨‍💼",
     assistant_avatar="🤖",
     stream=True,
-    enable_file_upload=True,
     show_sidebar=True,
     placeholder="Ask me anything..."
 )

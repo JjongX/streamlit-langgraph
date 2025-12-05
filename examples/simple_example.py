@@ -36,7 +36,6 @@ I'm a helpful AI assistant ready to chat with you about anything. I can help wit
 💬 **Conversation**: Just chat about your day!
 
 What would you like to talk about?""",
-        enable_file_upload=True,
     )
     if "chat" not in st.session_state:
         st.session_state.chat = slg.LangGraphChat(

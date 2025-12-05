@@ -84,7 +84,6 @@ def main():
 
 **Note**: This is a complex workflow that coordinates multiple teams. Tasks will flow through the appropriate teams based on requirements.
 """,
-        enable_file_upload=True,
         placeholder="Describe your project that requires research and content creation..."
     )
     

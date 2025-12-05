@@ -89,7 +89,6 @@ def main():
 
 **Note**: The supervisor will delegate to ALL analysts in parallel for comprehensive analysis!
 """,
-        enable_file_upload=False,
         placeholder="What product would you like our team to analyze?"
     )
     
