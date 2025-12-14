@@ -100,14 +100,14 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
-        self._update_vector_store_ids(llm_client)
+        self.update_vector_store_ids(llm_client)
         
         if stream:
             return self._stream_response_api(prompt, messages, file_messages)
         else:
-            return self._invoke_response_api(prompt, messages, file_messages)
+            return self.invoke_response_api(prompt, messages, file_messages)
     
-    def _invoke_response_api(
+    def invoke_response_api(
         self, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
@@ -503,7 +503,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         result = ''.join(text_parts) if text_parts else str(response) if response else ""
         return result
     
-    def _update_vector_store_ids(self, llm_client: Any) -> None:
+    def update_vector_store_ids(self, llm_client: Any) -> None:
         """Update vector_store_ids from llm_client and invalidate tools config if changed."""
         current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
         if current_vector_ids != self._vector_store_ids:

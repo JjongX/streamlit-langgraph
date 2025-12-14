@@ -22,14 +22,7 @@ class SupervisorPattern:
     
     @staticmethod
     def _sync_container_ids(supervisor_agent: Agent, worker_agents: List[Agent]) -> None:
-        """
-        Ensure all agents with code_interpreter enabled share the same container_id.
-        This allows files uploaded to the container to be accessible by all agents.
-        
-        Args:
-            supervisor_agent: Supervisor agent
-            worker_agents: List of worker agents
-        """
+        """Ensure all agents with code_interpreter enabled share the same container_id."""
         all_agents = [supervisor_agent] + worker_agents
         code_interpreter_agents = [a for a in all_agents if a.allow_code_interpreter]
         
@@ -44,10 +37,6 @@ class SupervisorPattern:
                 break
         
         # Apply the shared container_id to all code_interpreter agents
-        # If no container_id is set yet, they will all use {"type": "auto"} and the first
-        # agent to execute will create a container, which will be stored in the agent.
-        # However, this still won't share it across agents. We need to sync it after first execution.
-        # For now, if any agent has a container_id, share it with all others.
         if shared_container_id:
             for agent in code_interpreter_agents:
                 agent.container_id = shared_container_id
