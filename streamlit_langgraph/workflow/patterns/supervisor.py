@@ -21,6 +21,38 @@ class SupervisorPattern:
     """
     
     @staticmethod
+    def _sync_container_ids(supervisor_agent: Agent, worker_agents: List[Agent]) -> None:
+        """
+        Ensure all agents with code_interpreter enabled share the same container_id.
+        This allows files uploaded to the container to be accessible by all agents.
+        
+        Args:
+            supervisor_agent: Supervisor agent
+            worker_agents: List of worker agents
+        """
+        all_agents = [supervisor_agent] + worker_agents
+        code_interpreter_agents = [a for a in all_agents if a.allow_code_interpreter]
+        
+        if not code_interpreter_agents:
+            return
+        
+        # Find first agent with a container_id set, or None
+        shared_container_id = None
+        for agent in code_interpreter_agents:
+            if agent.container_id and isinstance(agent.container_id, str):
+                shared_container_id = agent.container_id
+                break
+        
+        # Apply the shared container_id to all code_interpreter agents
+        # If no container_id is set yet, they will all use {"type": "auto"} and the first
+        # agent to execute will create a container, which will be stored in the agent.
+        # However, this still won't share it across agents. We need to sync it after first execution.
+        # For now, if any agent has a container_id, share it with all others.
+        if shared_container_id:
+            for agent in code_interpreter_agents:
+                agent.container_id = shared_container_id
+    
+    @staticmethod
     def create_supervisor_workflow(supervisor_agent: Agent, worker_agents: List[Agent], 
                                  execution_mode: str = "sequential", delegation_mode: str = "handoff",
                                  checkpointer: Optional[Any] = None) -> StateGraph:
@@ -46,6 +78,9 @@ class SupervisorPattern:
             workflow_checkpointer = InMemorySaver()
         else:
             workflow_checkpointer = checkpointer
+        
+        # Ensure all agents with code_interpreter share the same container_id
+        SupervisorPattern._sync_container_ids(supervisor_agent, worker_agents)
     
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":
