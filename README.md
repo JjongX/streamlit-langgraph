@@ -102,8 +102,24 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 
 ## Installation
 
+### Using pip
+
 ```bash
 pip install streamlit-langgraph
+```
+
+### Using UV
+
+[UV](https://github.com/astral-sh/uv) is a fast Python package installer and resolver:
+
+```bash
+uv pip install streamlit-langgraph
+```
+
+Or if you're using UV for project management:
+
+```bash
+uv add streamlit-langgraph
 ```
 
 ## API Key Configuration
