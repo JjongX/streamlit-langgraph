@@ -102,11 +102,8 @@ class FileHandler:
         
         # Auto-create container if code_interpreter is enabled but no container_id provided
         if self.allow_code_interpreter and not self._container_id and self.openai_client:
-            try:
-                container = self.openai_client.containers.create(name="streamlit-langgraph")
-                self._container_id = container.id
-            except Exception:
-                pass
+            container = self.openai_client.containers.create(name="streamlit-langgraph")
+            self._container_id = container.id
         
         if "file_handler_vector_stores" not in st.session_state:
             st.session_state.file_handler_vector_stores = []
@@ -147,6 +144,10 @@ class FileHandler:
             file_path = Path(processed_path)
             if not file_path.exists():
                 raise FileNotFoundError(f"Preprocessing callback did not produce a valid file at: {processed_path}")
+            
+            # After preprocessing, upload generated CSV files to code_interpreter container
+            if self.allow_code_interpreter and self._container_id:
+                self._upload_generated_csvs_to_container()
 
         file_ext = file_path.suffix.lower()
         file_type = MIME_TYPES.get(file_ext.lstrip("."), "application/octet-stream")
@@ -258,8 +259,6 @@ class FileHandler:
         if vision_file:
             file_info.vision_file_id = vision_file.id
         
-        # Add comprehensive file message for conversation context
-        # This helps the model understand what files are available across turns
         file_context_parts = [f"Uploaded file: {file_path.name}"]
         if file_info.metadata.get('container_file_id'):
             file_context_parts.append("Available in code interpreter container")
@@ -299,3 +298,29 @@ class FileHandler:
                     vector_store_ids.append(vs_id)
         
         return vector_store_ids
+    
+    def _upload_generated_csvs_to_container(self):
+        """Upload generated CSV files from the latest timestamped output directory to code_interpreter container."""
+        import glob
+        outputs_dir = Path("test/outputs")
+        
+        if not outputs_dir.exists():
+            return
+        
+        csv_dirs = sorted(glob.glob(str(outputs_dir / "output_csvs_*")), reverse=True)
+        if not csv_dirs:
+            return
+        
+        latest_csv_dir = Path(csv_dirs[0])
+        csv_files = list(latest_csv_dir.glob("*.csv"))
+        
+        if not csv_files:
+            return
+        
+        for csv_file in csv_files:
+            with open(csv_file, "rb") as f:
+                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+            self.openai_client.containers.files.create(
+                container_id=self._container_id,
+                file_id=openai_file.id
+            )

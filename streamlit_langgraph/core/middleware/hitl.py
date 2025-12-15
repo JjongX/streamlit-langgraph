@@ -323,7 +323,7 @@ class HITLHandler:
         # Handle CreateAgentExecutor which needs agent_obj initialization
         if hasattr(executor, 'agent_obj') and executor.agent_obj is None:
             llm_client = AgentManager.get_llm_client(executor.agent)
-            executor._build_agent(llm_client)
+            executor.build_agent(llm_client)
         
         # Always use workflow_thread_id from workflow_state metadata (single source of truth)
         workflow_thread_id = workflow_state.get("metadata", {}).get("workflow_thread_id")

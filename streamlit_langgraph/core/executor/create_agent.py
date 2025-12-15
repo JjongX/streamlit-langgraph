@@ -82,7 +82,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             if stream:
                 return self._stream_agent(llm_client, prompt, messages, file_messages, config={})
             else:
-                out = self._invoke_agent(llm_client, prompt, messages, file_messages, config={})
+                out = self.invoke_agent(llm_client, prompt, messages, file_messages, config={})
                 result_text = self._extract_response_text(out)
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
@@ -117,9 +117,9 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             if stream:
                 return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
             else:
-                out = self._invoke_agent(llm_client, prompt, messages, file_messages, config=config)
+                out = self.invoke_agent(llm_client, prompt, messages, file_messages, config=config)
                 if isinstance(out, dict) and "__interrupt__" in out:
-                    return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
+                    return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 result_text = self._extract_response_text(out)
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
@@ -153,7 +153,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         out = self.agent_obj.invoke(resume_command, config=config)
         
         if isinstance(out, dict) and "__interrupt__" in out:
-            return self._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
+            return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
         
         result_text = self._extract_response_text(out)
         blocks = self._convert_message_to_blocks(result_text)
@@ -181,7 +181,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         
         return None
 
-    def _invoke_agent(
+    def invoke_agent(
         self, llm_client: Any, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
@@ -203,9 +203,9 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         self._check_and_update_vector_store_ids(llm_client)
         
         if self.agent_obj is None:
-            self._build_agent(llm_client)
+            self.build_agent(llm_client)
         
-        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
+        langchain_messages = self.convert_to_langchain_messages(messages, prompt, file_messages)
         execution_config = config if config is not None else {}
         out = self.agent_obj.invoke(
             {"messages": langchain_messages}, 
@@ -233,9 +233,9 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         self._check_and_update_vector_store_ids(llm_client)
         
         if self.agent_obj is None:
-            self._build_agent(llm_client)
+            self.build_agent(llm_client)
         
-        langchain_messages = self._convert_to_langchain_messages(messages, prompt, file_messages)
+        langchain_messages = self.convert_to_langchain_messages(messages, prompt, file_messages)
         execution_config = config if config is not None else {}
         stream_iter = self.agent_obj.stream(
             {"messages": langchain_messages}, 
@@ -244,7 +244,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         )
         return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
   
-    def _build_agent(self, llm_chat_model):
+    def build_agent(self, llm_chat_model):
         """
         Build the agent with optional human-in-the-loop middleware.
         
@@ -280,7 +280,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         
         return self.agent_obj
         
-    def _convert_to_langchain_messages(self, 
+    def convert_to_langchain_messages(self, 
         messages: Optional[List[Dict[str, Any]]], 
         current_prompt: str,
         file_messages: Optional[List] = None) -> List[BaseMessage]:
@@ -378,7 +378,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         
         return config, thread_id
     
-    def _create_interrupt_response(self, interrupt_data: Any, thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    def create_interrupt_response(self, interrupt_data: Any, thread_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create response dictionary for interrupt.
         

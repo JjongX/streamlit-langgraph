@@ -50,30 +50,6 @@ class CustomTool:
             self.parameters = self._extract_parameters()
     
     @classmethod
-    def get_openai_tools(cls, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Convert CustomTool registry items to OpenAI function calling format."""
-        tools = []
-        registry = cls._registry
-        if tool_names:
-            registry = {name: registry[name] for name in tool_names if name in registry}
-
-        for tool_name, custom_tool in registry.items():
-            # Use parameters if available, otherwise extract from function
-            parameters = custom_tool.parameters if custom_tool.parameters else custom_tool._extract_parameters()
-            
-            tool_dict = {
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "description": custom_tool.description,
-                    "parameters": parameters
-                }
-            }
-            tools.append(tool_dict)
-        
-        return tools
-    
-    @classmethod
     def get_langchain_tools(cls, tool_names: Optional[List[str]] = None) -> List[Any]:
         """Convert CustomTool registry items to LangChain tools."""
         tools = []

@@ -1,6 +1,7 @@
 # ResponseAPIExecutor for OpenAI Responses API
 
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional
 
@@ -99,14 +100,14 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         Returns:
             Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
-        self._update_vector_store_ids(llm_client)
+        self.update_vector_store_ids(llm_client)
         
         if stream:
             return self._stream_response_api(prompt, messages, file_messages)
         else:
-            return self._invoke_response_api(prompt, messages, file_messages)
+            return self.invoke_response_api(prompt, messages, file_messages)
     
-    def _invoke_response_api(
+    def invoke_response_api(
         self, prompt: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
@@ -137,7 +138,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
-        Call the Response API (streaming or non-streaming).
+        Call the Response API (streaming or non-streaming) with custom function execution loop.
         
         Args:
             prompt: User's question/prompt
@@ -179,8 +180,11 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             if delegation_tool:
                 return {"output": response.output if hasattr(response, 'output') else []}
             
+            # Check if there are function calls that need to be executed
+            response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
+            
             # For regular execution, extract content and update history
-            content = self._extract_response_content(response)
+            content = self._extract_response_content(response_with_tool_results)
             blocks = self._convert_message_to_blocks(content)
             self._add_to_conversation_history("assistant", blocks)
             return {
@@ -194,7 +198,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         vector_store_ids: Optional[List[str]] = None, 
         stream: bool = True
     ) -> List[Dict[str, Any]]:
-        """Build base tools configuration (native OpenAI tools, MCP tools, custom tools)."""
+        """Build base tools configuration (native OpenAI tools, MCP servers, and custom tools)."""
         from ...utils import MCPToolManager
 
         tools = []
@@ -216,6 +220,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             mcp_tools = mcp_manager.get_openai_tools()
             tools.extend(mcp_tools)
         
+        # Add custom tools - Response API supports them via function calling
         if self.tools:
             for tool in self.tools:
                 openai_tool = self._convert_langchain_tool_to_openai(tool)
@@ -223,6 +228,157 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                     tools.append(openai_tool)
         
         return tools
+    
+    def _handle_function_calls(
+        self, response: Any, api_input: List[Dict[str, Any]], 
+        tools_config: List[Dict[str, Any]], stream: bool = False,
+        max_iterations: int = 10
+    ) -> Any:
+        """
+        Handle function calls from Response API by executing custom functions and continuing the conversation.
+        
+        Args:
+            response: Initial Response API response
+            api_input: Original API input messages
+            tools_config: Tools configuration
+            stream: Whether streaming is enabled
+            max_iterations: Maximum number of function call iterations
+            
+        Returns:
+            Final response after all function calls are executed
+        """
+        logger = logging.getLogger("streamlit_langgraph")
+        
+        # Build a map of function names to their implementations
+        function_map = self._build_function_map()
+        
+        iteration = 0
+        current_response = response
+        accumulated_input = list(api_input)  # Start with original input, then accumulate
+        
+        while iteration < max_iterations:
+            # Check if response contains function calls
+            has_function_calls = False
+            function_results = []
+            
+            output_items = current_response.output if hasattr(current_response, 'output') else []
+            
+            for item in output_items:
+                item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+                
+                if item_type == "function_call":
+                    has_function_calls = True
+                    
+                    # Extract function call details
+                    if isinstance(item, dict):
+                        function_name = item.get("name")
+                        arguments = item.get("arguments", "{}")
+                        call_id = item.get("call_id", f"call_{iteration}")
+                    else:
+                        function_name = getattr(item, "name", None)
+                        arguments = getattr(item, "arguments", "{}")
+                        call_id = getattr(item, "call_id", f"call_{iteration}")
+                    
+                    
+                    # Execute the function
+                    if function_name in function_map:
+                        try:
+                            # Parse arguments
+                            if isinstance(arguments, str):
+                                args_dict = json.loads(arguments)
+                            else:
+                                args_dict = arguments if isinstance(arguments, dict) else {}
+                            
+                            # Execute the custom function
+                            logger.info(f"Executing custom function: {function_name} with args: {args_dict}")
+                            function_impl = function_map[function_name]
+                            result = function_impl(**args_dict)
+                            result_str = str(result)
+                            
+                            logger.info(f"Function {function_name} returned: {result_str[:200]}...")
+                            
+                            # Store result for next API call
+                            function_results.append({
+                                "call_id": call_id,
+                                "name": function_name,
+                                "result": result_str
+                            })
+                            
+                        except Exception as e:
+                            error_msg = f"Error executing function {function_name}: {str(e)}"
+                            logger.error(error_msg)
+                            function_results.append({
+                                "call_id": call_id,
+                                "name": function_name,
+                                "result": f"Error: {str(e)}"
+                            })
+                    else:
+                        logger.warning(f"Function {function_name} not found in function map")
+                        function_results.append({
+                            "call_id": call_id,
+                            "name": function_name,
+                            "result": f"Error: Function {function_name} not found"
+                        })
+            
+            # If no function calls, we're done
+            if not has_function_calls:
+                return current_response
+            
+            # If there are function results, send them back to the API
+            if function_results:
+                # Accumulate conversation: add response output to build full history
+                accumulated_input += current_response.output
+                
+                # Then add function results in Response API format
+                for func_result in function_results:
+                    accumulated_input.append({
+                        "type": "function_call_output",
+                        "call_id": func_result["call_id"],
+                        "output": json.dumps({"result": func_result["result"]})
+                    })
+                
+                # Call API again with ACCUMULATED conversation history
+                current_response = self.openai_client.responses.create(
+                    model=self.agent.model,
+                    input=accumulated_input,
+                    instructions=self._original_system_message,
+                    temperature=self.agent.temperature,
+                    tools=tools_config if tools_config else [],
+                    stream=False,  # Don't stream during function call loop
+                    reasoning={"summary": "auto"},
+                )
+                
+                iteration += 1
+            else:
+                # No results to send back, exit loop
+                return current_response
+        
+        logger.warning(f"Max iterations ({max_iterations}) reached in function call loop")
+        return current_response
+    
+    def _build_function_map(self) -> Dict[str, Any]:
+        """
+        Build a map of function names to their implementations from custom tools.
+        
+        Returns:
+            Dict mapping function names to callable implementations
+        """
+        function_map = {}
+        
+        if not self.tools:
+            return function_map
+        
+        from langchain_core.tools import StructuredTool
+        
+        for tool in self.tools:
+            if isinstance(tool, StructuredTool):
+                function_map[tool.name] = tool.func
+            elif isinstance(tool, dict) and "function" in tool:
+                # If tool is a dict with function info, we need access to the actual function
+                # This shouldn't happen with our current setup, but handle it gracefully
+                pass
+        
+        return function_map
         
     def _convert_langchain_tool_to_openai(self, tool: Any) -> Dict[str, Any]:
         """Convert a LangChain StructuredTool to Response API format."""
@@ -320,6 +476,30 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                         text_parts.append(str(item.text))
                     elif hasattr(item, 'content'):
                         text_parts.append(extract_text_from_content(item.content))
+        
+        # Check response.output for text items
+        if hasattr(response, 'output') and response.output:
+            for item in response.output:
+                item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+                if item_type == 'output_text':
+                    if isinstance(item, dict):
+                        text_content = item.get('text', '')
+                    else:
+                        text_content = getattr(item, 'text', '')
+                    if text_content:
+                        text_parts.append(str(text_content))
+                elif item_type == 'message':
+                    # Message items contain a 'content' field with ResponseOutputText objects
+                    if isinstance(item, dict):
+                        content_blocks = item.get('content', [])
+                    else:
+                        content_blocks = getattr(item, 'content', [])
+                    for block in content_blocks:
+                        if hasattr(block, 'text'):
+                            text_parts.append(str(block.text))
+                        elif isinstance(block, dict) and 'text' in block:
+                            text_parts.append(str(block.get('text', '')))
+        
         # Check response.output_text
         if hasattr(response, 'output_text'):
             text_parts.append(extract_text_from_content(response.output_text))
@@ -334,7 +514,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         result = ''.join(text_parts) if text_parts else str(response) if response else ""
         return result
     
-    def _update_vector_store_ids(self, llm_client: Any) -> None:
+    def update_vector_store_ids(self, llm_client: Any) -> None:
         """Update vector_store_ids from llm_client and invalidate tools config if changed."""
         current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
         if current_vector_ids != self._vector_store_ids:

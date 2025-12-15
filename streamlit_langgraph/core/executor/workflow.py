@@ -12,11 +12,7 @@ from ..state import WorkflowState, WorkflowStateManager
 
 
 class WorkflowExecutor:
-    """
-    Unified workflow executor with display callback and single-agent execution support.
-    
-    Merged functionality from WorkflowOrchestrator for simpler architecture.
-    """
+    """Unified workflow executor with display callback and single-agent execution support."""
     
     def execute_workflow(self, workflow: StateGraph, 
                         display_callback: Optional[Callable] = None,

@@ -208,3 +208,4 @@ __marimo__/
 
 # Streamlit config and secrets
 /.streamlit
+/test

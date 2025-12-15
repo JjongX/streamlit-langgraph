@@ -97,13 +97,13 @@ class HandoffDelegation:
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
         # Update vector_store_ids before invoking
-        executor._update_vector_store_ids(llm_client)
+        executor.update_vector_store_ids(llm_client)
         
         # Extract conversation history and file messages from workflow state
         conversation_messages = state.get("messages", [])
         file_messages = state.get("metadata", {}).get("file_messages")
         with st.spinner(f"🤖 {agent.name} is working..."):
-            out = executor._invoke_response_api(
+            out = executor.invoke_response_api(
                 prompt=input_message,
                 messages=conversation_messages,
                 file_messages=file_messages,
@@ -151,24 +151,24 @@ class HandoffDelegation:
         file_messages = state.get("metadata", {}).get("file_messages")
         with st.spinner(f"🤖 {agent.name} is working..."):
             if executor.agent_obj is None:
-                executor._build_agent(llm_client)
+                executor.build_agent(llm_client)
             
             interrupt_data = None
             if executor.agent.human_in_loop and executor.agent.interrupt_on:
                 # Use executor's message conversion for interrupt detection
-                langchain_messages = executor._convert_to_langchain_messages(
+                langchain_messages = executor.convert_to_langchain_messages(
                     conversation_messages, input_message, file_messages
                 )
                 interrupt_data = executor.detect_interrupt_in_stream(config, langchain_messages)
             
             if interrupt_data:
-                result = executor._create_interrupt_response(interrupt_data, workflow_thread_id, config)
+                result = executor.create_interrupt_response(interrupt_data, workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
             
-            # Use executor's _invoke_agent method which properly handles conversation history
-            out = executor._invoke_agent(
+            # Use executor's invoke_agent method which properly handles conversation history
+            out = executor.invoke_agent(
                 llm_client=llm_client,
                 prompt=input_message,
                 messages=conversation_messages,
@@ -177,7 +177,7 @@ class HandoffDelegation:
             )
             
             if isinstance(out, dict) and "__interrupt__" in out:
-                result = executor._create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
+                result = executor.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
                 interrupt_update = WorkflowStateManager.set_pending_interrupt(state, agent.name, result, executor_key)
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
@@ -270,39 +270,19 @@ class HandoffDelegation:
         )
     
     @staticmethod
-    def _extract_openai_routing_decision(message, content: str) -> Tuple[Dict[str, Any], str]:
-        """Extract routing decision from OpenAI ChatCompletion function call response."""
-        routing_decision = {"action": "finish"}
-        if hasattr(message, 'tool_calls') and message.tool_calls:
-            tool_call = message.tool_calls[0]
-            if tool_call.function.name == "delegate_task":
-                args = json.loads(tool_call.function.arguments)
-                routing_decision = {
-                    "action": "delegate",
-                    "target_worker": args.get("worker_name"),
-                    "task_description": args.get("task_description"),
-                    "priority": args.get("priority", "medium")
-                }
-                delegation_text = f"\n\n**🔄 Delegating to {args['worker_name']}**: {args['task_description']}"
-                content = content + delegation_text if content else delegation_text[2:]
-        return routing_decision, content
-    
-    @staticmethod
     def _extract_response_api_routing_decision(out: Any, prompt: str) -> Tuple[Dict[str, Any], str]:
         """Extract routing decision from Response API output."""
         routing_decision = {"action": "finish"}
         content = ""
         
-        # Response API output is a list of items
         output_items = out.get("output", []) if isinstance(out, dict) else []
         
         # Look for function_call items in the output
         for item in output_items:
-            # Handle both dict format and object format
             item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
             
+            # Handle function calls
             if item_type == "function_call":
-                # Extract function call details
                 if isinstance(item, dict):
                     function_name = item.get("name")
                     arguments = item.get("arguments", "{}")
@@ -311,7 +291,6 @@ class HandoffDelegation:
                     arguments = getattr(item, "arguments", "{}")
                 
                 if function_name == "delegate_task":
-                    # Parse arguments
                     if isinstance(arguments, str):
                         args = json.loads(arguments)
                     else:
@@ -336,7 +315,7 @@ class HandoffDelegation:
                 if text and not content:
                     content = str(text)
             elif item_type == "message":
-                # Response API message items contain content blocks (ResponseOutputText objects)
+                # Response API message items contain content blocks
                 if isinstance(item, dict):
                     content_blocks = item.get("content", [])
                 else:

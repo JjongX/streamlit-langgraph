@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List
 
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
-from ...core.middleware.interrupts import InterruptManager
+from ...core.middleware import InterruptManager
 from ...core.state import WorkflowState, WorkflowStateManager
 from ...utils import create_message_with_id
 from ..prompts import SupervisorPromptBuilder
@@ -77,11 +77,8 @@ class AgentNodeBase:
                     state["messages"] = []
                 state["messages"].append(assistant_msg)
             
-            interrupt_update = InterruptManager.store_interrupt(
-                state=state,
-                agent_name=agent.name,
-                interrupt_data=interrupt_data,
-                executor_key=executor_key
+            interrupt_update = WorkflowStateManager.set_pending_interrupt(
+                state, agent.name, interrupt_data, executor_key
             )
             state["metadata"].update(interrupt_update["metadata"])
             return ""

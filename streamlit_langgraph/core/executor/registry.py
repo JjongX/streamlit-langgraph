@@ -60,7 +60,9 @@ class ExecutorRegistry:
         
         if executor_key not in st.session_state.agent_executors or executor_needs_recreation:
             if use_response_api:
-                executor = ResponseAPIExecutor(agent, tools=tools)
+                # Get custom tools for ResponseAPIExecutor
+                custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+                executor = ResponseAPIExecutor(agent, tools=custom_tools)
             else:
                 executor = CreateAgentExecutor(agent, tools=tools)
             st.session_state.agent_executors[executor_key] = executor
@@ -75,6 +77,10 @@ class ExecutorRegistry:
                     mcp_manager.add_servers(agent.mcp_servers)
                     mcp_tools = mcp_manager.get_tools()
                 executor.tools = custom_tools + mcp_tools
+            elif isinstance(executor, ResponseAPIExecutor) and hasattr(executor, 'tools'):
+                # Update ResponseAPIExecutor tools
+                custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+                executor.tools = custom_tools
         
         return executor
     
