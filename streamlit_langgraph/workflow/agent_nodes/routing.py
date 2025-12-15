@@ -23,17 +23,6 @@ class RoutingDecision:
             task_description=decision_dict.get("task_description"),
             priority=decision_dict.get("priority")
         )
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary format."""
-        result = {"action": self.action}
-        if self.target_worker:
-            result["target_worker"] = self.target_worker
-        if self.task_description:
-            result["task_description"] = self.task_description
-        if self.priority:
-            result["priority"] = self.priority
-        return result
 
 
 class RoutingHelper:

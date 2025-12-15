@@ -24,6 +24,9 @@ def extract_text_from_content(content: Any) -> str:
                     text_parts.append(block.get('text', ''))
             elif isinstance(block, str):
                 text_parts.append(block)
+            # Handle objects with .text attribute like ResponseOutputText
+            elif hasattr(block, 'text'):
+                text_parts.append(str(block.text) if block.text else "")
         return ''.join(text_parts) if text_parts else ""
     
     if isinstance(content, dict):

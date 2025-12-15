@@ -24,19 +24,7 @@ YOUR OPTIONS:
 💡 Think carefully about which worker to delegate to based on their specializations.
 """
 
-SEQUENTIAL_ROUTE_GUIDANCE = """When delegating sequentially:
-- Delegate to one worker at a time
-- Wait for worker response before deciding next action
-- Use worker outputs to inform next delegation
-"""
-
 # Tool Calling Prompt Templates
-ORCHESTRATOR_TOOL_PROMPT_TEMPLATE = """You are {role}. {instructions}
-
-You have access to specialized agents that can help you. When you need their expertise, call them as tools.
-After they complete their task, they will return results to you, and you should synthesize the final response.
-"""
-
 WORKER_TOOL_PROMPT_TEMPLATE = """Task: {task}
 
 Your role: {role}
@@ -86,26 +74,8 @@ class SupervisorPromptBuilder:
         
         return chr(10).join(instruction_parts)
     
-    @staticmethod
-    def get_sequential_route_guidance() -> str:
-        """
-        Get guidance for sequential supervisor routing decisions.
-        """
-        return SEQUENTIAL_ROUTE_GUIDANCE
-
-
 class ToolCallingPromptBuilder:
     """Builder class for creating tool calling agent prompts."""
-    
-    @staticmethod
-    def get_orchestrator_tool_instructions(role: str, instructions: str) -> str:
-        """
-        Get instructions for orchestrator agent that calls workers as tools.
-        """
-        return ORCHESTRATOR_TOOL_PROMPT_TEMPLATE.format(
-            role=role,
-            instructions=instructions
-        )
     
     @staticmethod
     def get_worker_tool_instructions(role: str, instructions: str, task: str) -> str:

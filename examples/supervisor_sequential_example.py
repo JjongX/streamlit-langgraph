@@ -51,9 +51,8 @@ def main():
 4. **Workflow can finish at any time when the supervisor determines the task is complete**
 
 ### ❓ Example Requests:
-- *"Create a research proposal on renewable energy adoption"*
-- *"I need a comprehensive analysis of market trends"* 
-- *"Research and write a business proposal for AI implementation"*
+- *"Can you write a research proposal for identifying new clinically actionable variants in BRCA2?"* 
+- *"Can you write a research proposal on nanocomposites, specifically focusing on how varying amounts of graphene can enhance their mechanical strength"*
 - *"Develop an academic research proposal for climate change studies"*
 """,
         placeholder="Describe your research project or proposal needs..."

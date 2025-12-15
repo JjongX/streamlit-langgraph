@@ -481,13 +481,24 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         if hasattr(response, 'output') and response.output:
             for item in response.output:
                 item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-                if item_type == 'output_text' or item_type == 'message':
+                if item_type == 'output_text':
                     if isinstance(item, dict):
-                        text_content = item.get('text') or item.get('content')
+                        text_content = item.get('text', '')
                     else:
-                        text_content = getattr(item, 'text', None) or getattr(item, 'content', None)
+                        text_content = getattr(item, 'text', '')
                     if text_content:
                         text_parts.append(str(text_content))
+                elif item_type == 'message':
+                    # Message items contain a 'content' field with ResponseOutputText objects
+                    if isinstance(item, dict):
+                        content_blocks = item.get('content', [])
+                    else:
+                        content_blocks = getattr(item, 'content', [])
+                    for block in content_blocks:
+                        if hasattr(block, 'text'):
+                            text_parts.append(str(block.text))
+                        elif isinstance(block, dict) and 'text' in block:
+                            text_parts.append(str(block.get('text', '')))
         
         # Check response.output_text
         if hasattr(response, 'output_text'):
