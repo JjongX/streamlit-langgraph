@@ -178,3 +178,51 @@ class AgentNodeFactory:
                 "agent_outputs": {worker.name: response}
             }
         return worker_agent_node
+    
+    @staticmethod
+    def create_network_agent_node(agent: Agent, peer_agents: List[Agent]) -> Callable:
+        """
+        Create a network agent node that can hand off to any peer.
+        
+        In the network pattern, each agent can delegate to any other agent
+        in the network. There is no supervisor - all agents are peers.
+        """
+        from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
+        from ..prompts import NetworkPromptBuilder
+        
+        def network_agent_node(state: WorkflowState) -> Dict[str, Any]:
+            pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
+            if pending_interrupts:
+                return {"current_agent": agent.name, "metadata": state.get("metadata", {})}
+            
+            # Build context from peer outputs
+            peer_outputs = []
+            for peer in peer_agents:
+                if peer.name in state.get("agent_outputs", {}):
+                    output = state["agent_outputs"][peer.name]
+                    peer_outputs.append(f"**{peer.name}**: {output}")
+            
+            user_query = AgentNodeBase.extract_user_query(state)
+            network_instructions = NetworkPromptBuilder.get_network_agent_instructions(
+                role=agent.role,
+                instructions=agent.instructions,
+                user_query=user_query,
+                peer_list=", ".join([f"{p.name} ({p.role})" for p in peer_agents]),
+                peer_outputs=peer_outputs
+            )
+            
+            response, routing_decision = HandoffDelegation.execute_supervisor_with_routing(
+                agent, state, network_instructions, peer_agents, allow_parallel=False
+            )
+            
+            messages_update = [create_message_with_id("assistant", response, agent.name)]
+            return {
+                "current_agent": agent.name,
+                "messages": messages_update,
+                "agent_outputs": {agent.name: response},
+                "metadata": WorkflowStateManager.merge_metadata(
+                    state.get("metadata", {}), {"routing_decision": routing_decision}
+                )
+            }
+        
+        return network_agent_node

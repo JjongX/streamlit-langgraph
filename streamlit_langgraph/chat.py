@@ -16,7 +16,7 @@ from .utils import FileHandler, CustomTool
 
 @dataclass
 class UIConfig:
-    """Configuration for the Streamlit UI interface."""
+    """Streamlit UI configuration."""
     title: str
     page_icon: Optional[str] = "🤖"
     page_layout: str = "wide"
@@ -32,9 +32,7 @@ class UIConfig:
 
 
 class LangGraphChat:
-    """
-    Main class for creating agent chat interfaces with Streamlit and LangGraph.
-    """
+    """Main chat interface for Streamlit and LangGraph workflows."""
     
     def __init__(
         self,
@@ -119,7 +117,7 @@ class LangGraphChat:
             st.session_state.uploaded_files_set = set()
     
     def _get_workflow_state(self) -> Dict[str, Any]:
-        """Get workflow state with metadata initialization (cached access)."""
+        """Get workflow state, initializing metadata if needed."""
         workflow_state = st.session_state.workflow_state
         if "metadata" not in workflow_state:
             workflow_state["metadata"] = {}
@@ -235,15 +233,14 @@ class LangGraphChat:
             )
     
     def _update_file_messages_in_state(self, force: bool = False):
-        """Update file messages and vector store IDs in workflow state metadata."""
+        """Update file messages and vector store IDs in workflow state."""
         workflow_state = self._get_workflow_state()
         
-        # Check if file messages have changed (skip if unchanged and not forced)
         if not force:
             current_file_messages = self.file_handler.get_openai_input_messages()
             cached_messages = workflow_state["metadata"].get("file_messages")
             if cached_messages == current_file_messages:
-                return  # No change, skip update
+                return
         
         file_messages = self.file_handler.get_openai_input_messages()
         vector_store_ids = self.file_handler.get_vector_store_ids()
@@ -251,7 +248,7 @@ class LangGraphChat:
         workflow_state["metadata"]["vector_store_ids"] = vector_store_ids
     
     def _get_file_messages_from_state(self):
-        """Get file messages and vector store IDs from workflow state."""
+        """Get file messages and vector store IDs from state."""
         workflow_state = self._get_workflow_state()
         metadata = workflow_state["metadata"]
         file_messages = metadata.get("file_messages")
@@ -261,7 +258,6 @@ class LangGraphChat:
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
         for uploaded_file in files:
-            # Use set for O(1) lookup instead of O(n) list membership check
             file_id = getattr(uploaded_file, 'file_id', None) or uploaded_file.name
             if file_id not in st.session_state.uploaded_files_set:
                 file_info = self.file_handler.track(uploaded_file)
@@ -283,10 +279,9 @@ class LangGraphChat:
         return {"role": "assistant", "content": "", "agent": "system"}
     
     def _run_workflow(self, prompt: str) -> Dict[str, Any]:
-        """Run the multiagent workflow and orchestrate UI updates."""
+        """Execute multiagent workflow and handle UI updates."""
         workflow_state = self._get_workflow_state()
         workflow_state["metadata"]["stream"] = self.config.stream
-        
         self._update_file_messages_in_state()
         
         result_state = self.workflow_executor.execute_workflow(
@@ -307,18 +302,10 @@ class LangGraphChat:
         )
         st.session_state.workflow_state = result_state
         
-        return {
-            "role": "assistant",
-            "content": "",
-            "agent": "workflow-completed"
-        }
+        return {"role": "assistant", "content": "", "agent": "workflow-completed"}
     
     def _run_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
-        """
-        Run a single agent and orchestrate UI updates.
-        
-        Note: HITL is not supported for single agents. Use workflows for HITL functionality.
-        """
+        """Run single agent (HITL not supported - use workflows for HITL)."""
         self._update_file_messages_in_state()
         file_messages, vector_store_ids = self._get_file_messages_from_state()
         

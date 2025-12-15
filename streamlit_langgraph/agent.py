@@ -13,13 +13,11 @@ from langchain.chat_models import init_chat_model
 @dataclass
 class Agent:
     """
-    Configuration class for defining individual agents in a multiagent system.
-    Required fields: name, role, instructions.
-    provider and model default to 'openai' and 'gpt-4.1-mini' if not specified.
+    Agent configuration for multiagent workflows.
     
-    Executor selection:
-    - If HITL enabled → CreateAgentExecutor (native tools automatically disabled)
-    - If native tools enabled AND HITL disabled → ResponseAPIExecutor
+    Executor selection logic:
+    - HITL enabled → CreateAgentExecutor (native tools disabled)
+    - Native tools + no HITL → ResponseAPIExecutor
     - Otherwise → CreateAgentExecutor
     """
     name: str
@@ -44,9 +42,10 @@ class Agent:
     conversation_history_mode: str = "filtered"  # Options: "full", "filtered", "disable"
 
     def __post_init__(self):
-        """Post-initialization processing and validation."""
+        """Initialize system message and validate settings."""
         if self.system_message is None:
             self.system_message = f"You are a {self.role}. {self.instructions}"
+            
         if "file_search" in self.tools:
             self.allow_file_search = True
         if "code_interpreter" in self.tools:
@@ -213,7 +212,6 @@ class AgentManager:
                     if vector_store_ids:
                         self._vector_store_ids = vector_store_ids
                     self._provider = agent.provider.lower()
-            
             return MinimalClient(vector_store_ids)
         else:
             chat_model = init_chat_model(

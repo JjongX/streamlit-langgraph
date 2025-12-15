@@ -15,10 +15,7 @@ from ...core.state import WorkflowState
 
 @dataclass
 class SupervisorTeam:
-    """
-    Represents a sub-supervisor and their team of workers.
-    Internal implementation for HierarchicalPattern.
-    """
+    """Sub-supervisor and their team of workers."""
     supervisor: Agent
     workers: List[Agent]
     team_name: str = ""
@@ -85,12 +82,9 @@ class HierarchicalPattern:
             graph.add_node(team.supervisor.name, sub_supervisor_node)
             # Add worker nodes using standard worker node factory
             for worker in team.workers:
-                worker_node = AgentNodeFactory.create_worker_agent_node(
-                    worker, team.supervisor
-                )
+                worker_node = AgentNodeFactory.create_worker_agent_node(worker, team.supervisor)
                 graph.add_node(worker.name, worker_node)
         
-        # Add routing using supervisor pattern routing logic
         graph = HierarchicalPattern._add_hierarchical_routing(graph, top_supervisor, supervisor_teams)
         
         return graph.compile(checkpointer=workflow_checkpointer)

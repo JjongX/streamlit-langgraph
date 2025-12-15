@@ -1,7 +1,7 @@
 from .builder import WorkflowBuilder  
 from ..core.state import WorkflowState, WorkflowStateManager
 from .agent_nodes import AgentNodeFactory
-from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
+from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam, NetworkPattern
 
 
 __all__ = [
@@ -15,4 +15,5 @@ __all__ = [
     'SupervisorPattern',
     'HierarchicalPattern',
     'SupervisorTeam',
+    'NetworkPattern',
 ]

@@ -13,23 +13,21 @@ from ...core.state import WorkflowState
 
 class SupervisorPattern:
     """
-    Supervisor workflow pattern supporting multiple delegation modes.
+    Supervisor workflow pattern, a hub-and-spoke topology.
     
     Delegation modes:
-    - "handoff": Agents transfer control between nodes
-    - "tool_calling": Calling agent stays in control, agents called as tools
+    - "handoff": Control transfers between nodes
+    - "tool_calling": Supervisor calls workers as tools
     """
     
     @staticmethod
     def _sync_container_ids(supervisor_agent: Agent, worker_agents: List[Agent]) -> None:
-        """Ensure all agents with code_interpreter enabled share the same container_id."""
+        """Share container_id across all code_interpreter agents."""
         all_agents = [supervisor_agent] + worker_agents
         code_interpreter_agents = [a for a in all_agents if a.allow_code_interpreter]
-        
         if not code_interpreter_agents:
             return
         
-        # Find first agent with a container_id set, or None
         shared_container_id = None
         for agent in code_interpreter_agents:
             if agent.container_id and isinstance(agent.container_id, str):
@@ -100,12 +98,7 @@ class SupervisorPattern:
     @staticmethod
     def _create_sequential_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
                                              worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
-        """
-        Create sequential supervisor workflow.
-        
-        LangGraph pattern: Supervisor delegates to workers one at a time. Workers
-        route back to supervisor, creating a loop until supervisor decides to finish.
-        """
+        """Create sequential workflow: supervisor -> worker -> supervisor loop."""
         for worker in worker_agents:
             graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
 
@@ -124,12 +117,7 @@ class SupervisorPattern:
     @staticmethod
     def _create_parallel_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
                                            worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
-        """
-        Create parallel supervisor workflow.
-        
-        LangGraph pattern: Supervisor delegates to all workers simultaneously using
-        a fan-out node. All workers execute in parallel, then route back to supervisor.
-        """
+        """Create parallel workflow: supervisor -> fanout -> all workers -> supervisor."""
         graph.add_node("parallel_fanout", lambda state: state)
         
         for worker in worker_agents:
