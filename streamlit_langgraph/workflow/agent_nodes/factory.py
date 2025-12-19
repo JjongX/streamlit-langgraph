@@ -6,8 +6,7 @@ from typing import Any, Callable, Dict, List
 from ...agent import Agent, AgentManager
 from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
-from ...core.state import WorkflowState, WorkflowStateManager
-from ...utils import create_message_with_id
+from ...core.state import WorkflowState, WorkflowStateManager, create_message_with_id
 from ..prompts import SupervisorPromptBuilder
 
 
@@ -27,18 +26,10 @@ class AgentNodeBase:
         Returns:
             Agent response content as string (empty string if interrupted)
         """
-        from ...utils import CustomTool, MCPToolManager  # lazy import to avoid circular import
-        
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
         if hasattr(executor, 'tools'):
-            custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
-            mcp_tools = []
-            if agent.mcp_servers:
-                mcp_manager = MCPToolManager()
-                mcp_manager.add_servers(agent.mcp_servers)
-                mcp_tools = mcp_manager.get_tools()
-            executor.tools = custom_tools + mcp_tools
+            executor.tools = agent.get_tools()
         
         executor_key = f"workflow_executor_{executor.agent.name}"
         config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)

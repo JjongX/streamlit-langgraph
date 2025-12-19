@@ -21,25 +21,6 @@ class SupervisorPattern:
     """
     
     @staticmethod
-    def _sync_container_ids(supervisor_agent: Agent, worker_agents: List[Agent]) -> None:
-        """Share container_id across all code_interpreter agents."""
-        all_agents = [supervisor_agent] + worker_agents
-        code_interpreter_agents = [a for a in all_agents if a.allow_code_interpreter]
-        if not code_interpreter_agents:
-            return
-        
-        shared_container_id = None
-        for agent in code_interpreter_agents:
-            if agent.container_id and isinstance(agent.container_id, str):
-                shared_container_id = agent.container_id
-                break
-        
-        # Apply the shared container_id to all code_interpreter agents
-        if shared_container_id:
-            for agent in code_interpreter_agents:
-                agent.container_id = shared_container_id
-    
-    @staticmethod
     def create_supervisor_workflow(supervisor_agent: Agent, worker_agents: List[Agent], 
                                  execution_mode: str = "sequential", delegation_mode: str = "handoff",
                                  checkpointer: Optional[Any] = None) -> StateGraph:
@@ -67,7 +48,7 @@ class SupervisorPattern:
             workflow_checkpointer = checkpointer
         
         # Ensure all agents with code_interpreter share the same container_id
-        SupervisorPattern._sync_container_ids(supervisor_agent, worker_agents)
+        Agent.sync_container_ids([supervisor_agent] + worker_agents)
     
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":

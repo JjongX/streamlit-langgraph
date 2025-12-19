@@ -3,8 +3,7 @@
 from typing import Any, Dict, List, Optional
 import streamlit as st
 
-from .state_schema import WorkflowStateManager
-from ...utils import create_message_with_id
+from .state_schema import WorkflowStateManager, create_message_with_id
 
 
 class StateSynchronizer:

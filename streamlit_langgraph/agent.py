@@ -124,6 +124,45 @@ class Agent:
     def from_dict(cls, data: Dict) -> "Agent":
         """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
+    
+    @staticmethod
+    def sync_container_ids(agents: List["Agent"]) -> None:
+        """
+        Share container_id across all code_interpreter agents.
+        """
+        code_interpreter_agents = [a for a in agents if a.allow_code_interpreter]
+        if not code_interpreter_agents:
+            return
+        
+        # Find first agent with a container_id set
+        shared_container_id = next(
+            (a.container_id for a in code_interpreter_agents 
+             if a.container_id and isinstance(a.container_id, str)), 
+            None
+        )
+        
+        # Apply the shared container_id to all code_interpreter agents
+        if shared_container_id:
+            for agent in code_interpreter_agents:
+                agent.container_id = shared_container_id
+    
+    def get_tools(self) -> List[Any]:
+        """
+        Get all tools for this agent (custom tools + MCP tools).
+        
+        Returns:
+            List of LangChain StructuredTool objects
+        """
+        from .utils import CustomTool, MCPToolManager
+        
+        tools = []
+        if self.tools:
+            tools.extend(CustomTool.get_langchain_tools(self.tools))
+        if self.mcp_servers:
+            mcp_manager = MCPToolManager()
+            mcp_manager.add_servers(self.mcp_servers)
+            tools.extend(mcp_manager.get_tools())
+        return tools
 
 
 class AgentManager:

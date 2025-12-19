@@ -119,8 +119,6 @@ class HandoffDelegation:
                                            input_message: str, workers: List[Agent],
                                            allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
-        from ...utils import CustomTool
-
         if not workers:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
@@ -132,7 +130,7 @@ class HandoffDelegation:
         
         llm_client = AgentManager.get_llm_client(agent)
         
-        existing_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
+        existing_tools = agent.get_tools()
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])
         
         # ensure delegation tool is always added to executor tools

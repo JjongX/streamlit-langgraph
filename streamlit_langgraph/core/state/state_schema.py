@@ -6,6 +6,16 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from typing_extensions import Annotated
 
 
+def create_message_with_id(role: str, content: str, agent: Optional[str]) -> Dict[str, Any]:
+    """Create a message dict with a unique ID."""
+    return {
+        "id": str(uuid.uuid4()),
+        "role": role,
+        "content": content,
+        "agent": agent
+    }
+
+
 class WorkflowStateManager:
     """Manager class for workflow state operations and HITL state management."""
     
