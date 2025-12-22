@@ -1117,8 +1117,10 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 | `instructions` | `str` | Required | Detailed instructions guiding agent behavior |
 | `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
 | `model` | `str` | `"gpt-4.1-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
+| `system_message` | `str` | `None` | Custom system message (auto-generated from role and instructions if None) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
 | `tools` | `List[str]` | `[]` | List of tool names available to the agent |
+| `mcp_servers` | `Dict[str, Dict]` | `None` | MCP server configurations (see [MCP Tools](#mcp-model-context-protocol)) |
 | `context` | `str` | `"least"` | Context mode: `"full"`, `"summary"`, or `"least"` |
 | `human_in_loop` | `bool` | `False` | Enable human-in-the-loop approval for tool execution |
 | `interrupt_on` | `Dict` | `{}` | HITL configuration per tool |
@@ -1355,6 +1357,29 @@ workflow = builder.create_hierarchical_workflow(
 )
 ```
 
+##### `WorkflowBuilder.SupervisorTeam`
+
+**Description**: Dataclass representing a sub-supervisor and their team for hierarchical workflows.
+
+**Constructor Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `supervisor` | `Agent` | Required | Sub-supervisor agent |
+| `workers` | `List[Agent]` | Required | Worker agents in this team |
+| `team_name` | `str` | Auto-generated | Team identifier |
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+team = slg.WorkflowBuilder.SupervisorTeam(
+    supervisor=team_lead_agent,
+    workers=[worker1, worker2, worker3],
+    team_name="engineering_team"
+)
+```
+
 #### `create_network_workflow()`
 
 Creates a network pattern where agents can communicate peer-to-peer in a mesh topology.
@@ -1389,36 +1414,11 @@ workflow = builder.create_network_workflow(agents=agents)
 
 ---
 
-##### `WorkflowBuilder.SupervisorTeam`
-
-**Description**: Dataclass representing a sub-supervisor and their team for hierarchical workflows.
-
-**Constructor Parameters**:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `supervisor` | `Agent` | Required | Sub-supervisor agent |
-| `workers` | `List[Agent]` | Required | Worker agents in this team |
-| `team_name` | `str` | Auto-generated | Team identifier |
-
-**Example**:
-```python
-import streamlit_langgraph as slg
-
-team = slg.WorkflowBuilder.SupervisorTeam(
-    supervisor=team_lead_agent,
-    workers=[worker1, worker2, worker3],
-    team_name="engineering_team"
-)
-```
-
----
-
 ### `CustomTool`
 
 **Description**: Registry for custom tools that agents can use.
 
-**Method**:
+**Class Methods**:
 
 #### `register_tool()`
 
@@ -1431,7 +1431,7 @@ Register a custom function as a tool available to agents.
 | `name` | `str` | Required | Unique tool name |
 | `description` | `str` | Required | Description shown to LLM |
 | `function` | `Callable` | Required | Python function to execute |
-| `parameters` | `Dict` | Auto-extracted | Tool parameters schema |
+| `parameters` | `Dict` | Auto-extracted | Tool parameters schema (extracted from function signature if not provided) |
 | `return_direct` | `bool` | `False` | Return tool output directly to user |
 
 **Returns**: `CustomTool` instance
@@ -1465,6 +1465,38 @@ agent = slg.Agent(
     role="Calculator",
     instructions="Use calculate_sum to add numbers",
     tools=["calculate_sum"]
+)
+```
+
+#### `tool()` (Decorator)
+
+Decorator for registering functions as tools.
+
+**Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | Required | Unique tool name |
+| `description` | `str` | Required | Description shown to LLM |
+| `**kwargs` | `Any` | - | Additional parameters (e.g., `return_direct`, `parameters`) |
+
+**Returns**: Decorator function
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+@slg.CustomTool.tool("calculator", "Performs basic arithmetic")
+def calculate(expression: str) -> float:
+    """Evaluate a mathematical expression."""
+    return eval(expression)
+
+# Use in agent
+agent = slg.Agent(
+    name="calculator",
+    role="Calculator",
+    instructions="Use calculator to evaluate expressions",
+    tools=["calculator"]
 )
 ```
 
