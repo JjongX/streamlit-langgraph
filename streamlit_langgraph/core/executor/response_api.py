@@ -24,10 +24,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     def __init__(self, agent: Agent, tools: Optional[List] = None):
         """
         Initialize ResponseAPIExecutor.
-        
-        Args:
-            agent: Agent configuration
-            tools: Optional list of tools (stored for interface compatibility, though Response API uses native tools)
         """
         self.agent = agent
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -246,104 +242,123 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         Returns:
             Final response after all function calls are executed
         """
-        # Build a map of function names to their implementations
         function_map = self._build_function_map()
-        
         iteration = 0
         current_response = response
-        accumulated_input = list(api_input)  # Start with original input, then accumulate
+        accumulated_input = list(api_input)
         
         while iteration < max_iterations:
-            # Check if response contains function calls
-            has_function_calls = False
-            function_results = []
+            function_results = self._extract_and_execute_function_calls(
+                current_response, function_map, iteration
+            )
             
-            output_items = current_response.output if hasattr(current_response, 'output') else []
-            
-            for item in output_items:
-                item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-                
-                if item_type == "function_call":
-                    has_function_calls = True
-                    
-                    # Extract function call details
-                    if isinstance(item, dict):
-                        function_name = item.get("name")
-                        arguments = item.get("arguments", "{}")
-                        call_id = item.get("call_id", f"call_{iteration}")
-                    else:
-                        function_name = getattr(item, "name", None)
-                        arguments = getattr(item, "arguments", "{}")
-                        call_id = getattr(item, "call_id", f"call_{iteration}")
-                    
-                    
-                    # Execute the function
-                    if function_name in function_map:
-                        try:
-                            # Parse arguments
-                            if isinstance(arguments, str):
-                                args_dict = json.loads(arguments)
-                            else:
-                                args_dict = arguments if isinstance(arguments, dict) else {}
-                            
-                            # Execute the custom function
-                            function_impl = function_map[function_name]
-                            result = function_impl(**args_dict)
-                            result_str = str(result)
-                            
-                            # Store result for next API call
-                            function_results.append({
-                                "call_id": call_id,
-                                "name": function_name,
-                                "result": result_str
-                            })
-                        except Exception as e:
-                            function_results.append({
-                                "call_id": call_id,
-                                "name": function_name,
-                                "result": f"Error: {str(e)}"
-                            })
-                    else:
-                        function_results.append({
-                            "call_id": call_id,
-                            "name": function_name,
-                            "result": f"Error: Function {function_name} not found"
-                        })
-            
-            # If no function calls, we're done
-            if not has_function_calls:
+            if not function_results:
                 return current_response
             
-            # If there are function results, send them back to the API
-            if function_results:
-                # Accumulate conversation: add response output to build full history
-                accumulated_input += current_response.output
-                
-                # Then add function results in Response API format
-                for func_result in function_results:
-                    accumulated_input.append({
-                        "type": "function_call_output",
-                        "call_id": func_result["call_id"],
-                        "output": json.dumps({"result": func_result["result"]})
-                    })
-                
-                # Call API again with ACCUMULATED conversation history
-                current_response = self.openai_client.responses.create(
-                    model=self.agent.model,
-                    input=accumulated_input,
-                    instructions=self._original_system_message,
-                    temperature=self.agent.temperature,
-                    tools=tools_config if tools_config else [],
-                    stream=False,  # Don't stream during function call loop
-                    reasoning={"summary": "auto"},
-                )
-                
-                iteration += 1
-            else:
-                # No results to send back, exit loop
-                return current_response
+            accumulated_input = self._accumulate_function_results(
+                accumulated_input, current_response, function_results
+            )
+            current_response = self._call_api_with_results(
+                accumulated_input, tools_config
+            )
+            iteration += 1
         
         return current_response
+    
+    def _extract_and_execute_function_calls(
+        self, response: Any, function_map: Dict[str, Any], iteration: int
+    ) -> List[Dict[str, Any]]:
+        """Extract function calls from response and execute them."""
+        function_results = []
+        output_items = response.output if hasattr(response, 'output') else []
+        
+        for item in output_items:
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            
+            if item_type == "function_call":
+                result = self._execute_single_function_call(item, function_map, iteration)
+                if result:
+                    function_results.append(result)
+        
+        return function_results
+    
+    def _execute_single_function_call(
+        self, item: Any, function_map: Dict[str, Any], iteration: int
+    ) -> Optional[Dict[str, Any]]:
+        """Execute a single function call and return result."""
+        # Extract function call details
+        if isinstance(item, dict):
+            function_name = item.get("name")
+            arguments = item.get("arguments", "{}")
+            call_id = item.get("call_id", f"call_{iteration}")
+        else:
+            function_name = getattr(item, "name", None)
+            arguments = getattr(item, "arguments", "{}")
+            call_id = getattr(item, "call_id", f"call_{iteration}")
+        
+        if function_name not in function_map:
+            return {
+                "call_id": call_id,
+                "name": function_name,
+                "result": f"Error: Function {function_name} not found"
+            }
+        
+        try:
+            # Parse arguments
+            if isinstance(arguments, str):
+                args_dict = json.loads(arguments)
+            else:
+                args_dict = arguments if isinstance(arguments, dict) else {}
+            
+            # Execute the custom function
+            function_impl = function_map[function_name]
+            result = function_impl(**args_dict)
+            result_str = str(result)
+            
+            return {
+                "call_id": call_id,
+                "name": function_name,
+                "result": result_str
+            }
+        except Exception as e:
+            return {
+                "call_id": call_id,
+                "name": function_name,
+                "result": f"Error: {str(e)}"
+            }
+    
+    def _accumulate_function_results(
+        self, accumulated_input: List[Dict[str, Any]],
+        current_response: Any, function_results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Accumulate conversation history with function results."""
+        # Add response output to build full history
+        new_input = list(accumulated_input)
+        new_input.extend(current_response.output)
+        
+        # Add function results in Response API format
+        for func_result in function_results:
+            new_input.append({
+                "type": "function_call_output",
+                "call_id": func_result["call_id"],
+                "output": json.dumps({"result": func_result["result"]})
+            })
+        
+        return new_input
+    
+    def _call_api_with_results(
+        self, accumulated_input: List[Dict[str, Any]], tools_config: List[Dict[str, Any]]
+    ) -> Any:
+        """Call Response API with accumulated input and function results."""
+        return self.openai_client.responses.create(
+            model=self.agent.model,
+            input=accumulated_input,
+            instructions=self._original_system_message,
+            temperature=self.agent.temperature,
+            tools=tools_config if tools_config else [],
+            stream=False,  # Don't stream during function call loop
+            reasoning={"summary": "auto"},
+        )
     
     def _build_function_map(self) -> Dict[str, Any]:
         """

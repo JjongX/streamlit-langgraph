@@ -261,13 +261,12 @@ class LangGraphChat:
         """Update file messages and vector store IDs in workflow state."""
         workflow_state = self._get_workflow_state()
         
+        file_messages = self.file_handler.get_openai_input_messages()
         if not force:
-            current_file_messages = self.file_handler.get_openai_input_messages()
             cached_messages = workflow_state["metadata"].get("file_messages")
-            if cached_messages == current_file_messages:
+            if cached_messages == file_messages:
                 return
         
-        file_messages = self.file_handler.get_openai_input_messages()
         vector_store_ids = self.file_handler.get_vector_store_ids()
         workflow_state["metadata"]["file_messages"] = file_messages
         workflow_state["metadata"]["vector_store_ids"] = vector_store_ids
@@ -288,7 +287,7 @@ class LangGraphChat:
                 file_info = self.file_handler.track(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
                 st.session_state.uploaded_files_set.add(file_id)
-                # Optimize dict creation
+                # Optimize dict creation; exclude content to reduce memory usage
                 file_dict = {k: v for k, v in file_info.__dict__.items() if k != "content"}
                 self.state_manager.update_workflow_state({"files": [file_dict]})
         

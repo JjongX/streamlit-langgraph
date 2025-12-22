@@ -1064,7 +1064,6 @@ st.session_state.chat.run()
 | `allow_file_search` | `bool` | `False` | Enable file search (Responses API only) |
 | `allow_web_search` | `bool` | `False` | Enable web search (Responses API only) |
 | `allow_image_generation` | `bool` | `False` | Enable image generation (Responses API only) |
-| `enable_logging` | `bool` | `False` | Enable file logging for agent interactions |
 | `conversation_history_mode` | `str` | `"filtered"` | Conversation history mode: `"full"`, `"filtered"`, or `"disable"` |
 
 **Example**:
