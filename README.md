@@ -32,6 +32,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Streamlit Session State Usage](#streamlit-session-state-usage)
 - [Core Concepts](#core-concepts)
   - [Agent Configuration](#agent-configuration)
+  - [UI Configuration](#ui-configuration)
   - [Workflow Patterns](#workflow-patterns)
   - [Executor Architecture](#executor-architecture)
   - [Conversation History Modes](#conversation-history-modes)
@@ -39,9 +40,6 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Human-in-the-Loop](#human-in-the-loop-hitl)
   - [Custom Tools](#custom-tools)
   - [MCP (Model Context Protocol)](#mcp-model-context-protocol)
-- [Configuration](#configuration)
-  - [Agent Configuration Files](#agent-configuration-files)
-  - [UI Configuration](#ui-configuration)
 - [API Reference](#api-reference)
   - [Agent](#agent)
   - [AgentManager](#agentmanager)
@@ -531,8 +529,9 @@ Streamlit renders UI
 
 ### Agent Configuration
 
-Agents are configured with:
+Agents can be configured in two ways:
 
+**Python Configuration:**
 ```python
 import streamlit_langgraph as slg
 
@@ -550,6 +549,94 @@ agent = slg.Agent(
     interrupt_on={...}           # HITL configuration
 )
 ```
+
+**YAML File Configuration:**
+
+Agents can be configured using YAML files for easier management:
+
+```yaml
+- name: supervisor
+  role: Project Manager
+  instructions: |
+    You coordinate tasks and delegate to specialists.
+    Analyze user requests and assign work appropriately.
+  provider: openai
+  model: gpt-4.1-mini
+  temperature: 0.0
+  tools:
+    - tool_name
+  context: full
+
+- name: worker
+  role: Specialist
+  instructions: |
+    You handle specific tasks delegated by the supervisor.
+  provider: openai
+  model: gpt-4.1-mini
+  temperature: 0.0
+```
+
+Load the above YAML to python:
+```python
+import streamlit_langgraph as slg
+
+# Load agents from YAML file
+agents = slg.AgentManager.load_from_yaml("configs/agents.yaml")
+supervisor = agents[0]
+workers = agents[1:]
+```
+
+For complete parameter reference, see [Agent API Reference](#agent).
+
+### UI Configuration
+
+Configure the Streamlit interface using `UIConfig`:
+
+```python
+import streamlit as st
+import streamlit_langgraph as slg
+
+config = slg.UIConfig(
+    title="My Multiagent App",
+    welcome_message="Welcome! Ask me anything.",
+    user_avatar="👤",
+    assistant_avatar="🤖",
+    page_icon="🤖",
+    page_layout="wide",
+    enable_file_upload="multiple",
+    show_sidebar=True,
+    stream=True,
+    file_callback=None
+)
+
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(workflow=workflow, agents=agents, config=config)
+st.session_state.chat.run()
+```
+
+**Custom Sidebar:**
+```python
+import streamlit as st
+import streamlit_langgraph as slg
+
+config = slg.UIConfig(show_sidebar=False)  # Disable default sidebar
+
+# Define your own sidebar
+with st.sidebar:
+    st.header("Custom Sidebar")
+    option = st.selectbox("Choose option", ["A", "B", "C"])
+    # Your custom controls
+
+if "chat" not in st.session_state:
+    st.session_state.chat = slg.LangGraphChat(
+        workflow=workflow,
+        agents=agents,
+        config=config
+    )
+st.session_state.chat.run()
+```
+
+For complete parameter reference, see [UIConfig API Reference](#uiconfig).
 
 ### Workflow Patterns
 
@@ -1012,99 +1099,6 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 - [FastMCP Documentation](https://gofastmcp.com/)
 - [MCP Specification](https://modelcontextprotocol.io/)
 - [LangChain MCP Integration](https://docs.langchain.com/oss/python/langchain/mcp)
-
-## Configuration
-
-### Agent Configuration Files
-
-Agents can be configured using YAML files:
-
-```yaml
-- name: supervisor
-  role: Project Manager
-  instructions: |
-    You coordinate tasks and delegate to specialists.
-    Analyze user requests and assign work appropriately.
-  provider: openai
-  model: gpt-4.1-mini
-  temperature: 0.0
-  tools:
-    - tool_name
-  context: full
-
-- name: worker
-  role: Specialist
-  instructions: |
-    You handle specific tasks delegated by the supervisor.
-  provider: openai
-  model: gpt-4.1-mini
-  temperature: 0.0
-```
-
-#### HITL Configuration
-
-```yaml
-- name: analyst
-  role: Data Analyst
-  instructions: "..."
-  tools:
-    - analyze_data
-  human_in_loop: true
-  interrupt_on:
-    analyze_data:
-      allowed_decisions:
-        - approve
-        - reject
-        - edit
-  hitl_description_prefix: "Action requires approval"
-```
-
-### UI Configuration
-
-```python
-import streamlit as st
-import streamlit_langgraph as slg
-
-config = slg.UIConfig(
-    title="My Multiagent App",
-    welcome_message="Welcome! Ask me anything.",
-    user_avatar="👤",
-    assistant_avatar="🤖",
-    page_icon="🤖",
-    page_layout="wide",  # or "centered"
-    enable_file_upload="multiple",  # False, True, "multiple" (default), or "directory"
-    show_sidebar=True,  # Set to False to define custom sidebar
-    stream=True,
-    file_callback=None  # Optional: function to preprocess files before upload
-)
-
-if "chat" not in st.session_state:
-    st.session_state.chat = slg.LangGraphChat(workflow=workflow, agents=agents)
-st.session_state.chat.run()
-```
-
-#### Custom Sidebar
-
-```python
-import streamlit as st
-import streamlit_langgraph as slg
-
-config = slg.UIConfig(show_sidebar=False)  # Disable default sidebar
-
-# Define your own sidebar
-with st.sidebar:
-    st.header("Custom Sidebar")
-    option = st.selectbox("Choose option", ["A", "B", "C"])
-    # Your custom controls
-
-if "chat" not in st.session_state:
-    st.session_state.chat = slg.LangGraphChat(
-        workflow=workflow,
-        agents=agents,
-        config=config
-    )
-st.session_state.chat.run()
-```
 
 ## API Reference
 
