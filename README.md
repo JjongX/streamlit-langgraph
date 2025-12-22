@@ -28,6 +28,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Section and Block System](#section-and-block-system)
   - [Workflow State as Single Source of Truth](#workflow-state-as-single-source-of-truth)
   - [Streamlit Session State Usage](#streamlit-session-state-usage)
+- [Package Structure](#package-structure)
 - [Core Concepts](#core-concepts)
   - [Agent Configuration](#agent-configuration)
   - [Workflow Patterns](#workflow-patterns)
@@ -221,7 +222,7 @@ streamlit run examples/simple_example.py
 
 **File**: `examples/file_callback_example.py`
 
-Demonstrates how to use the `file_callback` parameter to preprocess uploaded files before they are sent to OpenAI. The callback receives the file path and returns a processed file path.
+Demonstrates how to use the `file_callback` parameter to preprocess uploaded files before they are sent to OpenAI. The callback receives the file path and returns a processed file path, or optionally a tuple with additional files.
 
 ```bash
 streamlit run examples/file_callback_example.py
@@ -230,9 +231,10 @@ streamlit run examples/file_callback_example.py
 **Features**:
 - Preprocess files (e.g., filter CSV columns) before upload
 - Works with single agent and multi-agent workflows
-- Only the processed file is uploaded to OpenAI
+- Support for returning additional files generated during preprocessing
+- Automatically uploads additional CSV files to code_interpreter container
 
-**Example**:
+**Example - Simple Preprocessing**:
 ```python
 import pandas as pd
 import streamlit_langgraph as slg
@@ -253,6 +255,39 @@ def filter_columns(file_path: str) -> str:
 config = slg.UIConfig(
     title="File Preprocessing Example",
     file_callback=filter_columns,
+)
+```
+
+**Example - Preprocessing with Additional Files**:
+```python
+from pathlib import Path
+import streamlit_langgraph as slg
+
+def preprocess_with_additional_files(file_path: str):
+    """
+    Preprocess file and generate additional CSV files.
+    
+    Returns:
+        Tuple of (main_file_path, additional_files_directory) or
+        Tuple of (main_file_path, [list_of_file_paths])
+    """
+    # Process the main file
+    processed_path = process_main_file(file_path)
+    
+    # Generate additional CSV files in a directory
+    output_dir = Path("outputs") / "generated_csvs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate multiple CSV files
+    generate_csv_files(output_dir)
+    
+    # Return tuple: (main file, directory with additional files)
+    # All CSV files in the directory will be automatically uploaded
+    return (processed_path, output_dir)
+
+config = slg.UIConfig(
+    title="Multi-File Preprocessing Example",
+    file_callback=preprocess_with_additional_files,
 )
 ```
 
@@ -422,6 +457,50 @@ Streamlit renders UI
 - **Persistence**: State survives Streamlit reruns
 - **Workflow compatibility**: LangGraph workflows can read/write state directly
 - **UI synchronization**: Display always reflects workflow_state
+
+## Package Structure
+
+This section provides an overview of the package's internal organization and module structure.
+
+### Top-Level Modules
+
+- **`agent.py`**: `Agent` class and `AgentManager` for agent configuration and management
+- **`chat.py`**: `LangGraphChat` main interface and `UIConfig` for UI settings
+- **`workflow/`**: Workflow builders and patterns (supervisor, hierarchical, network)
+
+### Core Modules (`core/`)
+
+**Executor (`core/executor/`):**
+- `response_api.py`: `ResponseAPIExecutor` for OpenAI Responses API
+- `create_agent.py`: `CreateAgentExecutor` for LangChain agents with HITL support
+- `registry.py`: `ExecutorRegistry` for automatic executor selection
+- `workflow.py`: `WorkflowExecutor` for workflow execution
+- `conversation_history.py`: Conversation history management mixin
+
+**State (`core/state/`):**
+- `state_schema.py`: `WorkflowState` TypedDict and `WorkflowStateManager`
+- `state_sync.py`: `StateSynchronizer` for syncing workflow state
+
+**Middleware (`core/middleware/`):**
+- `hitl.py`: `HITLHandler` and `HITLUtils` for human-in-the-loop
+- `interrupts.py`: `InterruptManager` for interrupt handling
+
+### UI Modules (`ui/`)
+
+- `display_manager.py`: `DisplayManager`, `Section`, and `Block` for UI rendering
+- `stream_processor.py`: `StreamProcessor` for handling streaming responses
+
+### Utility Modules (`utils/`)
+
+- `file_handler.py`: `FileHandler` for file upload and processing
+- `custom_tool.py`: `CustomTool` registry for custom tools
+- `mcp_tool.py`: `MCPToolManager` for MCP server integration
+
+### Workflow Modules (`workflow/`)
+
+- `builder.py`: `WorkflowBuilder` for creating workflows
+- `patterns/`: Workflow pattern implementations (supervisor, hierarchical, network)
+- `agent_nodes/`: Agent node factories and delegation patterns
 
 ## Core Concepts
 
@@ -971,48 +1050,6 @@ if "chat" not in st.session_state:
 st.session_state.chat.run()
 ```
 
-#### File Upload Configuration
-
-The `enable_file_upload` parameter supports multiple options:
-
-- `False`: No file uploads allowed
-- `True`: Single file upload (for backward compatibility, converted to "multiple")
-- `"multiple"` (Default): Multiple files can be uploaded simultaneously
-- `"directory"`: Users can select a directory containing multiple files
-
-#### File Preprocessing Callback
-
-Use `file_callback` to preprocess files before they are uploaded to OpenAI:
-
-```python
-def preprocess_file(file_path: str) -> str:
-    """
-    Process uploaded file before sending to OpenAI.
-    
-    Args:
-        file_path: Path to the uploaded file
-        
-    Returns:
-        Path to the processed file
-    """
-    # Your preprocessing logic here
-    # Example: filter CSV columns, transform data, convert format
-    processed_path = file_path.replace('.csv', '_processed.csv')
-    # ... process and save ...
-    return processed_path
-
-config = slg.UIConfig(
-    title="My App",
-    file_callback=preprocess_file
-)
-```
-
-**Notes**:
-- The callback is executed immediately when files are uploaded
-- Only the processed file is uploaded to OpenAI (replaces original)
-- Works with both single agent and multi-agent workflows
-- If callback returns the original path unchanged, the original file is used
-
 #### Custom Sidebar
 
 ```python
@@ -1140,7 +1177,7 @@ agent = manager.get_agent("analyst")
 | `assistant_avatar` | `str` | `"🤖"` | Avatar for assistant messages (emoji or image path) |
 | `stream` | `bool` | `True` | Enable streaming responses |
 | `enable_file_upload` | `bool` or `str` | `"multiple"` | File upload configuration: `False`, `True`, `"multiple"`, or `"directory"` |
-| `file_callback` | `Callable[[str], str]` | `None` | Optional callback to preprocess files before upload |
+| `file_callback` | `Callable[[str], str \| tuple]` | `None` | Optional callback to preprocess files before upload. Can return a single file path or a tuple `(main_file_path, additional_files)` where additional_files can be a directory path or list of file paths |
 | `show_sidebar` | `bool` | `True` | Show default sidebar (set False for custom) |
 | `placeholder` | `str` | `"Type your message here..."` | Placeholder text for chat input |
 | `welcome_message` | `str` | `None` | Welcome message shown at start (supports Markdown) |
@@ -1372,6 +1409,6 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**Status**: Pre-alpha | **Python**: 3.9+ | **LangGraph**: 1.0.1
+**Status**: Pre-alpha | **Python**: 3.10+ | **LangGraph**: 1.0.1
 
 For issues and feature requests, please open an issue on GitHub.

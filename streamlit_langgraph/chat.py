@@ -1,7 +1,8 @@
 # Main chat interface.
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Literal, Optional, Union, Tuple
 
 import streamlit as st
 from langgraph.graph import StateGraph
@@ -31,7 +32,10 @@ class UIConfig:
         assistant_avatar: Avatar for assistant messages (emoji or image path)
         placeholder: Placeholder text for chat input
         welcome_message: Welcome message shown at start (supports Markdown)
-        file_callback: Optional callback to preprocess files before upload
+        file_callback: Optional callback to preprocess files before upload.
+            Can return a single file path (str) or a tuple (main_file_path, additional_files)
+            where additional_files can be a directory path or list of file paths.
+            Additional files will be automatically uploaded to code_interpreter container if enabled.
     """
     title: str
     page_icon: Optional[str] = "🤖"
@@ -44,7 +48,7 @@ class UIConfig:
     assistant_avatar: Optional[str] = "🤖"
     placeholder: str = "Type your message here..."
     welcome_message: Optional[str] = None
-    file_callback: Optional[Callable[[str], str]] = None
+    file_callback: Optional[Callable[[str], Union[str, Tuple[str, Union[str, List[str], Path]]]]] = None
 
 
 class LangGraphChat:
