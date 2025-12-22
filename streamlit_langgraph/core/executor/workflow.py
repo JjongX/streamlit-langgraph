@@ -12,7 +12,12 @@ from ..state import WorkflowState, WorkflowStateManager
 
 
 class WorkflowExecutor:
-    """Unified workflow executor with display callback and single-agent execution support."""
+    """
+    Unified workflow executor with display callback and single-agent execution support.
+    
+    Handles execution of compiled LangGraph workflows with optional real-time
+    display updates and single-agent execution for non-workflow scenarios.
+    """
     
     def execute_workflow(self, workflow: StateGraph, 
                         display_callback: Optional[Callable] = None,
@@ -89,9 +94,10 @@ class WorkflowExecutor:
         
         return wrapper
     
-    def execute_agent(self, agent: Agent, prompt: str,
-                           llm_client: Any, config: Any,
-                           file_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    def execute_agent(
+        self, agent: Agent, prompt: str, llm_client: Any,
+        config: Any, file_messages: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         """
         Execute a single agent (non-workflow mode).
         
@@ -151,7 +157,7 @@ class WorkflowExecutor:
         display_callback(accumulated_state)
         return accumulated_state
     
-    def _apply_state_update(self, accumulated_state: WorkflowState, state_update: Dict[str, Any]) -> None:
+    def _apply_state_update(self, accumulated_state, state_update):
         """Apply state update to accumulated state, handling reducers manually."""
         if "messages" in state_update:
             accumulated_state["messages"] = accumulated_state.get("messages", []) + state_update["messages"]

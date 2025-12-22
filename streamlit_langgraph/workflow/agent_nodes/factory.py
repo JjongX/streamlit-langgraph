@@ -1,12 +1,10 @@
 # Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes.
 
 import uuid
-from typing import Any, Callable, Dict, List
-
-from ...agent import Agent, AgentManager
+from ...agent import AgentManager
 from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
-from ...core.state import WorkflowState, WorkflowStateManager, create_message_with_id
+from ...core.state import WorkflowStateManager, create_message_with_id
 from ..prompts import SupervisorPromptBuilder
 
 
@@ -14,18 +12,8 @@ class AgentNodeBase:
     """Base class providing common functionality for agent node operations."""
     
     @staticmethod
-    def execute_agent(agent: Agent, state: WorkflowState, input_message: str) -> str:
-        """
-        Execute an agent and return the response.
-                
-        Args:
-            agent: Agent to execute
-            state: Current workflow state
-            input_message: Input message/prompt for the agent
-            
-        Returns:
-            Agent response content as string (empty string if interrupted)
-        """
+    def execute_agent(agent, state, input_message):
+        """Execute an agent and return the response."""
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
         if hasattr(executor, 'tools'):
@@ -77,7 +65,7 @@ class AgentNodeBase:
         return result.get("content", "")
 
     @staticmethod
-    def extract_user_query(state: WorkflowState) -> str:
+    def extract_user_query(state) -> str:
         """Extract user query from state messages."""
         for msg in reversed(state["messages"]):
             if msg["role"] == "user":
@@ -89,16 +77,14 @@ class AgentNodeFactory:
     """Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes."""
 
     @staticmethod
-    def create_supervisor_agent_node(supervisor: Agent, workers: List[Agent], 
-                                     allow_parallel: bool = False,
-                                     delegation_mode: str = "handoff") -> Callable:
+    def create_supervisor_agent_node(supervisor, workers, allow_parallel=False, delegation_mode="handoff"):
         """Create a supervisor agent node with structured routing."""
         from .tool_calling_delegation import ToolCallingDelegation  # lazy import to avoid circular import
 
         if delegation_mode == "handoff":
             from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
             
-            def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
+            def supervisor_agent_node(state):
                 pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
                 if pending_interrupts:
                     return {"current_agent": supervisor.name, "metadata": state.get("metadata", {})}
@@ -127,7 +113,7 @@ class AgentNodeFactory:
         else:  # tool calling delegation mode
             
             tool_agents_map = {agent.name: agent for agent in workers}
-            def supervisor_agent_node(state: WorkflowState) -> Dict[str, Any]:
+            def supervisor_agent_node(state):
                 user_query = AgentNodeBase.extract_user_query(state)
                 agent_tools = ToolCallingDelegation.create_agent_tools(workers)
                 response = ToolCallingDelegation.execute_agent_with_tools(
@@ -141,11 +127,11 @@ class AgentNodeFactory:
             return supervisor_agent_node
     
     @staticmethod
-    def create_worker_agent_node(worker: Agent, supervisor: Agent) -> Callable:
+    def create_worker_agent_node(worker, supervisor):
         """Create a worker agent node for supervisor workflows."""
         from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
         
-        def worker_agent_node(state: WorkflowState) -> Dict[str, Any]:
+        def worker_agent_node(state):
             user_query = AgentNodeBase.extract_user_query(state)
             context_data, previous_worker_outputs = HandoffDelegation.build_worker_context(
                 state, worker, supervisor
@@ -171,17 +157,12 @@ class AgentNodeFactory:
         return worker_agent_node
     
     @staticmethod
-    def create_network_agent_node(agent: Agent, peer_agents: List[Agent]) -> Callable:
-        """
-        Create a network agent node that can hand off to any peer.
-        
-        In the network pattern, each agent can delegate to any other agent
-        in the network. There is no supervisor - all agents are peers.
-        """
+    def create_network_agent_node(agent, peer_agents):
+        """Create a network agent node that can hand off to any peer."""
         from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
         from ..prompts import NetworkPromptBuilder
         
-        def network_agent_node(state: WorkflowState) -> Dict[str, Any]:
+        def network_agent_node(state):
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
             if pending_interrupts:
                 return {"current_agent": agent.name, "metadata": state.get("metadata", {})}

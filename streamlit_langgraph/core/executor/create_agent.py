@@ -76,9 +76,8 @@ class CreateAgentExecutor(ConversationHistoryMixin):
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
-                
         except Exception as e:
-            return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
+            return {"role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
     
     def execute_workflow(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -113,9 +112,8 @@ class CreateAgentExecutor(ConversationHistoryMixin):
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
-
         except Exception as e:
-            return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
+            return {"role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
     
     def resume(
         self, 
@@ -388,13 +386,8 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             "config": config
         }
     
-    def _check_and_update_vector_store_ids(self, llm_client: Any) -> None:
-        """
-        Check if vector_store_ids have changed and invalidate agent if needed.
-        
-        Args:
-            llm_client: LLM client instance to check for vector_store_ids
-        """
+    def _check_and_update_vector_store_ids(self, llm_client):
+        """Check if vector_store_ids have changed and invalidate agent if needed."""
         current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
         if not hasattr(self, '_last_vector_store_ids'):
             self._last_vector_store_ids = None

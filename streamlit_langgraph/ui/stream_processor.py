@@ -1,11 +1,8 @@
 # Stream processor for handling different streaming formats.
 
 import base64
-import logging
 
 from langchain_core.messages import AIMessage
-
-logger = logging.getLogger(__name__)
 
 
 class StreamProcessor:

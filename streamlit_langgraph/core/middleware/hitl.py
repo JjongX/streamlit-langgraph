@@ -15,11 +15,8 @@ class HITLUtils:
     """Utility functions for HITL approval/decision processing and data transformation."""
     
     @staticmethod
-    def has_pending_interrupts(workflow_state: Optional[Dict[str, Any]]) -> bool:
-        """
-        Check if there are any pending interrupts in the workflow state.
-        Delegates to InterruptManager for the actual check.
-        """
+    def has_pending_interrupts(workflow_state):
+        """Check if there are any pending interrupts in the workflow state."""
         if not workflow_state:
             return False
         return InterruptManager.has_pending_interrupts(workflow_state)
@@ -27,7 +24,7 @@ class HITLUtils:
     # --- Action Request Extraction ---
     
     @staticmethod
-    def extract_action_requests_from_interrupt(interrupt_raw: Any) -> List[Dict[str, Any]]:
+    def extract_action_requests_from_interrupt(interrupt_raw):
         """Extract action_requests from Interrupt objects."""
         if not interrupt_raw:
             return []
@@ -47,7 +44,7 @@ class HITLUtils:
         return []
     
     @staticmethod
-    def check_edit_allowed(agent_interrupt_on: Optional[Dict[str, Any]], tool_name: str) -> bool:
+    def check_edit_allowed(agent_interrupt_on, tool_name):
         """Check if editing is allowed for a tool based on agent's interrupt_on configuration."""
         if not agent_interrupt_on:
             return True
@@ -60,7 +57,7 @@ class HITLUtils:
         return True
     
     @staticmethod
-    def parse_edit_input(edit_text: str, default_input: Any) -> tuple:
+    def parse_edit_input(edit_text, default_input):
         """Parse user edit input, attempting JSON parsing if applicable."""
         if not edit_text.strip():
             return default_input, None
@@ -69,7 +66,7 @@ class HITLUtils:
         return parsed, None
     
     @staticmethod
-    def get_valid_interrupts(workflow_state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    def get_valid_interrupts(workflow_state):
         """Extract and filter valid interrupts from workflow state."""
         pending_interrupts = WorkflowStateManager.get_pending_interrupts(workflow_state)
         return {
@@ -78,7 +75,7 @@ class HITLUtils:
         }
     
     @staticmethod
-    def clear_interrupt_and_decisions(workflow_state: Dict[str, Any], executor_key: str):
+    def clear_interrupt_and_decisions(workflow_state, executor_key):
         """Clear interrupt and decisions from workflow state."""
         if "pending_interrupts" in workflow_state.get("metadata", {}):
             workflow_state["metadata"]["pending_interrupts"].pop(executor_key, None)
@@ -108,17 +105,8 @@ class HITLHandler:
         self.state_manager = state_manager
         self.display_manager = display_manager
     
-    def handle_pending_interrupts(self, workflow_state: Dict[str, Any]) -> bool:
-        """
-        Display UI for pending human-in-the-loop interrupts and handle user decisions.
-        
-        Args:
-            workflow_state: Current workflow state
-            
-        Returns:
-            True if interrupts were found and handled (should block further processing)
-            False if no interrupts (should continue normal processing)
-        """
+    def handle_pending_interrupts(self, workflow_state):
+        """Display UI for pending human-in-the-loop interrupts and handle user decisions."""
         if not workflow_state:
             return False
         
@@ -137,19 +125,8 @@ class HITLHandler:
         
         return False
     
-    def process_interrupt(self, workflow_state: Dict[str, Any], executor_key: str, 
-                          interrupt_data: Dict[str, Any]) -> bool:
-        """
-        Process a single interrupt - returns True if handled.
-        
-        Args:
-            workflow_state: Current workflow state
-            executor_key: Key identifying the executor
-            interrupt_data: Interrupt data dictionary
-            
-        Returns:
-            True if interrupt was handled, False otherwise
-        """
+    def process_interrupt(self, workflow_state, executor_key, interrupt_data):
+        """Process a single interrupt - returns True if handled."""
         agent_name = interrupt_data.get("agent", "Unknown")
         interrupt_raw = interrupt_data.get("__interrupt__", [])
         original_config = interrupt_data.get("config", {})
@@ -179,18 +156,8 @@ class HITLHandler:
                                         pending_action_index, decisions, workflow_state)
         return True
     
-    def get_or_create_executor(self, agent_name: str, 
-                               workflow_state: Dict[str, Any]):
-        """
-        Get existing executor or create a new one.
-        
-        Args:
-            agent_name: Name of the agent
-            workflow_state: Current workflow state
-            
-        Returns:
-            CreateAgentExecutor instance or None
-        """
+    def get_or_create_executor(self, agent_name, workflow_state):
+        """Get existing executor or create a new one."""
         registry = ExecutorRegistry()
         executor_key = f"workflow_executor_{agent_name}"
         executor = st.session_state.agent_executors.get(executor_key)
@@ -206,23 +173,8 @@ class HITLHandler:
         
         return executor
     
-    def resume_with_decisions(self, workflow_state: Dict[str, Any], executor_key: str,
-                               executor, agent_name: str,
-                               decisions: List[Dict[str, Any]], original_config: Dict[str, Any]) -> bool:
-        """
-        Resume execution with all decisions made.
-        
-        Args:
-            workflow_state: Current workflow state
-            executor_key: Key identifying the executor
-            executor: CreateAgentExecutor instance
-            agent_name: Name of the agent
-            decisions: List of user decisions
-            original_config: Original execution config (should contain thread_id)
-            
-        Returns:
-            True if execution was resumed
-        """
+    def resume_with_decisions(self, workflow_state, executor_key, executor, agent_name, decisions, original_config):
+        """Resume execution with all decisions made."""
         # Clear interrupt using state manager
         self.state_manager.clear_pending_interrupt(executor_key)
         

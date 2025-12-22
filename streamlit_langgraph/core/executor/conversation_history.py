@@ -1,6 +1,6 @@
 # Shared conversation history management for executors.
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ...ui.display_manager import Block, Section, DisplayManager
 
@@ -85,7 +85,7 @@ class ConversationHistoryMixin:
         
         return blocks
     
-    def _add_to_conversation_history(self, role: str, blocks: List[Block]) -> None:
+    def _add_to_conversation_history(self, role, blocks):
         """Add a message to conversation history using Section."""
         # Skip if history is disabled
         if self._conversation_history_mode == "disable":
@@ -125,7 +125,7 @@ class ConversationHistoryMixin:
         
         return filtered_sections
     
-    def _process_file_messages(self, file_messages: Optional[List]) -> None:
+    def _process_file_messages(self, file_messages):
         """Process file messages and add to conversation history."""
         if not file_messages:
             return
@@ -158,11 +158,7 @@ class ConversationHistoryMixin:
                     self._add_to_conversation_history(role, file_blocks)
                     self._processed_message_ids.add(temp_id)
     
-    def _update_conversation_history_from_messages(
-        self, 
-        messages: Optional[List[Dict[str, Any]]], 
-        file_messages: Optional[List] = None
-    ) -> None:
+    def _update_conversation_history_from_messages(self, messages, file_messages=None):
         """Update conversation history from workflow_state messages."""
         # Process regular messages
         if messages:

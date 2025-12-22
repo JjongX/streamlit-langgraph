@@ -8,7 +8,6 @@ import time
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
-from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 MIME_TYPES = {
     "txt" : "text/plain",
@@ -110,11 +109,11 @@ class FileHandler:
     
     def update_settings(
         self,
-        allow_file_search: Optional[bool] = None,
-        allow_code_interpreter: Optional[bool] = None,
-        container_id: Optional[str] = None,
-        model: Optional[str] = None
-    ) -> None:
+        allow_file_search=None,
+        allow_code_interpreter=None,
+        container_id=None,
+        model=None
+    ):
         """Update FileHandler settings dynamically."""
         if model is not None:
             self.model = model
@@ -125,15 +124,8 @@ class FileHandler:
         if container_id is not None:
             self._container_id = container_id
     
-    def track(self, uploaded_file: UploadedFile) -> "FileHandler.FileInfo":
-        """Tracks a file uploaded by the user.
-        
-        Args:
-            uploaded_file: An UploadedFile object from Streamlit.
-            
-        Returns:
-            FileInfo: The tracked file information.
-        """
+    def track(self, uploaded_file):
+        """Tracks a file uploaded by the user."""
         file_path = Path(os.path.join(self.temp_dir, uploaded_file.name))
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getvalue())
@@ -278,14 +270,14 @@ class FileHandler:
         
         return file_info
     
-    def get_openai_input_messages(self) -> List[Dict[str, Any]]:
+    def get_openai_input_messages(self):
         """Get OpenAI input messages for all tracked files."""
         messages = []
         for file_info in self._tracked_files:
             messages.extend(file_info.input_messages)
         return messages
 
-    def get_vector_store_ids(self) -> List[str]:
+    def get_vector_store_ids(self):
         """Get vector store IDs for file search."""
         vector_store_ids = []
         

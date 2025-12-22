@@ -1,7 +1,6 @@
 # ResponseAPIExecutor for OpenAI Responses API
 
 import json
-import logging
 import os
 from typing import Any, Dict, List, Optional
 
@@ -247,8 +246,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         Returns:
             Final response after all function calls are executed
         """
-        logger = logging.getLogger("streamlit_langgraph")
-        
         # Build a map of function names to their implementations
         function_map = self._build_function_map()
         
@@ -290,12 +287,9 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                                 args_dict = arguments if isinstance(arguments, dict) else {}
                             
                             # Execute the custom function
-                            logger.info(f"Executing custom function: {function_name} with args: {args_dict}")
                             function_impl = function_map[function_name]
                             result = function_impl(**args_dict)
                             result_str = str(result)
-                            
-                            logger.info(f"Function {function_name} returned: {result_str[:200]}...")
                             
                             # Store result for next API call
                             function_results.append({
@@ -303,17 +297,13 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                                 "name": function_name,
                                 "result": result_str
                             })
-                            
                         except Exception as e:
-                            error_msg = f"Error executing function {function_name}: {str(e)}"
-                            logger.error(error_msg)
                             function_results.append({
                                 "call_id": call_id,
                                 "name": function_name,
                                 "result": f"Error: {str(e)}"
                             })
                     else:
-                        logger.warning(f"Function {function_name} not found in function map")
                         function_results.append({
                             "call_id": call_id,
                             "name": function_name,
@@ -353,7 +343,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                 # No results to send back, exit loop
                 return current_response
         
-        logger.warning(f"Max iterations ({max_iterations}) reached in function call loop")
         return current_response
     
     def _build_function_map(self) -> Dict[str, Any]:
@@ -514,7 +503,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         result = ''.join(text_parts) if text_parts else str(response) if response else ""
         return result
     
-    def update_vector_store_ids(self, llm_client: Any) -> None:
+    def update_vector_store_ids(self, llm_client):
         """Update vector_store_ids from llm_client and invalidate tools config if changed."""
         current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
         if current_vector_ids != self._vector_store_ids:

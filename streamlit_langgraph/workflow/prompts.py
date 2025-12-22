@@ -56,11 +56,8 @@ Complete this task and return the result. Be concise and focused on the specific
 class SupervisorPromptBuilder:    
     @staticmethod
     def get_supervisor_instructions(
-        role: str, 
-        instructions: str, 
-        user_query: str,
-        worker_list: str, 
-        worker_outputs: List[str]
+        role: str, instructions: str, user_query: str, 
+        worker_list: str,  worker_outputs: List[str]
     ) -> str:
         """Get full supervisor instructions template."""
         outputs_text = "\n".join(worker_outputs) if worker_outputs else "No worker outputs yet"
