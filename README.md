@@ -214,22 +214,22 @@ All examples are in the `examples/` directory.
 
 ### Simple Single Agent
 
-**File**: `examples/simple_example.py`
+**File**: `examples/01_basic_simple_example.py`
 
 Basic chat interface with a single agent. No workflow orchestration.
 
 ```bash
-streamlit run examples/simple_example.py
+streamlit run examples/01_basic_simple_example.py
 ```
 
 ### File Preprocessing Callback
 
-**File**: `examples/file_callback_example.py`
+**File**: `examples/06_feature_file_callback_example.py`
 
 Demonstrates how to use the `file_callback` parameter to preprocess uploaded files before they are sent to OpenAI. The callback receives the file path and returns a processed file path, or optionally a tuple with additional files.
 
 ```bash
-streamlit run examples/file_callback_example.py
+streamlit run examples/06_feature_file_callback_example.py
 ```
 
 **Features**:
@@ -297,50 +297,50 @@ config = slg.UIConfig(
 
 ### Supervisor Sequential
 
-**File**: `examples/supervisor_sequential_example.py`
+**File**: `examples/02_workflow_supervisor_sequential_example.py`
 
 Supervisor coordinates workers sequentially. Workers execute one at a time with full context.
 
 **Config**: `examples/configs/supervisor_sequential.yaml`
 
 ```bash
-streamlit run examples/supervisor_sequential_example.py
+streamlit run examples/02_workflow_supervisor_sequential_example.py
 ```
 
 ### Supervisor Parallel
 
-**File**: `examples/supervisor_parallel_example.py`
+**File**: `examples/03_workflow_supervisor_parallel_example.py`
 
 Supervisor delegates tasks to multiple workers who can work in parallel.
 
 **Config**: `examples/configs/supervisor_parallel.yaml`
 
 ```bash
-streamlit run examples/supervisor_parallel_example.py
+streamlit run examples/03_workflow_supervisor_parallel_example.py
 ```
 
 ### Hierarchical Workflow
 
-**File**: `examples/hierarchical_example.py`
+**File**: `examples/04_workflow_hierarchical_example.py`
 
 Multi-level organization with top supervisor managing sub-supervisor teams.
 
 **Config**: `examples/configs/hierarchical.yaml`
 
 ```bash
-streamlit run examples/hierarchical_example.py
+streamlit run examples/04_workflow_hierarchical_example.py
 ```
 
 ### Network Workflow
 
-**File**: `examples/network_example.py`
+**File**: `examples/05_workflow_network_example.py`
 
 Peer-to-peer network pattern where agents can communicate directly with any other agent. No central supervisor - agents form a mesh topology and can hand off work to any peer.
 
 **Config**: `examples/configs/network.yaml`
 
 ```bash
-streamlit run examples/network_example.py
+streamlit run examples/05_workflow_network_example.py
 ```
 
 **Features**:
@@ -354,14 +354,14 @@ streamlit run examples/network_example.py
 
 ### Human-in-the-Loop
 
-**File**: `examples/human_in_the_loop_example.py`
+**File**: `examples/07_feature_human_in_the_loop_example.py`
 
 Demonstrates HITL with tool execution approval. Users can approve, reject, or edit tool calls before execution.
 
 **Config**: `examples/configs/human_in_the_loop.yaml`
 
 ```bash
-streamlit run examples/human_in_the_loop_example.py
+streamlit run examples/07_feature_human_in_the_loop_example.py
 ```
 
 **Features**:
@@ -371,12 +371,12 @@ streamlit run examples/human_in_the_loop_example.py
 
 ### MCP Tools
 
-**File**: `examples/mcp_example.py`
+**File**: `examples/08_feature_mcp_example.py`
 
 Demonstrates integration with MCP (Model Context Protocol) servers to access external tools and resources.
 
 ```bash
-streamlit run examples/mcp_example.py
+streamlit run examples/08_feature_mcp_example.py
 ```
 
 **Prerequisites**:

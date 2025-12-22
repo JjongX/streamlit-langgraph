@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 
@@ -112,7 +113,8 @@ def main():
     )
     
     # Load agents from config file
-    agents = slg.AgentManager.load_from_yaml("examples/configs/human_in_the_loop.yaml")
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/human_in_the_loop.yaml")
+    agents = slg.AgentManager.load_from_yaml(config_path)
     # Separate supervisor and workers
     supervisor = next(agent for agent in agents if agent.name == "supervisor")
     workers = [agent for agent in agents if agent.name != "supervisor"]
