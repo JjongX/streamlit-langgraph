@@ -32,55 +32,37 @@ class ExecutorRegistry:
         """
         from .create_agent import CreateAgentExecutor
         from .response_api import ResponseAPIExecutor
-        from ...utils import CustomTool, MCPToolManager
 
         executor_key = "single_agent_executor" if executor_type == "single_agent" else f"workflow_executor_{agent.name}"
         
         has_native = ExecutorRegistry.has_native_tools(agent)
-        has_hitl = agent.human_in_loop
-        use_response_api = has_native and not has_hitl
+        use_response_api = has_native and not agent.human_in_loop
         
-        # Check if executor exists and is the correct type for this agent's configuration
+        # Check if executor exists and is the correct type
         existing_executor = st.session_state.agent_executors.get(executor_key)
         executor_needs_recreation = False
         
         if existing_executor is not None:
-            # Verify the existing executor is the correct type for current agent configuration
             is_response_api = isinstance(existing_executor, ResponseAPIExecutor)
             is_create_agent = isinstance(existing_executor, CreateAgentExecutor)
             
-            # Recreate if executor type doesn't match current agent configuration
             if use_response_api and not is_response_api:
                 executor_needs_recreation = True
             elif not use_response_api and not is_create_agent:
                 executor_needs_recreation = True
-            # Also recreate if the agent configuration changed (different agent object)
             elif hasattr(existing_executor, 'agent') and existing_executor.agent.name != agent.name:
                 executor_needs_recreation = True
         
         if executor_key not in st.session_state.agent_executors or executor_needs_recreation:
             if use_response_api:
-                # Get custom tools for ResponseAPIExecutor
-                custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
-                executor = ResponseAPIExecutor(agent, tools=custom_tools)
+                executor = ResponseAPIExecutor(agent, tools=agent.get_tools())
             else:
                 executor = CreateAgentExecutor(agent, tools=tools)
             st.session_state.agent_executors[executor_key] = executor
         else:
             executor = existing_executor
-            
-            if isinstance(executor, CreateAgentExecutor) and hasattr(executor, 'tools'):
-                custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
-                mcp_tools = []
-                if agent.mcp_servers:
-                    mcp_manager = MCPToolManager()
-                    mcp_manager.add_servers(agent.mcp_servers)
-                    mcp_tools = mcp_manager.get_tools()
-                executor.tools = custom_tools + mcp_tools
-            elif isinstance(executor, ResponseAPIExecutor) and hasattr(executor, 'tools'):
-                # Update ResponseAPIExecutor tools
-                custom_tools = CustomTool.get_langchain_tools(agent.tools) if agent.tools else []
-                executor.tools = custom_tools
+            if hasattr(executor, 'tools'):
+                executor.tools = agent.get_tools()
         
         return executor
     

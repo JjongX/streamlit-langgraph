@@ -1,9 +1,11 @@
 # Main chat interface.
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Literal, Optional, Union, Tuple
 
 import streamlit as st
+from langgraph.graph import StateGraph
 
 from .agent import Agent, AgentManager
 from .core.executor import WorkflowExecutor
@@ -16,7 +18,25 @@ from .utils import FileHandler, CustomTool
 
 @dataclass
 class UIConfig:
-    """Configuration for the Streamlit UI interface."""
+    """
+    Streamlit UI configuration.
+    
+    Attributes:
+        title: Application title shown in browser tab and header
+        page_icon: Favicon emoji or path to image file
+        page_layout: Page layout mode ("wide" or "centered")
+        stream: Enable streaming responses
+        enable_file_upload: File upload configuration (False, True, "multiple", or "directory")
+        show_sidebar: Show default sidebar (set False for custom)
+        user_avatar: Avatar for user messages (emoji or image path)
+        assistant_avatar: Avatar for assistant messages (emoji or image path)
+        placeholder: Placeholder text for chat input
+        welcome_message: Welcome message shown at start (supports Markdown)
+        file_callback: Optional callback to preprocess files before upload.
+            Can return a single file path (str) or a tuple (main_file_path, additional_files)
+            where additional_files can be a directory path or list of file paths.
+            Additional files will be automatically uploaded to code_interpreter container if enabled.
+    """
     title: str
     page_icon: Optional[str] = "🤖"
     page_layout: str = "wide"
@@ -28,28 +48,36 @@ class UIConfig:
     assistant_avatar: Optional[str] = "🤖"
     placeholder: str = "Type your message here..."
     welcome_message: Optional[str] = None
-    file_callback: Optional[Callable[[str], str]] = None
+    file_callback: Optional[Callable[[str], Union[str, Tuple[str, Union[str, List[str], Path]]]]] = None
 
 
 class LangGraphChat:
     """
-    Main class for creating agent chat interfaces with Streamlit and LangGraph.
+    Main chat interface for Streamlit and LangGraph workflows.
+    
+    This class manages the entire chat interface, including UI rendering,
+    message handling, file processing, and workflow execution.
     """
     
     def __init__(
         self,
-        workflow=None,
+        workflow: Optional[StateGraph] = None,
         agents: Optional[List[Agent]] = None,
         config: Optional[UIConfig] = None,
-        custom_tools: Optional[List[CustomTool]] = None):
+        custom_tools: Optional[List[CustomTool]] = None
+    ):
         """
         Initialize the LangGraph Chat interface.
 
         Args:
-            workflow: LangGraph workflow (StateGraph)
+            workflow: LangGraph workflow (StateGraph) for multi-agent scenarios
             agents: List of agents to use
             config: Chat configuration
-            custom_tools: List of custom tools
+            custom_tools: List of custom tools to register
+            
+        Raises:
+            ValueError: If multiple agents are provided without a workflow,
+                       or if HITL is enabled without a workflow
         """
         self.config = config or UIConfig()
         self._init_session_state()
@@ -108,7 +136,6 @@ class LangGraphChat:
     
     def _init_session_state(self):
         """Initialize all Streamlit session state variables in one place."""
-        
         if "workflow_state" not in st.session_state:
             st.session_state.workflow_state = WorkflowStateManager.create_initial_state()
         if "agent_executors" not in st.session_state:
@@ -119,7 +146,7 @@ class LangGraphChat:
             st.session_state.uploaded_files_set = set()
     
     def _get_workflow_state(self) -> Dict[str, Any]:
-        """Get workflow state with metadata initialization (cached access)."""
+        """Get workflow state, initializing metadata if needed."""
         workflow_state = st.session_state.workflow_state
         if "metadata" not in workflow_state:
             workflow_state["metadata"] = {}
@@ -234,24 +261,22 @@ class LangGraphChat:
                 response["agent"]
             )
     
-    def _update_file_messages_in_state(self, force: bool = False):
-        """Update file messages and vector store IDs in workflow state metadata."""
+    def _update_file_messages_in_state(self, force=False):
+        """Update file messages and vector store IDs in workflow state."""
         workflow_state = self._get_workflow_state()
         
-        # Check if file messages have changed (skip if unchanged and not forced)
-        if not force:
-            current_file_messages = self.file_handler.get_openai_input_messages()
-            cached_messages = workflow_state["metadata"].get("file_messages")
-            if cached_messages == current_file_messages:
-                return  # No change, skip update
-        
         file_messages = self.file_handler.get_openai_input_messages()
+        if not force:
+            cached_messages = workflow_state["metadata"].get("file_messages")
+            if cached_messages == file_messages:
+                return
+        
         vector_store_ids = self.file_handler.get_vector_store_ids()
         workflow_state["metadata"]["file_messages"] = file_messages
         workflow_state["metadata"]["vector_store_ids"] = vector_store_ids
     
     def _get_file_messages_from_state(self):
-        """Get file messages and vector store IDs from workflow state."""
+        """Get file messages and vector store IDs from state."""
         workflow_state = self._get_workflow_state()
         metadata = workflow_state["metadata"]
         file_messages = metadata.get("file_messages")
@@ -261,19 +286,18 @@ class LangGraphChat:
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
         for uploaded_file in files:
-            # Use set for O(1) lookup instead of O(n) list membership check
             file_id = getattr(uploaded_file, 'file_id', None) or uploaded_file.name
             if file_id not in st.session_state.uploaded_files_set:
                 file_info = self.file_handler.track(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
                 st.session_state.uploaded_files_set.add(file_id)
-                # Optimize dict creation
+                # Optimize dict creation; exclude content to reduce memory usage
                 file_dict = {k: v for k, v in file_info.__dict__.items() if k != "content"}
                 self.state_manager.update_workflow_state({"files": [file_dict]})
         
         self._update_file_messages_in_state(force=True)
 
-    def _generate_response(self, prompt: str) -> Dict[str, Any]:
+    def _generate_response(self, prompt):
         """Generate response using the configured workflow or dynamically selected agents."""
         if self.workflow:
             return self._run_workflow(prompt)
@@ -282,11 +306,10 @@ class LangGraphChat:
             return self._run_agent(prompt, agent)
         return {"role": "assistant", "content": "", "agent": "system"}
     
-    def _run_workflow(self, prompt: str) -> Dict[str, Any]:
-        """Run the multiagent workflow and orchestrate UI updates."""
+    def _run_workflow(self, prompt):
+        """Execute multiagent workflow and handle UI updates."""
         workflow_state = self._get_workflow_state()
         workflow_state["metadata"]["stream"] = self.config.stream
-        
         self._update_file_messages_in_state()
         
         result_state = self.workflow_executor.execute_workflow(
@@ -307,18 +330,10 @@ class LangGraphChat:
         )
         st.session_state.workflow_state = result_state
         
-        return {
-            "role": "assistant",
-            "content": "",
-            "agent": "workflow-completed"
-        }
+        return {"role": "assistant", "content": "", "agent": "workflow-completed"}
     
-    def _run_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
-        """
-        Run a single agent and orchestrate UI updates.
-        
-        Note: HITL is not supported for single agents. Use workflows for HITL functionality.
-        """
+    def _run_agent(self, prompt, agent):
+        """Run single agent (HITL not supported - use workflows for HITL)."""
         self._update_file_messages_in_state()
         file_messages, vector_store_ids = self._get_file_messages_from_state()
         

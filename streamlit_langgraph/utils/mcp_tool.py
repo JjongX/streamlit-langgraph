@@ -19,7 +19,7 @@ class MCPToolManager:
         self.mcp_client: Optional[MultiServerMCPClient] = None
         self._server_configs: Dict[str, Dict[str, Any]] = {}
     
-    def add_servers(self, servers: Dict[str, Dict[str, Any]]) -> None:
+    def add_servers(self, servers):
         """Add multiple MCP server configurations at once."""
         for server_name, config in servers.items():
             self._server_configs[server_name] = config

@@ -1,15 +1,12 @@
 # Display management for Streamlit UI components.
 
 import base64
-import logging
 import os
 from typing import Any, Dict, List, Optional, Union
 
 import streamlit as st
 
 from ..utils import MIME_TYPES
-
-logger = logging.getLogger(__name__)
 
 
 class Block:
@@ -26,14 +23,14 @@ class Block:
         content: Optional[Union[str, bytes]] = None,
         filename: Optional[str] = None,
         file_id: Optional[str] = None,
-    ) -> None:
+    ):
         self.display_manager = display_manager
         self.category = category
         self.content = content if content is not None else ("" if category not in ["image", "generated_image", "download"] else b"")
         self.filename = filename
         self.file_id = file_id
 
-    def write(self) -> None:
+    def write(self):
         """Render this block's content to the Streamlit interface."""
         if self.category == "text":
             st.markdown(self.content)
@@ -49,7 +46,7 @@ class Block:
         elif self.category == "download":
             self._render_download()
     
-    def _render_download(self) -> None:
+    def _render_download(self):
         """Render download button for file content."""
         _, file_extension = os.path.splitext(self.filename)
         st.download_button(
@@ -74,7 +71,7 @@ class Section:
         display_manager: "DisplayManager",
         role: str,
         blocks: Optional[List[Block]] = None,
-    ) -> None:
+    ):
         self.display_manager = display_manager
         self.role = role
         self.blocks = blocks or []
@@ -89,8 +86,7 @@ class Section:
     def last_block(self) -> Optional[Block]:
         return None if self.empty else self.blocks[-1]
     
-    def update(self, category: str, content: Union[str, bytes], filename: Optional[str] = None, 
-               file_id: Optional[str] = None) -> None:
+    def update(self, category, content, filename=None, file_id=None):
         """
         Add or append content to this section.
         
@@ -99,32 +95,27 @@ class Section:
         the content is replaced (for partial image updates).
         Otherwise, a new block is created.
         """
-        logger.debug(f"Section.update called - category: {category}, content type: {type(content)}, content length: {len(content) if content else 0}, filename: {filename}, file_id: {file_id}")
         if self.empty:
              # Create first block
-            logger.debug("Creating first block")
             self.blocks = [self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             )]
         elif (category in ["text", "code", "reasoning"] and 
               self.last_block.category == category):
             # Append to existing block for same category
-            logger.debug(f"Appending to existing {category} block")
             self.last_block.content += content
         elif (category == "generated_image" and 
               self.last_block.category == "generated_image" and
               self.last_block.file_id == file_id and file_id is not None):
             # Replace content for partial image updates (same file_id)
-            logger.debug(f"Replacing content in existing generated_image block (file_id: {file_id})")
             self.last_block.content = content
         else:
             # Create new block for different category
-            logger.debug(f"Creating new {category} block (previous was {self.last_block.category})")
             self.blocks.append(self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             ))
     
-    def stream(self) -> None:
+    def stream(self):
         """Render this section and all its blocks to the Streamlit interface."""
         avatar = (self.display_manager.config.user_avatar if self.role == "user" 
                  else self.display_manager.config.assistant_avatar)
@@ -167,7 +158,7 @@ class Section:
         
         return section_data
     
-    def _save_to_session_state(self) -> None:
+    def _save_to_session_state(self):
         """Save section data to workflow_state."""
         section_data = self.to_dict()
         
@@ -204,7 +195,7 @@ class DisplayManager:
         self._sections.append(section)
         return section
     
-    def render_message_history(self) -> None:
+    def render_message_history(self):
         """Render historical messages from workflow_state."""
         if not self.state_manager:
             raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
@@ -250,13 +241,13 @@ class DisplayManager:
                 if "agent_info" in section_data and "agent" in section_data["agent_info"]:
                     st.caption(f"Agent: {section_data['agent_info']['agent']}")
     
-    def render_welcome_message(self) -> None:
+    def render_welcome_message(self):
         """Render welcome message if configured."""
         if self.config.welcome_message:
             with st.chat_message("assistant", avatar=self.config.assistant_avatar):
                 st.markdown(self.config.welcome_message)
     
-    def render_workflow_message(self, message: Dict[str, Any]) -> bool:
+    def render_workflow_message(self, message):
         """Render a single workflow message."""
         msg_id = message.get("id")
         if not msg_id:

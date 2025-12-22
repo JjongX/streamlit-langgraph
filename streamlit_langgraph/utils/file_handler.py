@@ -1,14 +1,12 @@
 # File handling utilities for OpenAI API integration.
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import tempfile
-import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
-from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 MIME_TYPES = {
     "txt" : "text/plain",
@@ -63,10 +61,10 @@ class FileHandler:
         size: int
         type: str
         content: Optional[bytes] = None
-        metadata: Dict[str, Any] = None
+        metadata: Optional[Dict[str, Any]] = None
         openai_file_id: Optional[str] = None
         vision_file_id: Optional[str] = None
-        input_messages: List[Dict[str, Any]] = None
+        input_messages: Optional[List[Dict[str, Any]]] = None
         
         def __post_init__(self):
             if self.metadata is None:
@@ -110,11 +108,11 @@ class FileHandler:
     
     def update_settings(
         self,
-        allow_file_search: Optional[bool] = None,
-        allow_code_interpreter: Optional[bool] = None,
-        container_id: Optional[str] = None,
-        model: Optional[str] = None
-    ) -> None:
+        allow_file_search=None,
+        allow_code_interpreter=None,
+        container_id=None,
+        model=None
+    ):
         """Update FileHandler settings dynamically."""
         if model is not None:
             self.model = model
@@ -125,33 +123,13 @@ class FileHandler:
         if container_id is not None:
             self._container_id = container_id
     
-    def track(self, uploaded_file: UploadedFile) -> "FileHandler.FileInfo":
-        """Tracks a file uploaded by the user.
+    def track(self, uploaded_file):
+        """Tracks a file uploaded by the user."""
+        file_path = self._save_uploaded_file(uploaded_file)
+        file_path = self._apply_preprocessing(file_path)
         
-        Args:
-            uploaded_file: An UploadedFile object from Streamlit.
-            
-        Returns:
-            FileInfo: The tracked file information.
-        """
-        file_path = Path(os.path.join(self.temp_dir, uploaded_file.name))
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getvalue())
-
-        # Apply preprocessing callback if provided
-        if self.preprocessing_callback:
-            processed_path = self.preprocessing_callback(str(file_path))
-            file_path = Path(processed_path)
-            if not file_path.exists():
-                raise FileNotFoundError(f"Preprocessing callback did not produce a valid file at: {processed_path}")
-            
-            # After preprocessing, upload generated CSV files to code_interpreter container
-            if self.allow_code_interpreter and self._container_id:
-                self._upload_generated_csvs_to_container()
-
         file_ext = file_path.suffix.lower()
         file_type = MIME_TYPES.get(file_ext.lstrip("."), "application/octet-stream")
-        
         file_id = uploaded_file.file_id if hasattr(uploaded_file, 'file_id') else uploaded_file.name
         
         file_info = FileHandler.FileInfo(
@@ -164,9 +142,7 @@ class FileHandler:
         )
         
         if not self.openai_client:
-            self._tracked_files.append(file_info)
-            if file_id:
-                self.files[file_id] = file_info
+            self._store_file_info(file_info, file_id)
             return file_info
         
         if not hasattr(self.openai_client, 'files'):
@@ -175,13 +151,99 @@ class FileHandler:
                 "The client must have a 'files' attribute for file operations. "
                 "Please ensure the OpenAI client is correctly initialized."
             )
+        
+        openai_file, vision_file = self._process_file_uploads(file_path, file_ext, file_info)
+        self._process_code_interpreter(file_path, file_ext, file_info, openai_file, vision_file)
+        self._process_file_search(file_path, file_ext, openai_file)
+        self._finalize_file_info(file_info, file_path, openai_file, vision_file)
+        self._store_file_info(file_info, file_id)
+        
+        return file_info
+    
+    def _save_uploaded_file(self, uploaded_file) -> Path:
+        """Save uploaded file to temporary directory."""
+        file_path = Path(os.path.join(self.temp_dir, uploaded_file.name))
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getvalue())
+        return file_path
+    
+    def _apply_preprocessing(self, file_path: Path) -> Path:
+        """
+        Apply preprocessing callback if provided.
+        
+        The callback can return:
+        - A single file path (str): The processed file to use
+        - A tuple of (main_file_path, additional_files): 
+          - additional_files can be a directory path (str/Path) or list of file paths
+          - If directory, all CSV files in it will be uploaded to code_interpreter
+          - If list, those specific files will be uploaded
+        """
+        if not self.preprocessing_callback:
+            return file_path
+        
+        callback_result = self.preprocessing_callback(str(file_path))
+        
+        # Handle tuple/list return for additional files
+        if isinstance(callback_result, (tuple, list)) and len(callback_result) >= 2:
+            processed_path = callback_result[0]
+            additional_files = callback_result[1]
+        else:
+            processed_path = callback_result
+            additional_files = None
+        
+        file_path = Path(processed_path)
+        if not file_path.exists():
+            raise FileNotFoundError(
+                f"Preprocessing callback did not produce a valid file at: {processed_path}"
+            )
+        
+        # Handle additional files generated by preprocessing
+        if additional_files and self.allow_code_interpreter and self._container_id:
+            self._upload_additional_files(additional_files)
+        
+        return file_path
+    
+    def _upload_additional_files(self, additional_files):
+        """
+        Upload additional files generated by preprocessing to code_interpreter container.
+        
+        Args:
+            additional_files: Can be:
+                - A directory path (str/Path): Uploads all CSV files in the directory
+                  If the directory contains subdirectories, it will recursively find CSV files
+                - A list of file paths: Uploads those specific files
+        """
+        if not self.openai_client or not self._container_id:
+            return
+        
+        # Get all CSV files to upload
+        files_to_upload = []
+        if isinstance(additional_files, (str, Path)):
+            dir_path = Path(additional_files)
+            if dir_path.is_dir(): # Recursively find all CSV files in the directory
+                files_to_upload = list(dir_path.rglob("*.csv"))
+            elif dir_path.is_file(): # Single file
+                files_to_upload = [dir_path]
+        elif isinstance(additional_files, list): # List of file paths
+            files_to_upload = [Path(f) for f in additional_files if Path(f).exists()]
+        
+        # Upload each file to the container
+        for file_path in files_to_upload:
+            if not file_path.exists():
+                continue
+            with open(file_path, "rb") as f:
+                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+            self.openai_client.containers.files.create(
+                container_id=self._container_id,
+                file_id=openai_file.id
+            )
 
-        file_ext_lower = file_path.suffix.lower()
+    def _process_file_uploads(self, file_path: Path, file_ext: str, file_info: FileInfo) -> tuple:
+        """Process file uploads for PDF and vision files. Returns (openai_file, vision_file)."""
         openai_file = None
         vision_file = None
-        skip_file_search = False
-
-        if file_ext_lower == ".pdf":
+        
+        if file_ext == ".pdf":
             with open(file_path, "rb") as f:
                 openai_file = self.openai_client.files.create(file=f, purpose="user_data")
             file_info.input_messages.append({
@@ -189,71 +251,86 @@ class FileHandler:
                 "content": [{"type": "input_file", "file_id": openai_file.id}]
             })
 
-        if file_ext_lower in FileHandler.VISION_EXTENSIONS:
+        if file_ext in FileHandler.VISION_EXTENSIONS:
             vision_file = self.openai_client.files.create(file=file_path, purpose="vision")
             file_info.input_messages.append({
                 "role": "user",
                 "content": [{"type": "input_image", "file_id": vision_file.id}]
             })
-
-        if (self.allow_code_interpreter and 
-            self._container_id and 
-            file_ext_lower in FileHandler.CODE_INTERPRETER_EXTENSIONS):
-            if file_ext_lower in FileHandler.VISION_EXTENSIONS:
-                openai_file = vision_file
-            if openai_file is None:
-                with open(file_path, "rb") as f:
-                    openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-            self.openai_client.containers.files.create(
-                container_id=self._container_id,
-                file_id=openai_file.id,
-            )
-            
-            # Store file info for conversation context
-            file_info.metadata['container_file_id'] = openai_file.id
-            file_info.metadata['container_id'] = self._container_id
-
-        if (self.allow_file_search and 
-            not skip_file_search and 
-            file_ext_lower in FileHandler.FILE_SEARCH_EXTENSIONS):
-            if openai_file is None:
-                with open(file_path, "rb") as f:
-                    openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-            
-            if self._dynamic_vector_store is None:
-                if "file_handler_vector_stores" in st.session_state and st.session_state.file_handler_vector_stores:
-                    existing_vs_id = st.session_state.file_handler_vector_stores[0]
-                    try:
-                        self._dynamic_vector_store = self.openai_client.vector_stores.retrieve(existing_vs_id)
-                    except Exception:
-                        self._dynamic_vector_store = self.openai_client.vector_stores.create(
-                            name="streamlit-langgraph"
-                        )
-                        if self._dynamic_vector_store.id not in st.session_state.file_handler_vector_stores:
-                            st.session_state.file_handler_vector_stores.append(self._dynamic_vector_store.id)
-                else:
+        
+        return openai_file, vision_file
+    
+    def _process_code_interpreter(
+        self, file_path: Path, file_ext: str, file_info: FileInfo,
+        openai_file, vision_file
+    ):
+        """Process file for code interpreter if enabled."""
+        if not (self.allow_code_interpreter and 
+                self._container_id and 
+                file_ext in FileHandler.CODE_INTERPRETER_EXTENSIONS):
+            return
+        
+        # Use vision_file if available, otherwise create new openai_file
+        if file_ext in FileHandler.VISION_EXTENSIONS:
+            openai_file = vision_file
+        if openai_file is None:
+            with open(file_path, "rb") as f:
+                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+        
+        self.openai_client.containers.files.create(
+            container_id=self._container_id,
+            file_id=openai_file.id,
+        )
+        # Store file info for conversation context
+        file_info.metadata['container_file_id'] = openai_file.id
+        file_info.metadata['container_id'] = self._container_id
+    
+    def _process_file_search(self, file_path: Path, file_ext: str, openai_file):
+        """Process file for file search if enabled."""
+        if not (self.allow_file_search and 
+                file_ext in FileHandler.FILE_SEARCH_EXTENSIONS):
+            return
+        
+        if openai_file is None:
+            with open(file_path, "rb") as f:
+                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
+        
+        # Get existing vector store or create a new one
+        if self._dynamic_vector_store is None:
+            if ("file_handler_vector_stores" in st.session_state and 
+                st.session_state.file_handler_vector_stores):
+                existing_vs_id = st.session_state.file_handler_vector_stores[0]
+                try:
+                    self._dynamic_vector_store = self.openai_client.vector_stores.retrieve(existing_vs_id)
+                except Exception:
+                    # Create new vector store if retrieval fails
                     self._dynamic_vector_store = self.openai_client.vector_stores.create(
                         name="streamlit-langgraph"
                     )
+                    # Update session state
                     if "file_handler_vector_stores" not in st.session_state:
                         st.session_state.file_handler_vector_stores = []
                     if self._dynamic_vector_store.id not in st.session_state.file_handler_vector_stores:
                         st.session_state.file_handler_vector_stores.append(self._dynamic_vector_store.id)
-            
-            self.openai_client.vector_stores.files.create(
-                vector_store_id=self._dynamic_vector_store.id,
-                file_id=openai_file.id
-            )
-            
-            result = self.openai_client.vector_stores.retrieve(
-                vector_store_id=self._dynamic_vector_store.id,
-            )
-            while result.status != "completed":
-                time.sleep(1)
-                result = self.openai_client.vector_stores.retrieve(
-                    vector_store_id=self._dynamic_vector_store.id,
+            else:
+                # Create new vector store
+                self._dynamic_vector_store = self.openai_client.vector_stores.create(
+                    name="streamlit-langgraph"
                 )
-
+                # Update session state
+                if "file_handler_vector_stores" not in st.session_state:
+                    st.session_state.file_handler_vector_stores = []
+                if self._dynamic_vector_store.id not in st.session_state.file_handler_vector_stores:
+                    st.session_state.file_handler_vector_stores.append(self._dynamic_vector_store.id)
+        
+        vector_store = self._dynamic_vector_store
+        self.openai_client.vector_stores.files.create(
+            vector_store_id=vector_store.id,
+            file_id=openai_file.id
+        )
+    
+    def _finalize_file_info(self, file_info: FileInfo, file_path: Path, openai_file, vision_file):
+        """Finalize file info with IDs and context messages."""
         if openai_file:
             file_info.openai_file_id = openai_file.id
         if vision_file:
@@ -271,21 +348,21 @@ class FileHandler:
             "role": "user",
             "content": [{"type": "input_text", "text": " | ".join(file_context_parts)}]
         })
-
+    
+    def _store_file_info(self, file_info: FileInfo, file_id: str):
+        """Store file info in tracked files and files dictionary."""
         self._tracked_files.append(file_info)
         if file_id:
             self.files[file_id] = file_info
-        
-        return file_info
     
-    def get_openai_input_messages(self) -> List[Dict[str, Any]]:
+    def get_openai_input_messages(self):
         """Get OpenAI input messages for all tracked files."""
         messages = []
         for file_info in self._tracked_files:
             messages.extend(file_info.input_messages)
         return messages
 
-    def get_vector_store_ids(self) -> List[str]:
+    def get_vector_store_ids(self):
         """Get vector store IDs for file search."""
         vector_store_ids = []
         
@@ -298,29 +375,3 @@ class FileHandler:
                     vector_store_ids.append(vs_id)
         
         return vector_store_ids
-    
-    def _upload_generated_csvs_to_container(self):
-        """Upload generated CSV files from the latest timestamped output directory to code_interpreter container."""
-        import glob
-        outputs_dir = Path("test/outputs")
-        
-        if not outputs_dir.exists():
-            return
-        
-        csv_dirs = sorted(glob.glob(str(outputs_dir / "output_csvs_*")), reverse=True)
-        if not csv_dirs:
-            return
-        
-        latest_csv_dir = Path(csv_dirs[0])
-        csv_files = list(latest_csv_dir.glob("*.csv"))
-        
-        if not csv_files:
-            return
-        
-        for csv_file in csv_files:
-            with open(csv_file, "rb") as f:
-                openai_file = self.openai_client.files.create(file=f, purpose="user_data")
-            self.openai_client.containers.files.create(
-                container_id=self._container_id,
-                file_id=openai_file.id
-            )

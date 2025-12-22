@@ -45,18 +45,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         self._last_vector_store_ids = None
         self._init_conversation_history(agent)
         
-        if tools is not None:
-            self.tools = tools
-        else:
-            from ...utils import CustomTool, MCPToolManager
-            
-            custom_tools = CustomTool.get_langchain_tools(self.agent.tools) if self.agent.tools else []
-            mcp_tools = []
-            if self.agent.mcp_servers:
-                mcp_manager = MCPToolManager()
-                mcp_manager.add_servers(self.agent.mcp_servers)
-                mcp_tools = mcp_manager.get_tools()
-            self.tools = custom_tools + mcp_tools
+        self.tools = tools if tools is not None else self.agent.get_tools()
     
     def execute_agent(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -87,9 +76,8 @@ class CreateAgentExecutor(ConversationHistoryMixin):
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
-                
         except Exception as e:
-            return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
+            return {"role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
     
     def execute_workflow(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -124,9 +112,8 @@ class CreateAgentExecutor(ConversationHistoryMixin):
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
                 return {"role": "assistant", "content": result_text, "agent": self.agent.name}
-
         except Exception as e:
-            return {"role": "assistant", "content": f"Agent error: {str(e)}", "agent": self.agent.name}
+            return {"role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
     
     def resume(
         self, 
@@ -399,13 +386,8 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             "config": config
         }
     
-    def _check_and_update_vector_store_ids(self, llm_client: Any) -> None:
-        """
-        Check if vector_store_ids have changed and invalidate agent if needed.
-        
-        Args:
-            llm_client: LLM client instance to check for vector_store_ids
-        """
+    def _check_and_update_vector_store_ids(self, llm_client):
+        """Check if vector_store_ids have changed and invalidate agent if needed."""
         current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
         if not hasattr(self, '_last_vector_store_ids'):
             self._last_vector_store_ids = None

@@ -18,7 +18,6 @@ def main():
         allow_code_interpreter=True,
         allow_web_search=True,
         allow_image_generation=True,
-        enable_logging=True,
     )
     config = slg.UIConfig(
         title="Simple Chat Assistant",

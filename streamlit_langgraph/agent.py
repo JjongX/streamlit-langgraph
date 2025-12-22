@@ -1,10 +1,8 @@
 # Main agent class.
 
-import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
-from logging.handlers import RotatingFileHandler
 
 import yaml
 from langchain.chat_models import init_chat_model
@@ -13,14 +11,36 @@ from langchain.chat_models import init_chat_model
 @dataclass
 class Agent:
     """
-    Configuration class for defining individual agents in a multiagent system.
-    Required fields: name, role, instructions.
-    provider and model default to 'openai' and 'gpt-4.1-mini' if not specified.
+    Agent configuration for multiagent workflows.
     
-    Executor selection:
-    - If HITL enabled → CreateAgentExecutor (native tools automatically disabled)
-    - If native tools enabled AND HITL disabled → ResponseAPIExecutor
+    This class represents a single agent in a multi-agent system with its configuration,
+    capabilities, and behavior settings.
+    
+    Executor selection logic:
+    - HITL enabled → CreateAgentExecutor (native tools disabled)
+    - Native tools + no HITL → ResponseAPIExecutor
     - Otherwise → CreateAgentExecutor
+    
+    Attributes:
+        name: Unique identifier for the agent
+        role: Brief description of the agent's role
+        instructions: Detailed instructions guiding agent behavior
+        provider: LLM provider name (default: "openai")
+        model: Model name to use (default: "gpt-4.1-mini")
+        system_message: Custom system message (auto-generated if None)
+        temperature: Sampling temperature for responses (default: 0.0)
+        allow_file_search: Enable file search capability
+        allow_code_interpreter: Enable code interpreter capability
+        container_id: Container ID for code interpreter (required for code_interpreter)
+        allow_web_search: Enable web search capability
+        allow_image_generation: Enable image generation capability
+        tools: List of custom tool names available to the agent
+        mcp_servers: MCP server configurations
+        context: Context mode ("full", "summary", or "least")
+        human_in_loop: Enable human-in-the-loop approval
+        interrupt_on: HITL configuration per tool
+        hitl_description_prefix: Prefix for HITL approval messages
+        conversation_history_mode: Conversation history mode ("full", "filtered", or "disable")
     """
     name: str
     role: str
@@ -31,7 +51,7 @@ class Agent:
     temperature: float = 0.0
     allow_file_search: bool = False
     allow_code_interpreter: bool = False
-    container_id: Optional[str] = None # require for code_interpreter functionality
+    container_id: Optional[str] = None  # Required for code_interpreter functionality
     allow_web_search: bool = False
     allow_image_generation: bool = False
     tools: List[str] = field(default_factory=list)
@@ -40,13 +60,13 @@ class Agent:
     human_in_loop: bool = False
     interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None
     hitl_description_prefix: Optional[str] = "Tool execution pending approval"
-    enable_logging: bool = False
     conversation_history_mode: str = "filtered"  # Options: "full", "filtered", "disable"
 
     def __post_init__(self):
-        """Post-initialization processing and validation."""
+        """Initialize system message and validate settings."""
         if self.system_message is None:
             self.system_message = f"You are a {self.role}. {self.instructions}"
+            
         if "file_search" in self.tools:
             self.allow_file_search = True
         if "code_interpreter" in self.tools:
@@ -62,39 +82,6 @@ class Agent:
                 f"conversation_history_mode must be one of {valid_modes}, "
                 f"got '{self.conversation_history_mode}'"
             )
-        
-        if self.enable_logging:
-            self._setup_logging()
-
-    def _setup_logging(self) -> None:
-        """Setup file logging for this agent."""
-        log_file = os.path.join(os.getcwd(), "agent_logging.log")
-        logger = logging.getLogger("streamlit_langgraph")
-        
-        if not any(isinstance(h, RotatingFileHandler) and h.baseFilename == os.path.abspath(log_file) 
-                   for h in logger.handlers):
-            file_handler = RotatingFileHandler(
-                log_file,
-                maxBytes=10*1024*1024,
-                backupCount=5,
-                encoding='utf-8'
-            )
-            file_handler.setLevel(logging.DEBUG)
-            
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
-            )
-            file_handler.setFormatter(formatter)
-            
-            logger.addHandler(file_handler)
-            logger.setLevel(logging.DEBUG)
-            
-            if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
-                console_handler = logging.StreamHandler()
-                console_handler.setLevel(logging.WARNING)
-                console_handler.setFormatter(formatter)
-                logger.addHandler(console_handler)
 
     def to_dict(self) -> Dict:
         """Convert agent configuration to dictionary for serialization."""
@@ -117,7 +104,6 @@ class Agent:
             "human_in_loop": self.human_in_loop,
             "interrupt_on": self.interrupt_on,
             "hitl_description_prefix": self.hitl_description_prefix,
-            "enable_logging": self.enable_logging,
             "conversation_history_mode": self.conversation_history_mode,
         }
     
@@ -125,6 +111,40 @@ class Agent:
     def from_dict(cls, data: Dict) -> "Agent":
         """Create an Agent instance from a dictionary configuration."""
         return cls(**data)
+    
+    @staticmethod
+    def sync_container_ids(agents):
+        """Share container_id across all code_interpreter agents."""
+        code_interpreter_agents = [a for a in agents if a.allow_code_interpreter]
+        if not code_interpreter_agents:
+            return
+        
+        # Find first agent with a container_id set
+        shared_container_id = next(
+            (a.container_id for a in code_interpreter_agents 
+             if a.container_id and isinstance(a.container_id, str)), 
+            None
+        )
+        
+        # Apply the shared container_id to all code_interpreter agents
+        if shared_container_id:
+            for agent in code_interpreter_agents:
+                agent.container_id = shared_container_id
+    
+    def get_tools(self) -> List[Any]:
+        """
+        Get all tools for this agent (custom tools + MCP tools).
+        """
+        from .utils import CustomTool, MCPToolManager
+        
+        tools = []
+        if self.tools:
+            tools.extend(CustomTool.get_langchain_tools(self.tools))
+        if self.mcp_servers:
+            mcp_manager = MCPToolManager()
+            mcp_manager.add_servers(self.mcp_servers)
+            tools.extend(mcp_manager.get_tools())
+        return tools
 
 
 class AgentManager:
@@ -134,16 +154,13 @@ class AgentManager:
         self.agents: Dict[str, Agent] = {}
         self.active_agent: Optional[str] = None
     
-    def add_agent(self, agent: Agent) -> None:
+    def add_agent(self, agent):
         """Add an agent to the manager."""
         self.agents[agent.name] = agent
         if self.active_agent is None:
             self.active_agent = agent.name
-        
-        if agent.enable_logging:
-            agent._setup_logging()
     
-    def remove_agent(self, name: str) -> None:
+    def remove_agent(self, name):
         """Remove an agent from the manager."""
         if name in self.agents:
             del self.agents[name]
@@ -175,12 +192,18 @@ class AgentManager:
         
         with open(yaml_path, "r", encoding="utf-8") as f:
             agent_configs = yaml.safe_load(f)
+        
         if not isinstance(agent_configs, list):
-            raise ValueError(f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}")
-        agents = []
+            raise ValueError(
+                f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}"
+            )
+        
+        agents: List[Agent] = []
         for cfg in agent_configs:
             if not isinstance(cfg, dict):
-                raise ValueError(f"Each agent configuration must be a dictionary. Got: {type(cfg)}")
+                raise ValueError(
+                    f"Each agent configuration must be a dictionary. Got: {type(cfg)}"
+                )
             agents.append(Agent(**cfg))
         
         return agents
@@ -213,7 +236,6 @@ class AgentManager:
                     if vector_store_ids:
                         self._vector_store_ids = vector_store_ids
                     self._provider = agent.provider.lower()
-            
             return MinimalClient(vector_store_ids)
         else:
             chat_model = init_chat_model(

@@ -5,12 +5,12 @@ from typing import List, Optional, Any
 from langgraph.graph import StateGraph
 
 from ..agent import Agent
-from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam
+from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam, NetworkPattern
 
 
 class WorkflowBuilder:
+    """High-level builder for creating workflow patterns."""
     
-    # Make SupervisorTeam accessible for Public API exposure 
     SupervisorTeam = SupervisorTeam
 
     def create_supervisor_workflow(self, supervisor: Agent, workers: List[Agent], 
@@ -59,4 +59,22 @@ class WorkflowBuilder:
         """
         return HierarchicalPattern.create_hierarchical_workflow(
             top_supervisor, supervisor_teams, execution_mode, checkpointer)
+    
+    def create_network_workflow(self, agents: List[Agent],
+                               checkpointer: Optional[Any] = None) -> StateGraph:
+        """
+        Create a network workflow where agents can communicate peer-to-peer.
+        
+        In the network pattern, agents form a mesh topology where any agent can
+        hand off to any other agent. There is no central supervisor - all agents
+        are peers. The first agent in the list serves as the entry point.
+        
+        Args:
+            agents (List[Agent]): List of peer agents. First agent is the entry point.
+            checkpointer: Optional checkpointer for workflow state persistence.
+            
+        Returns:
+            StateGraph: Compiled network workflow graph
+        """
+        return NetworkPattern.create_network_workflow(agents, checkpointer)
 
