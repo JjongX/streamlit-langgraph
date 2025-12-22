@@ -12,7 +12,7 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
 
 - [Main Goal](#main-goal)
 - [Status](#status)
-- [Supported LLM Providers](#supported-llm-providers)
+  - [Supported LLM Providers](#supported-llm-providers)
 - [Installation](#installation)
 - [API Key Configuration](#api-key-configuration)
 - [Quick Start](#quick-start)
@@ -22,13 +22,14 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [Supervisor Sequential](#supervisor-sequential)
   - [Supervisor Parallel](#supervisor-parallel)
   - [Hierarchical Workflow](#hierarchical-workflow)
+  - [Network Workflow](#network-workflow)
   - [Human-in-the-Loop](#human-in-the-loop)
   - [MCP Tools](#mcp-tools)
+- [Package Structure](#package-structure)
 - [Core Logic](#core-logic)
   - [Section and Block System](#section-and-block-system)
   - [Workflow State as Single Source of Truth](#workflow-state-as-single-source-of-truth)
   - [Streamlit Session State Usage](#streamlit-session-state-usage)
-- [Package Structure](#package-structure)
 - [Core Concepts](#core-concepts)
   - [Agent Configuration](#agent-configuration)
   - [Workflow Patterns](#workflow-patterns)
@@ -81,7 +82,7 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 
 **Note:** Uses `langchain`/`langgraph` version `1.0.1`.
 
-## Supported LLM Providers
+### Supported LLM Providers
 
 | Provider | Support | Notes |
 |----------|---------|-------|
@@ -103,22 +104,20 @@ This project is in **pre-alpha**. Features and APIs are subject to change.
 
 ## Installation
 
-### Using pip
+**Using pip**:
 
 ```bash
 pip install streamlit-langgraph
 ```
 
-### Using UV
+**Using UV**:
 
 [UV](https://github.com/astral-sh/uv) is a fast Python package installer and resolver:
-
 ```bash
 uv pip install streamlit-langgraph
 ```
 
 Or if you're using UV for project management:
-
 ```bash
 uv add streamlit-langgraph
 ```
@@ -131,7 +130,8 @@ Before running your application, you need to configure your API keys. Create a `
 OPENAI_API_KEY = "your-openai-api-key-here"
 ```
 
-**File structure:**
+**File structure:**:
+
 ```
 your-project/
 ├── .streamlit/
@@ -142,9 +142,13 @@ your-project/
 
 ## Quick Start
 
-### Single Agent (Simple)
+Run with: `streamlit run your_app.py`
+
+**Single Agent (Simple)**:
 
 ```python
+# your_app.py
+
 import streamlit as st
 import streamlit_langgraph as slg
 
@@ -172,11 +176,11 @@ if "chat" not in st.session_state:
 st.session_state.chat.run()
 ```
 
-Run with: `streamlit run your_app.py`
-
-### Multi-Agent Workflow
+**Multi-Agent Workflow**:
 
 ```python
+# your_app.py
+
 import streamlit as st
 import streamlit_langgraph as slg
 
@@ -327,6 +331,27 @@ Multi-level organization with top supervisor managing sub-supervisor teams.
 streamlit run examples/hierarchical_example.py
 ```
 
+### Network Workflow
+
+**File**: `examples/network_example.py`
+
+Peer-to-peer network pattern where agents can communicate directly with any other agent. No central supervisor - agents form a mesh topology and can hand off work to any peer.
+
+**Config**: `examples/configs/network.yaml`
+
+```bash
+streamlit run examples/network_example.py
+```
+
+**Features**:
+- True peer-to-peer collaboration
+- Agents can hand work back and forth dynamically
+- No central coordinator - all agents are peers
+- First agent in the list serves as the entry point
+- Best for: Complex scenarios with interdependent concerns
+
+**Use Case**: Strategic consulting teams where specialists need to collaborate dynamically, with work flowing back and forth as issues are identified and re-evaluated.
+
 ### Human-in-the-Loop
 
 **File**: `examples/human_in_the_loop_example.py`
@@ -368,6 +393,50 @@ pip install fastmcp langchain-mcp-adapters
 **MCP Server Examples**:
 - `examples/mcp_servers/math_server.py` - Math operations (add, multiply, subtract, divide)
 - `examples/mcp_servers/weather_server.py` - Weather information
+
+## Package Structure
+
+This section provides an overview of the package's internal organization and module structure.
+
+### Top-Level Modules
+
+- **`agent.py`**: `Agent` class and `AgentManager` for agent configuration and management
+- **`chat.py`**: `LangGraphChat` main interface and `UIConfig` for UI settings
+- **`workflow/`**: Workflow builders and patterns (supervisor, hierarchical, network)
+
+### Core Modules (`core/`)
+
+**Executor (`core/executor/`):**
+- `response_api.py`: `ResponseAPIExecutor` for OpenAI Responses API
+- `create_agent.py`: `CreateAgentExecutor` for LangChain agents with HITL support
+- `registry.py`: `ExecutorRegistry` for automatic executor selection
+- `workflow.py`: `WorkflowExecutor` for workflow execution
+- `conversation_history.py`: Conversation history management mixin
+
+**State (`core/state/`):**
+- `state_schema.py`: `WorkflowState` TypedDict and `WorkflowStateManager`
+- `state_sync.py`: `StateSynchronizer` for syncing workflow state
+
+**Middleware (`core/middleware/`):**
+- `hitl.py`: `HITLHandler` and `HITLUtils` for human-in-the-loop
+- `interrupts.py`: `InterruptManager` for interrupt handling
+
+### UI Modules (`ui/`)
+
+- `display_manager.py`: `DisplayManager`, `Section`, and `Block` for UI rendering
+- `stream_processor.py`: `StreamProcessor` for handling streaming responses
+
+### Utility Modules (`utils/`)
+
+- `file_handler.py`: `FileHandler` for file upload and processing
+- `custom_tool.py`: `CustomTool` registry for custom tools
+- `mcp_tool.py`: `MCPToolManager` for MCP server integration
+
+### Workflow Modules (`workflow/`)
+
+- `builder.py`: `WorkflowBuilder` for creating workflows
+- `patterns/`: Workflow pattern implementations (supervisor, hierarchical, network)
+- `agent_nodes/`: Agent node factories and delegation patterns
 
 ## Core Logic
 
@@ -458,50 +527,6 @@ Streamlit renders UI
 - **Workflow compatibility**: LangGraph workflows can read/write state directly
 - **UI synchronization**: Display always reflects workflow_state
 
-## Package Structure
-
-This section provides an overview of the package's internal organization and module structure.
-
-### Top-Level Modules
-
-- **`agent.py`**: `Agent` class and `AgentManager` for agent configuration and management
-- **`chat.py`**: `LangGraphChat` main interface and `UIConfig` for UI settings
-- **`workflow/`**: Workflow builders and patterns (supervisor, hierarchical, network)
-
-### Core Modules (`core/`)
-
-**Executor (`core/executor/`):**
-- `response_api.py`: `ResponseAPIExecutor` for OpenAI Responses API
-- `create_agent.py`: `CreateAgentExecutor` for LangChain agents with HITL support
-- `registry.py`: `ExecutorRegistry` for automatic executor selection
-- `workflow.py`: `WorkflowExecutor` for workflow execution
-- `conversation_history.py`: Conversation history management mixin
-
-**State (`core/state/`):**
-- `state_schema.py`: `WorkflowState` TypedDict and `WorkflowStateManager`
-- `state_sync.py`: `StateSynchronizer` for syncing workflow state
-
-**Middleware (`core/middleware/`):**
-- `hitl.py`: `HITLHandler` and `HITLUtils` for human-in-the-loop
-- `interrupts.py`: `InterruptManager` for interrupt handling
-
-### UI Modules (`ui/`)
-
-- `display_manager.py`: `DisplayManager`, `Section`, and `Block` for UI rendering
-- `stream_processor.py`: `StreamProcessor` for handling streaming responses
-
-### Utility Modules (`utils/`)
-
-- `file_handler.py`: `FileHandler` for file upload and processing
-- `custom_tool.py`: `CustomTool` registry for custom tools
-- `mcp_tool.py`: `MCPToolManager` for MCP server integration
-
-### Workflow Modules (`workflow/`)
-
-- `builder.py`: `WorkflowBuilder` for creating workflows
-- `patterns/`: Workflow pattern implementations (supervisor, hierarchical, network)
-- `agent_nodes/`: Agent node factories and delegation patterns
-
 ## Core Concepts
 
 ### Agent Configuration
@@ -541,6 +566,13 @@ Multiple supervisor teams coordinated by a top supervisor:
 - Each sub-supervisor manages their own team
 - Multi-level organizational structure
 
+#### **Network Pattern**
+Peer-to-peer mesh topology where agents can communicate directly:
+- No central supervisor - all agents are peers
+- Any agent can hand off to any other agent
+- First agent in the list serves as the entry point
+- Best for: Complex scenarios with interdependent concerns where work needs to flow back and forth
+
 #### **Pattern Selection Guide**
 
 | Pattern | Use Case | Execution | Best For |
@@ -548,6 +580,7 @@ Multiple supervisor teams coordinated by a top supervisor:
 | **Supervisor Sequential** | Tasks need full context from previous steps | Sequential | Research, analysis pipelines |
 | **Supervisor Parallel** | Independent tasks can run simultaneously | Parallel | Data processing, multi-source queries |
 | **Hierarchical** | Complex multi-level organization | Sequential | Large teams, department structure |
+| **Network** | Interdependent concerns, dynamic collaboration | Peer-to-peer | Strategic consulting, complex problem-solving with back-and-forth |
 
 ### Executor Architecture
 
@@ -1038,10 +1071,10 @@ config = slg.UIConfig(
     user_avatar="👤",
     assistant_avatar="🤖",
     page_icon="🤖",
-    enable_file_upload="multiple",  # Allow multiple file uploads
+    page_layout="wide",  # or "centered"
+    enable_file_upload="multiple",  # False, True, "multiple" (default), or "directory"
     show_sidebar=True,  # Set to False to define custom sidebar
     stream=True,
-    enable_file_upload="multiple",  # False, True, "multiple" (default), or "directory"
     file_callback=None  # Optional: function to preprocess files before upload
 )
 
@@ -1089,7 +1122,7 @@ st.session_state.chat.run()
 | `role` | `str` | Required | Brief description of the agent's role |
 | `instructions` | `str` | Required | Detailed instructions guiding agent behavior |
 | `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
-| `model` | `str` | `"gpt-4o-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
+| `model` | `str` | `"gpt-4.1-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
 | `tools` | `List[str]` | `[]` | List of tool names available to the agent |
 | `context` | `str` | `"least"` | Context mode: `"full"`, `"summary"`, or `"least"` |
@@ -1145,7 +1178,13 @@ agent = slg.Agent(
 |--------|-----------|---------|-------------|
 | `add_agent(agent)` | `agent: Agent` | `None` | Add agent to the manager |
 | `remove_agent(name)` | `name: str` | `None` | Remove agent by name |
-| `get_agent(name)` | `name: str` | `Agent` | Retrieve agent by name |
+
+**Properties**:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `agents` | `Dict[str, Agent]` | Dictionary of agents keyed by name |
+| `active_agent` | `str` | Name of the currently active agent |
 
 **Example**:
 ```python
@@ -1157,7 +1196,7 @@ agents = slg.AgentManager.load_from_yaml("config/agents.yaml")
 # Or create manager and add agents
 manager = slg.AgentManager()
 manager.add_agent(my_agent)
-agent = manager.get_agent("analyst")
+agent = manager.agents["analyst"]  # Access via agents dictionary
 ```
 
 ---
@@ -1170,17 +1209,17 @@ agent = manager.get_agent("analyst")
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `title` | `str` | `"LangGraph Chat"` | Application title shown in browser tab and header |
+| `title` | `str` | Required | Application title shown in browser tab and header |
 | `page_icon` | `str` | `"🤖"` | Favicon emoji or path to image file |
-| `welcome_message` | `str` | `None` | Welcome message shown at start (supports Markdown) |
-| `user_avatar` | `str` | `"👤"` | Avatar for user messages (emoji or image path) |
-| `assistant_avatar` | `str` | `"🤖"` | Avatar for assistant messages (emoji or image path) |
+| `page_layout` | `str` | `"wide"` | Page layout mode: `"wide"` or `"centered"` |
 | `stream` | `bool` | `True` | Enable streaming responses |
 | `enable_file_upload` | `bool` or `str` | `"multiple"` | File upload configuration: `False`, `True`, `"multiple"`, or `"directory"` |
-| `file_callback` | `Callable[[str], str \| tuple]` | `None` | Optional callback to preprocess files before upload. Can return a single file path or a tuple `(main_file_path, additional_files)` where additional_files can be a directory path or list of file paths |
 | `show_sidebar` | `bool` | `True` | Show default sidebar (set False for custom) |
+| `user_avatar` | `str` | `"👤"` | Avatar for user messages (emoji or image path) |
+| `assistant_avatar` | `str` | `"🤖"` | Avatar for assistant messages (emoji or image path) |
 | `placeholder` | `str` | `"Type your message here..."` | Placeholder text for chat input |
 | `welcome_message` | `str` | `None` | Welcome message shown at start (supports Markdown) |
+| `file_callback` | `Callable[[str], str \| tuple]` | `None` | Optional callback to preprocess files before upload. Can return a single file path or a tuple `(main_file_path, additional_files)` where additional_files can be a directory path or list of file paths |
 
 **Example**:
 ```python
@@ -1264,6 +1303,7 @@ Creates a supervisor pattern where one agent coordinates multiple workers.
 | `workers` | `List[Agent]` | Required | Worker agents to be coordinated |
 | `execution_mode` | `str` | `"sequential"` | `"sequential"` or `"parallel"` |
 | `delegation_mode` | `str` | `"handoff"` | `"handoff"` or `"tool_calling"` |
+| `checkpointer` | `Any` | `None` | Optional checkpointer for workflow state persistence |
 
 **Returns**: `StateGraph` - Compiled workflow
 
@@ -1291,6 +1331,7 @@ Creates a hierarchical pattern with a top supervisor managing sub-supervisor tea
 | `top_supervisor` | `Agent` | Required | Top-level supervisor |
 | `supervisor_teams` | `List[SupervisorTeam]` | Required | List of sub-supervisor teams |
 | `execution_mode` | `str` | `"sequential"` | Currently only `"sequential"` supported |
+| `checkpointer` | `Any` | `None` | Optional checkpointer for workflow state persistence |
 
 **Returns**: `StateGraph` - Compiled workflow
 
@@ -1319,6 +1360,38 @@ workflow = builder.create_hierarchical_workflow(
     execution_mode="sequential"
 )
 ```
+
+#### `create_network_workflow()`
+
+Creates a network pattern where agents can communicate peer-to-peer in a mesh topology.
+
+**Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `agents` | `List[Agent]` | Required | List of peer agents. First agent is the entry point |
+| `checkpointer` | `Any` | `None` | Optional checkpointer for workflow state persistence |
+
+**Returns**: `StateGraph` - Compiled workflow
+
+**Example**:
+```python
+import streamlit_langgraph as slg
+
+# Create network of peer agents
+agents = [
+    tech_strategist,
+    business_analyst,
+    risk_strategist,
+    delivery_lead
+]
+
+# Create network workflow
+builder = slg.WorkflowBuilder()
+workflow = builder.create_network_workflow(agents=agents)
+```
+
+**Note**: In network workflows, any agent can hand off to any other agent. There is no central supervisor - all agents are peers.
 
 ---
 
