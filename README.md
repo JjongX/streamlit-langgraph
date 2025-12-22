@@ -76,7 +76,7 @@ With that in mind, this package is designed so users can focus on defining agent
 
 ## Status
 
-This project is in **pre-alpha**. Features and APIs are subject to change.
+This project is in **alpha**. Features and APIs are subject to change.
 
 **Note:** Uses `langchain`/`langgraph` version `1.0.1`.
 
@@ -1508,6 +1508,6 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**Status**: Pre-alpha | **Python**: 3.10+ | **LangGraph**: 1.0.1
+**Status**: Alpha | **Python**: 3.10+ | **LangGraph**: 1.0.1
 
 For issues and feature requests, please open an issue on GitHub.
