@@ -1,12 +1,15 @@
 # Main chat interface.
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Literal, Optional, Union, Tuple
 
 import streamlit as st
+from langgraph.graph import StateGraph
 
 from .agent import Agent, AgentManager
 from .core.executor import WorkflowExecutor
+from .core.executor.registry import ExecutorRegistry
 from .core.state import StateSynchronizer, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
 from .ui import DisplayManager, StreamProcessor
@@ -15,51 +18,75 @@ from .utils import FileHandler, CustomTool
 
 @dataclass
 class UIConfig:
-    """Configuration for the Streamlit UI interface."""
+    """
+    Streamlit UI configuration.
+    
+    Attributes:
+        title: Application title shown in browser tab and header
+        page_icon: Favicon emoji or path to image file
+        page_layout: Page layout mode ("wide" or "centered")
+        stream: Enable streaming responses
+        enable_file_upload: File upload configuration (False, True, "multiple", or "directory")
+        show_sidebar: Show default sidebar (set False for custom)
+        user_avatar: Avatar for user messages (emoji or image path)
+        assistant_avatar: Avatar for assistant messages (emoji or image path)
+        placeholder: Placeholder text for chat input
+        welcome_message: Welcome message shown at start (supports Markdown)
+        file_callback: Optional callback to preprocess files before upload.
+            Can return a single file path (str) or a tuple (main_file_path, additional_files)
+            where additional_files can be a directory path or list of file paths.
+            Additional files will be automatically uploaded to code_interpreter container if enabled.
+    """
     title: str
     page_icon: Optional[str] = "🤖"
     page_layout: str = "wide"
-    stream: bool = True  # Enable/disable streaming responses
-    enable_file_upload: bool = True
-    show_sidebar: bool = True  # Show default sidebar
+    stream: bool = True
+    # Might change to a boolean and default to getting multiple if set to True.
+    enable_file_upload: Union[bool, Literal["multiple", "directory"]] = "multiple"
+    show_sidebar: bool = True
     user_avatar: Optional[str] = "👤"
     assistant_avatar: Optional[str] = "🤖"
     placeholder: str = "Type your message here..."
     welcome_message: Optional[str] = None
+    file_callback: Optional[Callable[[str], Union[str, Tuple[str, Union[str, List[str], Path]]]]] = None
 
 
 class LangGraphChat:
     """
-    Main class for creating agent chat interfaces with Streamlit and LangGraph.
+    Main chat interface for Streamlit and LangGraph workflows.
+    
+    This class manages the entire chat interface, including UI rendering,
+    message handling, file processing, and workflow execution.
     """
     
     def __init__(
         self,
-        workflow=None,
+        workflow: Optional[StateGraph] = None,
         agents: Optional[List[Agent]] = None,
         config: Optional[UIConfig] = None,
-        custom_tools: Optional[List[CustomTool]] = None):
+        custom_tools: Optional[List[CustomTool]] = None
+    ):
         """
         Initialize the LangGraph Chat interface.
 
         Args:
-            workflow: LangGraph workflow (StateGraph)
+            workflow: LangGraph workflow (StateGraph) for multi-agent scenarios
             agents: List of agents to use
             config: Chat configuration
-            custom_tools: List of custom tools
+            custom_tools: List of custom tools to register
+            
+        Raises:
+            ValueError: If multiple agents are provided without a workflow,
+                       or if HITL is enabled without a workflow
         """
-        # Configuration and session state
         self.config = config or UIConfig()
         self._init_session_state()
-        # Core managers
         self.agent_manager = AgentManager()
         self.state_manager = StateSynchronizer()
         self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
-        # Workflow setup
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor()
         
-        # Agent and tool setup
         if agents:
             if not workflow and len(agents) > 1:
                 raise ValueError(
@@ -77,27 +104,53 @@ class LangGraphChat:
                     parameters=tool.parameters, return_direct=tool.return_direct
                 )
         
-        # LLM and file handling
         first_agent = next(iter(self.agent_manager.agents.values()))
-        self.llm = AgentManager.get_llm_client(first_agent)
-        openai_client = self.llm if hasattr(self.llm, 'files') else None
-        self.file_handler = FileHandler(openai_client=openai_client)
-        self._client = self.llm if hasattr(self.llm, 'containers') else None
-        self._container_id = None
         
-        # Handlers
+        openai_client = None
+        if (first_agent.provider.lower() == "openai" and
+            ExecutorRegistry.has_native_tools(first_agent)):
+            executor = ExecutorRegistry().get_or_create(first_agent, executor_type="single_agent")
+            from .core.executor.response_api import ResponseAPIExecutor
+            if isinstance(executor, ResponseAPIExecutor):
+                openai_client = executor.openai_client
+        
+        self.file_handler = FileHandler(
+            openai_client=openai_client,
+            model=first_agent.model,
+            allow_file_search=first_agent.allow_file_search,
+            allow_code_interpreter=first_agent.allow_code_interpreter,
+            container_id=first_agent.container_id,
+            preprocessing_callback=self.config.file_callback,
+        )
+        
+        # Sync container_id from FileHandler back to agent if it was auto-created
+        if self.file_handler._container_id and not first_agent.container_id:
+            first_agent.container_id = self.file_handler._container_id
+        
+        vector_store_ids = self.file_handler.get_vector_store_ids()
+        self.llm = AgentManager.get_llm_client(first_agent, vector_store_ids=vector_store_ids)
+        self._client = openai_client
+        self._container_id = first_agent.container_id
         self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
     
     def _init_session_state(self):
         """Initialize all Streamlit session state variables in one place."""
-        
         if "workflow_state" not in st.session_state:
             st.session_state.workflow_state = WorkflowStateManager.create_initial_state()
         if "agent_executors" not in st.session_state:
             st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
-            st.session_state.uploaded_files = []  # File objects (not in workflow_state)
+            st.session_state.uploaded_files = []
+        if "uploaded_files_set" not in st.session_state:
+            st.session_state.uploaded_files_set = set()
+    
+    def _get_workflow_state(self) -> Dict[str, Any]:
+        """Get workflow state, initializing metadata if needed."""
+        workflow_state = st.session_state.workflow_state
+        if "metadata" not in workflow_state:
+            workflow_state["metadata"] = {}
+        return workflow_state
 
     def run(self):
         """Run the main chat interface."""
@@ -108,7 +161,6 @@ class LangGraphChat:
         )
         st.title(self.config.title)
         
-        # Render default sidebar if enabled in config
         if self.config.show_sidebar:
             self._render_sidebar()
         self._render_chat_interface()
@@ -124,13 +176,13 @@ class LangGraphChat:
                         st.write(f"**Role:** {agent.role}")
                         st.write(f"**Instructions:** {agent.instructions[:100]}...")
                         capabilities = []
-                        if hasattr(agent, 'allow_file_search') and agent.allow_file_search:
+                        if agent.allow_file_search:
                             capabilities.append("📁 File Search")
-                        if hasattr(agent, 'allow_code_interpreter') and agent.allow_code_interpreter:
+                        if agent.allow_code_interpreter:
                             capabilities.append("💻 Code Interpreter")
-                        if hasattr(agent, 'allow_web_search') and agent.allow_web_search:
+                        if agent.allow_web_search:
                             capabilities.append("🌐 Web Search")
-                        if hasattr(agent, 'tools') and agent.tools:
+                        if agent.tools:
                             capabilities.append(f"🛠️ {len(agent.tools)} Custom Tools")
                         if capabilities:
                             st.write("**Capabilities:**")
@@ -138,26 +190,28 @@ class LangGraphChat:
                                 st.write(f"- {cap}")
             st.header("Controls")
             if st.button("Reset All", type="secondary"):
+                self.file_handler.reset()
+                self._container_id = None
+                if hasattr(self, 'stream_processor'):
+                    self.stream_processor._container_id = None
                 st.session_state.clear()
+                self._init_session_state()
+                
                 st.rerun()
     
     def _render_chat_interface(self):
         """Render the main chat interface."""
-        # Check if there are any display sections in workflow_state
         display_sections = self.state_manager.get_display_sections()
         if not display_sections:
             self.display_manager.render_welcome_message()
 
-        # Check for pending interrupts FIRST - workflow_state is the single source of truth
-        workflow_state = st.session_state.workflow_state
+        workflow_state = self._get_workflow_state()
         if HITLUtils.has_pending_interrupts(workflow_state):
             interrupt_handled = self.interrupt_handler.handle_pending_interrupts(workflow_state)
             if interrupt_handled:
                 return  # Don't process messages or show input while handling interrupts
 
-        # Render message history
         self.display_manager.render_message_history()
-        # Render user input
         if prompt := st.chat_input(
             self.config.placeholder, accept_file=self.config.enable_file_upload
         ):
@@ -172,51 +226,40 @@ class LangGraphChat:
             prompt = str(chat_input)
             files = []
 
-        if files:
-            self._process_file_uploads(files)
-        
-        workflow_state = st.session_state.workflow_state
-        if "metadata" not in workflow_state:
-            workflow_state["metadata"] = {}
-        
+        # Add user message to state
         self.state_manager.add_user_message(prompt)
-        
         section = self.display_manager.add_section("user")
         section.update("text", prompt)
         for uploaded_file in files:
             section.update("text", f"\n:material/attach_file: `{uploaded_file.name}`")
         section.stream()
-
-        # Clear HITL state before new request
+        
+        if files:
+            with st.spinner("Processing files..."):
+                self._process_file_uploads(files)
+        
         self.state_manager.clear_hitl_state()
         
-        # Generate response
         with st.spinner("Thinking..."):
             response = self._generate_response(prompt)
 
-        # Handle workflow completion
         if response.get("agent") == "workflow-completed":
             return
-        # Handle interrupts from human-in-the-loop
         if response.get("__interrupt__"):
             st.rerun()
         
         if response and "stream" in response:
-            # Handle streaming response - detect format and route to appropriate handler
             section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
-            
             stream_iter = response["stream"]
             full_response = self.stream_processor.process_stream(section, stream_iter)
             response["content"] = full_response
         else:
-            # Handle non-streaming response from agent
             section = self.display_manager.add_section("assistant")
             section._agent_info = {"agent": response["agent"]}
             section.update("text", response["content"])
             section.stream()
 
-        # Add assistant response to state if not a workflow control message
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
             self.state_manager.add_assistant_message(
@@ -224,33 +267,59 @@ class LangGraphChat:
                 response["agent"]
             )
     
+    def _update_file_messages_in_state(self, force=False):
+        """Update file messages and vector store IDs in workflow state."""
+        workflow_state = self._get_workflow_state()
+        
+        file_messages = self.file_handler.get_openai_input_messages()
+        if not force:
+            cached_messages = workflow_state["metadata"].get("file_messages")
+            if cached_messages == file_messages:
+                return
+        
+        vector_store_ids = self.file_handler.get_vector_store_ids()
+        workflow_state["metadata"]["file_messages"] = file_messages
+        workflow_state["metadata"]["vector_store_ids"] = vector_store_ids
+    
+    def _get_file_messages_from_state(self):
+        """Get file messages and vector store IDs from state."""
+        workflow_state = self._get_workflow_state()
+        metadata = workflow_state["metadata"]
+        file_messages = metadata.get("file_messages")
+        vector_store_ids = metadata.get("vector_store_ids")
+        return file_messages, vector_store_ids
+
     def _process_file_uploads(self, files):
         """Process uploaded files and update workflow state."""
         for uploaded_file in files:
-            if uploaded_file not in st.session_state.uploaded_files:
-                file_info = self.file_handler.save_uploaded_file(uploaded_file)
+            file_id = getattr(uploaded_file, 'file_id', None) or uploaded_file.name
+            if file_id not in st.session_state.uploaded_files_set:
+                file_info = self.file_handler.track(uploaded_file)
                 st.session_state.uploaded_files.append(uploaded_file)
-                # Add file metadata to workflow state (not content)
-                self.state_manager.update_workflow_state({
-                    "files": [{k: v for k, v in file_info.__dict__.items() if k != "content"}]
-                })
-    
-    def _generate_response(self, prompt: str) -> Dict[str, Any]:
+                st.session_state.uploaded_files_set.add(file_id)
+                # Optimize dict creation; exclude content to reduce memory usage
+                file_dict = {k: v for k, v in file_info.__dict__.items() if k != "content"}
+                self.state_manager.update_workflow_state({"files": [file_dict]})
+        
+        self._update_file_messages_in_state(force=True)
+
+    def _generate_response(self, prompt):
         """Generate response using the configured workflow or dynamically selected agents."""
         if self.workflow:
             return self._run_workflow(prompt)
         elif self.agent_manager.agents:
-            agent = list(self.agent_manager.agents.values())[0]
+            agent = next(iter(self.agent_manager.agents.values()))
             return self._run_agent(prompt, agent)
         return {"role": "assistant", "content": "", "agent": "system"}
     
-    def _run_workflow(self, prompt: str) -> Dict[str, Any]:
-        """Run the multiagent workflow and orchestrate UI updates."""
-        def display_callback(msg, msg_id):
-            self.display_manager.render_workflow_message(msg)
+    def _run_workflow(self, prompt):
+        """Execute multiagent workflow and handle UI updates."""
+        workflow_state = self._get_workflow_state()
+        workflow_state["metadata"]["stream"] = self.config.stream
+        self._update_file_messages_in_state()
         
         result_state = self.workflow_executor.execute_workflow(
-            self.workflow, display_callback=display_callback
+            self.workflow, display_callback=self.display_manager.render_workflow_message
         )
 
         if HITLUtils.has_pending_interrupts(result_state):
@@ -267,21 +336,18 @@ class LangGraphChat:
         )
         st.session_state.workflow_state = result_state
         
-        return {
-            "role": "assistant",
-            "content": "",
-            "agent": "workflow-completed"
-        }
+        return {"role": "assistant", "content": "", "agent": "workflow-completed"}
     
-    def _run_agent(self, prompt: str, agent: Agent) -> Dict[str, Any]:
-        """
-        Run a single agent and orchestrate UI updates.
+    def _run_agent(self, prompt, agent):
+        """Run single agent (HITL not supported - use workflows for HITL)."""
+        self._update_file_messages_in_state()
+        file_messages, vector_store_ids = self._get_file_messages_from_state()
         
-        Note: HITL is not supported for single agents. Use workflows for HITL functionality.
-        """
-        file_messages = self.file_handler.get_openai_input_messages()
+        if agent.allow_file_search and vector_store_ids:
+            current_vector_ids = getattr(self.llm, '_vector_store_ids', None)
+            if current_vector_ids != vector_store_ids:
+                self.llm = AgentManager.get_llm_client(agent, vector_store_ids=vector_store_ids)
         
-        # Use WorkflowExecutor directly (orchestrator logic merged in)
         response = self.workflow_executor.execute_agent(
             agent, prompt,
             llm_client=self.llm,
@@ -289,12 +355,15 @@ class LangGraphChat:
             file_messages=file_messages
         )
         
-        # Update container_id if agent has code interpreter (for file retrieval)
         if agent.container_id:
             self._container_id = agent.container_id
             self.stream_processor._container_id = agent.container_id
+            self.file_handler.update_settings(
+                allow_file_search=agent.allow_file_search,
+                allow_code_interpreter=agent.allow_code_interpreter,
+                container_id=agent.container_id,
+            )
         
-        # Update workflow_state with agent response using state manager
         if response.get("content"):
             self.state_manager.add_assistant_message(
                 response.get("content", ""),

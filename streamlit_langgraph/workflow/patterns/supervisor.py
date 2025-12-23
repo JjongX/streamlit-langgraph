@@ -7,16 +7,17 @@ from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
 from ..agent_nodes.factory import AgentNodeFactory
+from ..agent_nodes.routing import RoutingHelper
 from ...core.state import WorkflowState
 
 
 class SupervisorPattern:
     """
-    Supervisor workflow pattern supporting multiple delegation modes.
+    Supervisor workflow pattern, a hub-and-spoke topology.
     
     Delegation modes:
-    - "handoff": Agents transfer control between nodes
-    - "tool_calling": Calling agent stays in control, agents called as tools
+    - "handoff": Control transfers between nodes
+    - "tool_calling": Supervisor calls workers as tools
     """
     
     @staticmethod
@@ -45,11 +46,13 @@ class SupervisorPattern:
             workflow_checkpointer = InMemorySaver()
         else:
             workflow_checkpointer = checkpointer
+        
+        # Ensure all agents with code_interpreter share the same container_id
+        Agent.sync_container_ids([supervisor_agent] + worker_agents)
     
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":
             graph = StateGraph(WorkflowState)
-            # Use delegation mechanism via create_supervisor_agent_node with tool_calling mode
             calling_node = AgentNodeFactory.create_supervisor_agent_node(
                 supervisor_agent, worker_agents, delegation_mode="tool_calling"
             )
@@ -58,10 +61,7 @@ class SupervisorPattern:
             graph.add_edge(supervisor_agent.name, END)
             return graph.compile(checkpointer=workflow_checkpointer)
         
-        # Handoff mode - multiple nodes, structural handoff
         graph = StateGraph(WorkflowState)
-        
-        # Create supervisor node
         allow_parallel = (execution_mode == "parallel")
         supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
             supervisor_agent, worker_agents, allow_parallel=allow_parallel, delegation_mode="handoff"
@@ -79,42 +79,17 @@ class SupervisorPattern:
     @staticmethod
     def _create_sequential_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
                                              worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
-        """
-        Create sequential supervisor workflow.
-        
-        LangGraph pattern: Supervisor delegates to workers one at a time. Workers
-        route back to supervisor, creating a loop until supervisor decides to finish.
-        """
+        """Create sequential workflow: supervisor -> worker -> supervisor loop."""
         for worker in worker_agents:
             graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
 
-        def supervisor_sequential_route(state: WorkflowState) -> str:
-            """
-            Route based on supervisor's structured routing decision.
-            
-            LangGraph conditional edge function that routes to worker nodes or END
-            based on routing_decision metadata set by supervisor node.
-            
-            IMPORTANT: If there's a pending interrupt, route to END to pause workflow.
-            """
-            # Check for pending interrupts first - if any exist, route to END to pause
-            pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
-            if pending_interrupts:
-                return "__end__"
-            
-            routing_decision = state["metadata"].get("routing_decision", {})
-            worker_names = [worker.name for worker in worker_agents]
-            action = routing_decision.get("action", "finish")
-            
-            if action == "delegate":
-                target_worker = routing_decision.get("target_worker", "")
-                return target_worker if target_worker in worker_names else "__end__"
-            return "__end__"
+        worker_names = [worker.name for worker in worker_agents]
+        supervisor_sequential_route = RoutingHelper.create_sequential_route(worker_names)
         
         supervisor_routes = {worker.name: worker.name for worker in worker_agents}
         supervisor_routes["__end__"] = END
-
         graph.add_conditional_edges(supervisor_agent.name, supervisor_sequential_route, supervisor_routes)
+        
         for worker in worker_agents:
             graph.add_edge(worker.name, supervisor_agent.name)
         
@@ -123,30 +98,13 @@ class SupervisorPattern:
     @staticmethod
     def _create_parallel_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
                                            worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
-        """
-        Create parallel supervisor workflow.
-        
-        LangGraph pattern: Supervisor delegates to all workers simultaneously using
-        a fan-out node. All workers execute in parallel, then route back to supervisor.
-        """
+        """Create parallel workflow: supervisor -> fanout -> all workers -> supervisor."""
         graph.add_node("parallel_fanout", lambda state: state)
         
         for worker in worker_agents:
             graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
         
-        def supervisor_parallel_route(state: WorkflowState) -> str:
-            """
-            Route from supervisor to parallel execution or end.
-            
-            Checks if supervisor delegated with "PARALLEL" target, routes to fan-out node.
-            """
-            routing_decision = state["metadata"].get("routing_decision", {})
-            action = routing_decision.get("action", "finish")
-            target_worker = routing_decision.get("target_worker", "")
-            
-            if action == "delegate" and target_worker == "PARALLEL":
-                return "parallel_fanout"
-            return "__end__"
+        supervisor_parallel_route = RoutingHelper.create_parallel_route()
         
         supervisor_routes = {"parallel_fanout": "parallel_fanout", "__end__": END}
         graph.add_conditional_edges(supervisor_agent.name, supervisor_parallel_route, supervisor_routes)

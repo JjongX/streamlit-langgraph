@@ -1,36 +1,23 @@
+import os
 import time
 import uuid
 
+import streamlit as st
 import streamlit_langgraph as slg
+
 
 def analyze_sentiment(text: str, context: str = None) -> str:
     """
     Analyze the sentiment of a given text. This operation processes text to determine emotional tone and requires approval.
-    
-    Args:
-        text: The text content to analyze for sentiment
-        context: Optional context about the text (e.g., 'customer_review', 'social_media_post', 'support_ticket')
-    
-    Returns:
-        A detailed sentiment analysis report with scores and classifications
-    
-    Example:
-        analyze_sentiment("I love this product! It works perfectly.", "customer_review")
-        analyze_sentiment("This service is terrible and I want a refund.", "support_ticket")
     """
-    
-    # Simulate sentiment analysis
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     analysis_id = f"SENT-{int(time.time())}"
-    
     # Simple keyword-based sentiment detection for testing
     text_lower = text.lower()
     positive_words = ['love', 'great', 'excellent', 'good', 'amazing', 'wonderful', 'perfect', 'happy', 'satisfied', 'fantastic']
     negative_words = ['hate', 'terrible', 'awful', 'bad', 'horrible', 'worst', 'disappointed', 'angry', 'frustrated', 'refund']
-    
     positive_count = sum(1 for word in positive_words if word in text_lower)
     negative_count = sum(1 for word in negative_words if word in text_lower)
-    
     # Calculate sentiment score (-1 to 1)
     if positive_count > negative_count:
         sentiment_label = "POSITIVE"
@@ -41,7 +28,6 @@ def analyze_sentiment(text: str, context: str = None) -> str:
     else:
         sentiment_label = "NEUTRAL"
         sentiment_score = 0.0
-    
     # Determine emotion intensity
     intensity = abs(sentiment_score)
     if intensity > 0.7:
@@ -62,30 +48,15 @@ def analyze_sentiment(text: str, context: str = None) -> str:
             f"  Intensity: {intensity_label}\n" \
             f"  Text length: {len(text)} characters\n\n" \
             f"  Analyzed text: {text[:150]}{'...' if len(text) > 150 else ''}"
-    
+
+
 def escalate_negative_sentiment(text: str, sentiment_score: float, source: str, urgency: str = "medium") -> str:
     """
     Escalate cases with negative sentiment for review. This operation flags content for human intervention and requires approval.
-    
-    Args:
-        text: The original text that was analyzed
-        sentiment_score: The sentiment score from analysis (negative values indicate negative sentiment)
-        source: Source of the text (e.g., 'customer_review', 'social_media', 'support_ticket', 'feedback_form')
-        urgency: Urgency level - 'low', 'medium', 'high', or 'critical' (default: 'medium')
-    
-    Returns:
-        A status message with escalation details and ticket ID
-    
-    Example:
-        escalate_negative_sentiment("This product is terrible", -0.85, "customer_review", "high")
-        escalate_negative_sentiment("I want to cancel my subscription", -0.65, "support_ticket", "medium")
     """    
-    # Validate urgency
     valid_urgency = ["low", "medium", "high", "critical"]
     if urgency.lower() not in valid_urgency:
         urgency = "medium"
-    
-    # Generate escalation ticket
     ticket_id = f"ESC-{uuid.uuid4().hex[:8].upper()}"
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     
@@ -110,8 +81,8 @@ def escalate_negative_sentiment(text: str, sentiment_score: float, source: str, 
             f"  Created: {timestamp}\n" \
             f"  Text: {text[:100]}{'...' if len(text) > 100 else ''}"
 
+
 def main():
-    # Register tools
     slg.CustomTool.register_tool(
         name="analyze_sentiment",
         description=(
@@ -142,7 +113,8 @@ def main():
     )
     
     # Load agents from config file
-    agents = slg.AgentManager.load_from_yaml("examples/configs/human_in_the_loop.yaml")
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/human_in_the_loop.yaml")
+    agents = slg.AgentManager.load_from_yaml(config_path)
     # Separate supervisor and workers
     supervisor = next(agent for agent in agents if agent.name == "supervisor")
     workers = [agent for agent in agents if agent.name != "supervisor"]
@@ -168,12 +140,13 @@ def main():
         stream=False
     )
     
-    chat = slg.LangGraphChat(
-        workflow=workflow,
-        agents=agents,
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            workflow=workflow,
+            agents=agents,
+            config=config
+        )
+    st.session_state.chat.run()
 
 if __name__ == "__main__":
     main()

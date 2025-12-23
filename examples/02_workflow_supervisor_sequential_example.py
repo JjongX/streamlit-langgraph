@@ -1,6 +1,8 @@
 import os
 
+import streamlit as st
 import streamlit_langgraph as slg
+
 
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""
@@ -12,6 +14,7 @@ def create_supervisor_workflow_example():
     workers = agents[1:]
 
     return supervisor, workers
+
 
 def main():
     """Supervisor sequential example with clean workflow pattern."""
@@ -30,7 +33,6 @@ def main():
     config = slg.UIConfig(
         title="Supervised Research Team",
         page_icon="🎓",
-        stream=True,
         welcome_message="""Welcome to the **Supervised Research Team**!
 
 **Sequential Supervised Workflow**: Our research supervisor coordinates a team of specialist agents to handle complex research projects.
@@ -49,21 +51,20 @@ def main():
 4. **Workflow can finish at any time when the supervisor determines the task is complete**
 
 ### ❓ Example Requests:
-- *"Create a research proposal on renewable energy adoption"*
-- *"I need a comprehensive analysis of market trends"* 
-- *"Research and write a business proposal for AI implementation"*
+- *"Can you write a research proposal for identifying new clinically actionable variants in BRCA2?"* 
+- *"Can you write a research proposal on nanocomposites, specifically focusing on how varying amounts of graphene can enhance their mechanical strength"*
 - *"Develop an academic research proposal for climate change studies"*
 """,
-        enable_file_upload=True,
         placeholder="Describe your research project or proposal needs..."
     )
     
-    chat = slg.LangGraphChat(
-        workflow=supervisor_workflow,
-        agents=[supervisor] + workers, # Might update later to not pass agents
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            workflow=supervisor_workflow,
+            agents=[supervisor] + workers,
+            config=config
+        )
+    st.session_state.chat.run()
 
 if __name__ == "__main__":
     main()

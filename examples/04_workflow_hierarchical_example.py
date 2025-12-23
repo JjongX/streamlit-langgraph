@@ -1,6 +1,8 @@
 import os
 
+import streamlit as st
 import streamlit_langgraph as slg
+
 
 def create_hierarchical_workflow_example():
     """Create a hierarchical workflow with multiple supervisor teams."""
@@ -16,7 +18,6 @@ def create_hierarchical_workflow_example():
     content_team_lead = agents[4]
     draft_writer = agents[5]
     content_editor = agents[6]
-    
     # Create supervisor teams
     research_team = slg.WorkflowBuilder.SupervisorTeam(
         supervisor=research_team_lead,
@@ -35,10 +36,7 @@ def create_hierarchical_workflow_example():
 def main():
     """Hierarchical workflow example with multiple supervisor teams."""
     
-    # Create hierarchical workflow components
     top_supervisor, supervisor_teams, all_agents = create_hierarchical_workflow_example()
-    
-    # Create the hierarchical workflow
     builder = slg.WorkflowBuilder()
     hierarchical_workflow = builder.create_hierarchical_workflow(
         top_supervisor=top_supervisor,
@@ -86,16 +84,16 @@ def main():
 
 **Note**: This is a complex workflow that coordinates multiple teams. Tasks will flow through the appropriate teams based on requirements.
 """,
-        enable_file_upload=True,
         placeholder="Describe your project that requires research and content creation..."
     )
     
-    chat = slg.LangGraphChat(
-        workflow=hierarchical_workflow,
-        agents=all_agents,
-        config=config
-    )
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            workflow=hierarchical_workflow,
+            agents=all_agents,
+            config=config
+        )
+    st.session_state.chat.run()
 
 
 if __name__ == "__main__":

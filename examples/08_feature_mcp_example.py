@@ -1,5 +1,6 @@
 # Example demonstrating MCP (Model Context Protocol) tool integration.
 
+import streamlit as st
 import streamlit_langgraph as slg
 
 
@@ -27,7 +28,6 @@ def main():
         tools=[],
         mcp_servers=mcp_servers
     )
-    
     # Create chat interface
     config = slg.UIConfig(
         title="MCP Tools Chat",
@@ -50,12 +50,12 @@ This example demonstrates using MCP (Model Context Protocol) tools with agents.
 """
     )
     
-    chat = slg.LangGraphChat(
-        agents=[agent],
-        config=config
-    )
-    
-    chat.run()
+    if "chat" not in st.session_state:
+        st.session_state.chat = slg.LangGraphChat(
+            agents=[agent],
+            config=config
+        )
+    st.session_state.chat.run()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Stream processor for handling different streaming formats."""
+# Stream processor for handling different streaming formats.
 
 import base64
 
@@ -11,18 +11,11 @@ class StreamProcessor:
     
     Handles:
     - OpenAI Responses API stream events
-    - LangChain stream_mode="messages" format (tuples)
-    - LangChain stream_mode="updates" format (dicts)
+    - LangChain stream_mode="messages" format (tokens)
+    - LangChain stream_mode="updates" format (events)
     """
     
     def __init__(self, client=None, container_id=None):
-        """
-        Initialize StreamProcessor.
-        
-        Args:
-            client: OpenAI client for file retrieval (optional)
-            container_id: Container ID for file retrieval (optional)
-        """
         self._client = client
         self._container_id = container_id
     
@@ -45,44 +38,32 @@ class StreamProcessor:
         stream_type = None
         full_response = ""
         
-        try:
-            for event in stream_iter:
-                events_list.append(event)
-                
-                # Detect stream type from first event
-                if stream_type is None:
-                    if isinstance(event, tuple) and len(event) == 2:
-                        stream_type = 'langchain_messages'
-                    elif hasattr(event, 'type'):
-                        stream_type = 'responses_api'
-                    elif isinstance(event, dict):
-                        stream_type = 'langchain_updates'
-                    else:
-                        stream_type = 'unknown'
-                
-                # Route to appropriate handler
-                if stream_type == 'responses_api':
-                    delta = self._process_responses_api_stream(event, section)
-                    if delta:
-                        full_response += delta
-                elif stream_type == 'langchain_messages':
-                    token, metadata = event
-                    delta = self._process_langchain_message_token(token, section)
-                    if delta:
-                        full_response += delta
-                elif stream_type == 'langchain_updates':
-                    partial_response = self._process_langchain_stream_event(event, section, full_response)
-                    if partial_response and len(partial_response) > len(full_response):
-                        full_response = partial_response
+        for event in stream_iter:
+            events_list.append(event)
             
-            # Fallback: extract from final state if no content was streamed
-            if not full_response and events_list:
-                full_response = self._extract_final_content(events_list, stream_type, section)
-                
-        except (StopIteration, TypeError, AttributeError):
-            # Empty stream or invalid format - try to extract from final state
-            if events_list:
-                full_response = self._extract_final_content(events_list, stream_type, section)
+            if stream_type is None:
+                if isinstance(event, tuple) and len(event) == 2:
+                    stream_type = 'langchain_messages'
+                elif hasattr(event, 'type'):
+                    stream_type = 'responses_api'
+                elif isinstance(event, dict):
+                    stream_type = 'langchain_updates'
+                else:
+                    raise ValueError(f"Unknown stream type: {event}")
+            
+            if stream_type == 'responses_api':
+                delta = self._process_responses_api_stream(event, section)
+                if delta:
+                    full_response += delta
+            elif stream_type == 'langchain_messages':
+                token, _ = event
+                delta = self._process_langchain_message_token(token, section)
+                if delta:
+                    full_response += delta
+            elif stream_type == 'langchain_updates':
+                partial_response = self._process_langchain_updates_event(event, section, full_response)
+                if partial_response and len(partial_response) > len(full_response):
+                    full_response = partial_response
         
         return full_response
     
@@ -90,57 +71,126 @@ class StreamProcessor:
         """
         Process a single token from LangChain stream_mode="messages".
         
-        According to LangChain docs, stream_mode="messages" returns (token, metadata) tuples
-        where token is an AIMessage with content_blocks attribute.
+        This method handles LangChain's stream_mode="messages" format, which returns
+        (token, metadata) tuples where token is an AIMessage with content_blocks attribute.
+        
+        Handles various content block types:
+        - text: Regular text content
+        - server_tool_call: Tool calls (code_interpreter, file_search, etc.)
+        - server_tool_result: Tool execution results (text, images, etc.)
         
         Args:
-            token: AIMessage with content_blocks attribute
+            token: AIMessage with content_blocks attribute from stream_mode="messages"
             section: Display section to update
             
         Returns:
             Delta text to append to response
         """
-        if not isinstance(token, AIMessage):
+        if not isinstance(token, AIMessage) or not hasattr(token, 'content_blocks') or not token.content_blocks:
             return ""
         
-        # Extract text from content_blocks
-        # content_blocks is a list of dicts: [{'type': 'text', 'text': '...'}, ...]
-        if hasattr(token, 'content_blocks') and token.content_blocks:
-            text_parts = []
-            for block in token.content_blocks:
-                if isinstance(block, dict):
-                    if block.get('type') == 'text' and block.get('text'):
-                        text_parts.append(block.get('text', ''))
-            if text_parts:
-                delta = ''.join(text_parts)
-                if delta:
-                    section.update("text", delta)
-                    section.stream()
-                    return delta
+        text_parts = []
+        for block in token.content_blocks:
+            if not isinstance(block, dict):
+                continue
+                
+            block_type = block.get('type')
+            if block_type == 'text':
+                text = block.get('text', '')
+                if text:
+                    text_parts.append(text)
+                self._message_annotations(block, section)
+            elif block_type == 'server_tool_call':
+                self._message_tool_call(block, section)
+            elif block_type == 'server_tool_result':
+                self._message_tool_result(block, section, text_parts)
         
-        # Fallback: try content attribute
-        if hasattr(token, 'content') and token.content:
-            if isinstance(token.content, str) and token.content:
-                section.update("text", token.content)
+        if text_parts:
+            delta = ''.join(text_parts)
+            if delta:
+                section.update("text", delta)
                 section.stream()
-                return token.content
-            elif isinstance(token.content, list):
-                text_parts = []
-                for block in token.content:
-                    if isinstance(block, dict) and block.get('type') == 'text':
-                        text_parts.append(block.get('text', ''))
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                if text_parts:
-                    delta = ''.join(text_parts)
-                    if delta:
-                        section.update("text", delta)
-                        section.stream()
-                        return delta
+                return delta
         
         return ""
     
-    def _process_langchain_stream_event(self, event: dict, section, accumulated_content: str = "") -> str:
+    def _message_annotations(self, block, section):
+        """Process container_file_citation annotations in text blocks."""
+        annotations = block.get('annotations', [])
+        for annotation in annotations:
+            if not isinstance(annotation, dict):
+                continue
+            
+            annotation_value = annotation.get('value', {}) if annotation.get('type') == 'non_standard_annotation' else annotation
+            
+            if annotation_value.get('type') == 'container_file_citation':
+                file_id = annotation_value.get('file_id', '')
+                filename = annotation_value.get('filename', '')
+                container_id = annotation_value.get('container_id', '')
+                
+                if file_id and container_id and self._client:
+                    file_content = self._client.containers.files.content.retrieve(
+                        file_id=file_id, container_id=container_id
+                    )
+                    file_bytes = file_content.read()
+                    if file_bytes:
+                        is_image = filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif"))
+                        if is_image:
+                            section.update("image", file_bytes, filename=filename)
+                        section.update("download", file_bytes, filename=filename, file_id=file_id)
+                        section.stream()
+    
+    def _message_tool_call(self, block, section):
+        """Process server_tool_call blocks (code_interpreter, etc.)."""
+        if block.get('name') == 'code_interpreter':
+            args = block.get('args', {})
+            code = args.get('code', '') or args.get('input', '')
+            if code:
+                # It is for stream delta updates but not supported currently
+                # Read more docs and langcahin's scripts to validate that it is not supported
+                if (not section.empty and 
+                    section.last_block.category == "code" and 
+                    section.last_block.content):
+                    previous_code = section.last_block.content
+                    if code.startswith(previous_code):
+                        delta = code[len(previous_code):]
+                        if delta:
+                            section.update("code", delta)
+                            section.stream()
+                            return
+                    section.blocks[-1] = section.display_manager.create_block("code", code)
+                    section.stream()
+                else:
+                    section.update("code", code)
+                    section.stream()
+    
+    def _message_tool_result(self, block, section, text_parts):
+        """Process server_tool_result blocks (outputs from tool execution)."""
+        outputs = block.get('output', block.get('outputs', []))
+        if not isinstance(outputs, list):
+            outputs = [outputs] if outputs else []
+        
+        for output in outputs:
+            if not isinstance(output, dict):
+                continue
+            
+            output_type = output.get('type', '')
+            if output_type == 'text':
+                output_text = output.get('text', '')
+                if output_text:
+                    text_parts.append(output_text)
+            elif output_type == 'image':
+                image_data = output.get('image', {})
+                if isinstance(image_data, dict):
+                    image_data_str = image_data.get('data', '') or image_data.get('base64', '')
+                    if image_data_str:
+                        image_bytes = base64.b64decode(image_data_str)
+                        filename = f"code_output_{block.get('tool_call_id', '')}.png"
+                        section.update("image", image_bytes, filename=filename)
+                        section.update("download", image_bytes, filename=filename)
+                        section.stream()
+    
+    def _process_langchain_updates_event(self, event: dict, section, accumulated_content: str = "") -> str:
         """
         Process a single LangChain/LangGraph stream event incrementally.
         
@@ -158,19 +208,15 @@ class StreamProcessor:
         if not isinstance(event, dict):
             return accumulated_content
         
-        # LangGraph stream format: {node_name: state_update}
-        for node_name, state_update in event.items():
+        for _, state_update in event.items():
             if isinstance(state_update, dict):
-                # Check for messages in state update
                 if 'messages' in state_update:
                     messages = state_update['messages']
-                    # Find new AIMessages
                     for msg in messages:
                         if isinstance(msg, AIMessage):
                             if hasattr(msg, 'content') and msg.content:
                                 if isinstance(msg.content, str):
                                     new_content = msg.content
-                                    # Only append new content (delta)
                                     if new_content.startswith(accumulated_content):
                                         delta = new_content[len(accumulated_content):]
                                         if delta:
@@ -178,12 +224,10 @@ class StreamProcessor:
                                             section.stream()
                                             return new_content
                                     else:
-                                        # Full replacement (new content doesn't start with accumulated)
                                         section.update("text", new_content)
                                         section.stream()
                                         return new_content
                                 elif isinstance(msg.content, list):
-                                    # Handle list content (Responses API format)
                                     text_parts = []
                                     for block in msg.content:
                                         if isinstance(block, dict) and block.get('type') == 'text':
@@ -192,7 +236,6 @@ class StreamProcessor:
                                             text_parts.append(block)
                                     if text_parts:
                                         new_content = ''.join(text_parts)
-                                        # Check if this is new content
                                         if new_content != accumulated_content:
                                             if new_content.startswith(accumulated_content):
                                                 delta = new_content[len(accumulated_content):]
@@ -203,7 +246,6 @@ class StreamProcessor:
                                                 section.update("text", new_content)
                                                 section.stream()
                                             return new_content
-                # Check for output in state update
                 elif 'output' in state_update:
                     output = state_update['output']
                     if output and str(output) != accumulated_content:
@@ -216,10 +258,7 @@ class StreamProcessor:
     def _process_responses_api_stream(self, event, section) -> str:
         """
         Process a single streaming event from OpenAI Responses API.
-        
-        Handles various event types: text deltas, code interpreter output,
-        image generation, and file citations.
-        
+
         Args:
             event: Responses API stream event object
             section: Display section to update
@@ -236,8 +275,9 @@ class StreamProcessor:
             section.stream()
         elif event.type == "response.image_generation_call.partial_image":
             image_bytes = base64.b64decode(event.partial_image_b64)
-            filename = f"{getattr(event, 'item_id', 'image')}.{getattr(event, 'output_format', 'png')}"
-            section.update("image", image_bytes, filename=filename, file_id=getattr(event, 'item_id', None))
+            item_id = getattr(event, 'item_id', None)
+            filename = f"{item_id}.{getattr(event, 'output_format', 'png')}" if item_id else "image.png"
+            section.update("generated_image", image_bytes, filename=filename, file_id=item_id)
             section.stream()
         elif event.type == "response.output_text.annotation.added":
             annotation = event.annotation
@@ -260,65 +300,4 @@ class StreamProcessor:
                         section.stream()
                         
         return ""
-    
-    def _extract_final_content(self, events_list, stream_type, section) -> str:
-        """
-        Extract final content from stream events when streaming didn't yield content.
-        
-        Args:
-            events_list: List of all stream events
-            stream_type: Detected stream type ('responses_api', 'langchain_messages', 'langchain_updates')
-            section: Display section to update
-            
-        Returns:
-            Extracted final content text
-        """
-        if not events_list:
-            return ""
-        
-        last_event = events_list[-1]
-        full_response = ""
-        
-        if stream_type == 'langchain_messages' and isinstance(last_event, tuple):
-            # Extract from last token in messages mode
-            token, metadata = last_event
-            if isinstance(token, AIMessage):
-                if hasattr(token, 'content_blocks') and token.content_blocks:
-                    text_parts = []
-                    for block in token.content_blocks:
-                        if isinstance(block, dict) and block.get('type') == 'text':
-                            text_parts.append(block.get('text', ''))
-                    if text_parts:
-                        full_response = ''.join(text_parts)
-                elif hasattr(token, 'content') and token.content:
-                    if isinstance(token.content, str):
-                        full_response = token.content
-                    elif isinstance(token.content, list):
-                        text_parts = []
-                        for block in token.content:
-                            if isinstance(block, dict) and block.get('type') == 'text':
-                                text_parts.append(block.get('text', ''))
-                            elif isinstance(block, str):
-                                text_parts.append(block)
-                        if text_parts:
-                            full_response = ''.join(text_parts)
-                if full_response:
-                    section.update("text", full_response)
-                    section.stream()
-        elif stream_type == 'langchain_updates' and isinstance(last_event, dict):
-            # Handle updates mode format
-            for node_name, state_update in last_event.items():
-                if isinstance(state_update, dict) and 'messages' in state_update:
-                    messages = state_update['messages']
-                    for msg in reversed(messages):
-                        if isinstance(msg, AIMessage) and hasattr(msg, 'content'):
-                            if isinstance(msg.content, str) and msg.content:
-                                full_response = msg.content
-                                section.update("text", full_response)
-                                section.stream()
-                                break
-                        if full_response:
-                            break
-        
-        return full_response
 

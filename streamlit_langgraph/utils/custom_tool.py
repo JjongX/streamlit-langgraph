@@ -13,7 +13,6 @@ class CustomTool:
     A custom tool that can be used by agents in the multiagent system.
     """
     # Class-level registry for storing all registered tools
-    # Using ClassVar to indicate this is a class variable, not an instance field
     _registry: ClassVar[Dict[str, "CustomTool"]] = {}
     name: str
     description: str
@@ -49,30 +48,6 @@ class CustomTool:
         """Extract function parameters if not provided."""
         if self.parameters is None:
             self.parameters = self._extract_parameters()
-    
-    @classmethod
-    def get_openai_tools(cls, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Convert CustomTool registry items to OpenAI function calling format."""
-        tools = []
-        registry = cls._registry
-        if tool_names:
-            registry = {name: registry[name] for name in tool_names if name in registry}
-
-        for tool_name, custom_tool in registry.items():
-            # Use parameters if available, otherwise extract from function
-            parameters = custom_tool.parameters if custom_tool.parameters else custom_tool._extract_parameters()
-            
-            tool_dict = {
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "description": custom_tool.description,
-                    "parameters": parameters
-                }
-            }
-            tools.append(tool_dict)
-        
-        return tools
     
     @classmethod
     def get_langchain_tools(cls, tool_names: Optional[List[str]] = None) -> List[Any]:
@@ -115,7 +90,6 @@ class CustomTool:
                     param_info["type"] = "object"
                     
             parameters["properties"][param_name] = param_info
-            # Check if parameter is required
             if param.default == inspect.Parameter.empty:
                 parameters["required"].append(param_name)
         

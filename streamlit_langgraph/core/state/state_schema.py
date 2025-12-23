@@ -1,8 +1,19 @@
 # Single source of truth for all agents and workflows.
 
 import operator
-from typing import Any, Dict, List, Optional, TypedDict
+import uuid
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from typing_extensions import Annotated
+
+
+def create_message_with_id(role: str, content: str, agent: Optional[str]) -> Dict[str, Any]:
+    """Create a message dict with a unique ID."""
+    return {
+        "id": str(uuid.uuid4()),
+        "role": role,
+        "content": content,
+        "agent": agent
+    }
 
 
 class WorkflowStateManager:
@@ -87,13 +98,8 @@ class WorkflowStateManager:
         return state.get("metadata", {}).get("hitl_decisions", {}).get(decisions_key)
     
     @staticmethod
-    def preserve_hitl_metadata(initial_state: "WorkflowState", final_state: "WorkflowState") -> None:
-        """
-        Preserve HITL-related metadata from initial state to final state.
-        
-        This ensures that HITL state (pending_interrupts, executors, hitl_decisions)
-        is maintained across workflow executions when using invoke() method.
-        """
+    def preserve_hitl_metadata(initial_state: "WorkflowState", final_state: "WorkflowState"):
+        """Preserve HITL-related metadata from initial state to final state."""
         HITL_METADATA_KEYS = ["pending_interrupts", "executors", "hitl_decisions"]
         initial_metadata = initial_state.get("metadata", {})
         if not initial_metadata:
@@ -115,7 +121,7 @@ class WorkflowStateManager:
                 final_metadata[key] = initial_metadata[key]
     
     @staticmethod
-    def preserve_display_sections(initial_state: "WorkflowState", final_state: "WorkflowState") -> None:
+    def preserve_display_sections(initial_state: "WorkflowState", final_state: "WorkflowState"):
         """Merge display_sections from initial_state into final_state to preserve UI state."""
         initial_metadata = initial_state.get("metadata", {})
         initial_display_sections = initial_metadata.get("display_sections", [])
@@ -167,6 +173,23 @@ class WorkflowStateManager:
             if block.get("category") == "text":
                 return block.get("content", "")
         return ""
+    
+    @staticmethod
+    def get_or_create_workflow_config(state: "WorkflowState", executor_key: str) -> Tuple[Dict[str, Any], str]:
+        """Get or create workflow thread_id and config."""
+        if "metadata" not in state:
+            state["metadata"] = {}
+        if "executors" not in state["metadata"]:
+            state["metadata"]["executors"] = {}
+        
+        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
+        if not workflow_thread_id:
+            workflow_thread_id = str(uuid.uuid4())
+            state["metadata"]["workflow_thread_id"] = workflow_thread_id
+        
+        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
+        config = {"configurable": {"thread_id": workflow_thread_id}}
+        return config, workflow_thread_id
 
 class WorkflowState(TypedDict):
     """

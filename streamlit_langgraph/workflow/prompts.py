@@ -1,9 +1,8 @@
-# Prompt templates.
+# Prompt templates and builders for different workflow patterns.
 
 from typing import List, Optional
 
-# Supervisor Prompt Templates
-SUPERVISOR_PROMPT_TEMPLATE = """You are {role}. {instructions}
+SUPERVISOR_PROMPT_TEMPLATE = """You are {role}.
 
 You are supervising the following workers: {worker_list}
 
@@ -24,17 +23,25 @@ YOUR OPTIONS:
 💡 Think carefully about which worker to delegate to based on their specializations.
 """
 
-SEQUENTIAL_ROUTE_GUIDANCE = """When delegating sequentially:
-- Delegate to one worker at a time
-- Wait for worker response before deciding next action
-- Use worker outputs to inform next delegation
-"""
+NETWORK_PROMPT_TEMPLATE = """You are {role}.
 
-# Tool Calling Prompt Templates
-ORCHESTRATOR_TOOL_PROMPT_TEMPLATE = """You are {role}. {instructions}
+You are part of a collaborative network with the following peers: {peer_list}
 
-You have access to specialized agents that can help you. When you need their expertise, call them as tools.
-After they complete their task, they will return results to you, and you should synthesize the final response.
+User's Request: {user_query}
+
+Peer Outputs So Far:
+{peer_outputs}
+
+YOUR DECISION:
+- Analyze what work still needs to be done
+- Determine if another peer agent should handle the next step
+- Use the 'delegate_task' function to hand off to a peer if needed
+
+YOUR OPTIONS:
+1. **Hand off to Peer**: Use delegate_task to hand off work to a peer agent who can better handle the next step
+2. **Complete Workflow**: When the task is fully complete, provide the final response without calling delegate_task
+
+💡 Collaborate with your peers based on their specializations to deliver the best result.
 """
 
 WORKER_TOOL_PROMPT_TEMPLATE = """Task: {task}
@@ -46,20 +53,16 @@ Complete this task and return the result. Be concise and focused on the specific
 """
 
 
-class SupervisorPromptBuilder:
-    """Builder class for creating supervisor and worker agent prompts."""
-    
+class SupervisorPromptBuilder:    
     @staticmethod
     def get_supervisor_instructions(
-        role: str, instructions: str, user_query: str,
-        worker_list: str, worker_outputs: List[str]) -> str:
-        """
-        Get full supervisor instructions template.
-        """
+        role: str, instructions: str, user_query: str, 
+        worker_list: str,  worker_outputs: List[str]
+    ) -> str:
+        """Get full supervisor instructions template."""
         outputs_text = "\n".join(worker_outputs) if worker_outputs else "No worker outputs yet"
         return SUPERVISOR_PROMPT_TEMPLATE.format(
             role=role,
-            instructions=instructions,
             user_query=user_query,
             worker_list=worker_list,
             worker_outputs=outputs_text
@@ -67,14 +70,16 @@ class SupervisorPromptBuilder:
     
     @staticmethod
     def get_worker_agent_instructions(
-        role: str, instructions: str, user_query: str, 
-        supervisor_output: Optional[str] = None, previous_worker_outputs: Optional[List[str]] = None) -> str:
-        """
-        Get instructions for worker agents in supervisor workflows.
-        """
+        role: str, 
+        instructions: str, 
+        user_query: str, 
+        supervisor_output: Optional[str] = None, 
+        previous_worker_outputs: Optional[List[str]] = None
+    ) -> str:
+        """Get instructions for worker agents in supervisor workflows."""
         instruction_parts = [
             f"Original Request: {user_query}",
-            f"Your Role: {role} - {instructions}"
+            f"Your Role: {role}"
         ]
         
         if supervisor_output:
@@ -88,33 +93,34 @@ class SupervisorPromptBuilder:
         instruction_parts.append("\nPlease complete the task assigned to you.")
         
         return chr(10).join(instruction_parts)
-    
+
+
+class NetworkPromptBuilder:    
     @staticmethod
-    def get_sequential_route_guidance() -> str:
-        """
-        Get guidance for sequential supervisor routing decisions.
-        """
-        return SEQUENTIAL_ROUTE_GUIDANCE
+    def get_network_agent_instructions(
+        role: str, 
+        instructions: str, 
+        user_query: str,
+        peer_list: str, 
+        peer_outputs: List[str]
+    ) -> str:
+        """Get full network agent instructions template."""
+        outputs_text = "\n".join(peer_outputs) if peer_outputs else "No peer outputs yet"
+        return NETWORK_PROMPT_TEMPLATE.format(
+            role=role,
+            user_query=user_query,
+            peer_list=peer_list,
+            peer_outputs=outputs_text
+        )
+
 
 
 class ToolCallingPromptBuilder:
     """Builder class for creating tool calling agent prompts."""
     
     @staticmethod
-    def get_orchestrator_tool_instructions(role: str, instructions: str) -> str:
-        """
-        Get instructions for orchestrator agent that calls workers as tools.
-        """
-        return ORCHESTRATOR_TOOL_PROMPT_TEMPLATE.format(
-            role=role,
-            instructions=instructions
-        )
-    
-    @staticmethod
     def get_worker_tool_instructions(role: str, instructions: str, task: str) -> str:
-        """
-        Get instructions for worker agent invoked as a tool.
-        """
+        """Get instructions for worker agent invoked as a tool."""
         return WORKER_TOOL_PROMPT_TEMPLATE.format(
             role=role,
             instructions=instructions,

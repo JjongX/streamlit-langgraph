@@ -5,10 +5,10 @@ from typing import Any, Dict, Optional
 
 class InterruptManager:
     """
-    Centralized interrupt management for workflows.
+    Centralized interrupt detection for workflows.
     
-    This class provides general interrupt detection and storage functionality
-    that can be used by any middleware type (HITL, rate limiting, etc.).
+    This class provides interrupt detection and extraction functionality.
+    For storing interrupts, use WorkflowStateManager.set_pending_interrupt().
     """
     
     @staticmethod
@@ -30,26 +30,6 @@ class InterruptManager:
         }
     
     @staticmethod
-    def store_interrupt(state: Dict[str, Any], agent_name: str, 
-                       interrupt_data: Dict[str, Any], executor_key: str) -> Dict[str, Any]:
-        """Store interrupt in workflow state metadata."""
-        if "metadata" not in state:
-            state["metadata"] = {}
-        
-        if "pending_interrupts" not in state["metadata"]:
-            state["metadata"]["pending_interrupts"] = {}
-        
-        state["metadata"]["pending_interrupts"][executor_key] = {
-            "agent": agent_name,
-            "__interrupt__": interrupt_data.get("__interrupt__"),
-            "thread_id": interrupt_data.get("thread_id"),
-            "config": interrupt_data.get("config"),
-            "executor_key": executor_key
-        }
-        
-        return {"metadata": state["metadata"]}
-    
-    @staticmethod
     def has_pending_interrupts(state: Dict[str, Any]) -> bool:
         """Check if workflow state has any pending interrupts."""
         if not state or "metadata" not in state:
@@ -60,4 +40,5 @@ class InterruptManager:
             if isinstance(value, dict) and value.get("__interrupt__"):
                 return True
         return False
+
 

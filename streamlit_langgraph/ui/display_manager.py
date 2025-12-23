@@ -2,7 +2,7 @@
 
 import base64
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import streamlit as st
 
@@ -20,17 +20,17 @@ class Block:
         self,
         display_manager: "DisplayManager",
         category: str,
-        content: Optional[str] = None,
+        content: Optional[Union[str, bytes]] = None,
         filename: Optional[str] = None,
         file_id: Optional[str] = None,
-    ) -> None:
+    ):
         self.display_manager = display_manager
         self.category = category
-        self.content = content or ""
+        self.content = content if content is not None else ("" if category not in ["image", "generated_image", "download"] else b"")
         self.filename = filename
         self.file_id = file_id
 
-    def write(self) -> None:
+    def write(self):
         """Render this block's content to the Streamlit interface."""
         if self.category == "text":
             st.markdown(self.content)
@@ -40,13 +40,13 @@ class Block:
         elif self.category == "reasoning":
             with st.expander("", expanded=False, icon=":material/lightbulb:"):
                 st.markdown(self.content)
-        elif self.category == "image":
+        elif self.category in ["image", "generated_image"]:
             if self.content:
                 st.image(self.content, caption=self.filename)
         elif self.category == "download":
             self._render_download()
     
-    def _render_download(self) -> None:
+    def _render_download(self):
         """Render download button for file content."""
         _, file_extension = os.path.splitext(self.filename)
         st.download_button(
@@ -71,12 +71,12 @@ class Section:
         display_manager: "DisplayManager",
         role: str,
         blocks: Optional[List[Block]] = None,
-    ) -> None:
+    ):
         self.display_manager = display_manager
         self.role = role
         self.blocks = blocks or []
         self.delta_generator = st.empty()
-        self._section_index = None  # Track which index this section is saved at
+        self._section_index = None
     
     @property
     def empty(self) -> bool:
@@ -86,12 +86,13 @@ class Section:
     def last_block(self) -> Optional[Block]:
         return None if self.empty else self.blocks[-1]
     
-    def update(self, category: str, content: str, filename: Optional[str] = None, 
-               file_id: Optional[str] = None) -> None:
+    def update(self, category, content, filename=None, file_id=None):
         """
         Add or append content to this section.
         
         If the last block has the same category and is streamable, content is appended.
+        For generated_image, if the last block is also generated_image with the same file_id,
+        the content is replaced (for partial image updates).
         Otherwise, a new block is created.
         """
         if self.empty:
@@ -103,13 +104,18 @@ class Section:
               self.last_block.category == category):
             # Append to existing block for same category
             self.last_block.content += content
+        elif (category == "generated_image" and 
+              self.last_block.category == "generated_image" and
+              self.last_block.file_id == file_id and file_id is not None):
+            # Replace content for partial image updates (same file_id)
+            self.last_block.content = content
         else:
             # Create new block for different category
             self.blocks.append(self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             ))
     
-    def stream(self) -> None:
+    def stream(self):
         """Render this section and all its blocks to the Streamlit interface."""
         avatar = (self.display_manager.config.user_avatar if self.role == "user" 
                  else self.display_manager.config.assistant_avatar)
@@ -124,8 +130,8 @@ class Section:
         # Always save section to session state for persistence across reruns
         self._save_to_session_state()
     
-    def _save_to_session_state(self) -> None:
-        """Save section data to workflow_state."""
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert section to dictionary format for serialization."""
         section_data = {
             "role": self.role,
             "blocks": [],
@@ -139,7 +145,7 @@ class Section:
                 "filename": block.filename,
                 "file_id": block.file_id
             }
-            if block.category in ["image", "download"] and block.content:
+            if block.category in ["image", "generated_image", "download"] and block.content:
                 import base64
                 if isinstance(block.content, bytes):
                     block_data["content_b64"] = base64.b64encode(block.content).decode('utf-8')
@@ -150,30 +156,28 @@ class Section:
             
             section_data["blocks"].append(block_data)
         
-        if self.display_manager.state_manager:
-            self._section_index = self.display_manager.state_manager.update_display_section(
-                self._section_index, section_data
-            )
-        else:
-            # Fallback to session_state if state_manager not available
-            if "display_sections" not in st.session_state:
-                st.session_state.display_sections = []
-            if self._section_index is not None and self._section_index < len(st.session_state.display_sections):
-                st.session_state.display_sections[self._section_index] = section_data
-            else:
-                st.session_state.display_sections.append(section_data)
-                self._section_index = len(st.session_state.display_sections) - 1
+        return section_data
+    
+    def _save_to_session_state(self):
+        """Save section data to workflow_state."""
+        section_data = self.to_dict()
+        
+        if not self.display_manager.state_manager:
+            raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
+        self._section_index = self.display_manager.state_manager.update_display_section(
+            self._section_index, section_data
+        )
 
 
 class DisplayManager:
     """Manages UI rendering for chat messages."""
     
-    def __init__(self, config, state_manager=None):
+    def __init__(self, config=None, state_manager=None):
         """
         Initialize DisplayManager with UI configuration.
         
         Args:
-            config: UI configuration
+            config: UI configuration (optional, for non-UI use cases like executors)
             state_manager: StateSynchronizer instance for accessing workflow_state
         """
         self.config = config
@@ -191,12 +195,11 @@ class DisplayManager:
         self._sections.append(section)
         return section
     
-    def render_message_history(self) -> None:
+    def render_message_history(self):
         """Render historical messages from workflow_state."""
-        if self.state_manager:
-            display_sections = self.state_manager.get_display_sections()
-        else:
-            display_sections = st.session_state.get("display_sections", [])
+        if not self.state_manager:
+            raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
+        display_sections = self.state_manager.get_display_sections()
         
         for section_data in display_sections:
             avatar = (self.config.user_avatar if section_data["role"] == "user" 
@@ -207,7 +210,7 @@ class DisplayManager:
                     category = block_data.get("category")
                     if category == "text":
                         st.markdown(block_data.get("content", ""))
-                    elif category == "image":
+                    elif category in ["image", "generated_image"]:
                         if "content_b64" in block_data:
                             content = base64.b64decode(block_data["content_b64"])
                             st.image(content, caption=block_data.get("filename"))
@@ -238,23 +241,21 @@ class DisplayManager:
                 if "agent_info" in section_data and "agent" in section_data["agent_info"]:
                     st.caption(f"Agent: {section_data['agent_info']['agent']}")
     
-    def render_welcome_message(self) -> None:
+    def render_welcome_message(self):
         """Render welcome message if configured."""
         if self.config.welcome_message:
             with st.chat_message("assistant", avatar=self.config.assistant_avatar):
                 st.markdown(self.config.welcome_message)
     
-    def render_workflow_message(self, message: Dict[str, Any]) -> bool:
+    def render_workflow_message(self, message):
         """Render a single workflow message."""
         msg_id = message.get("id")
         if not msg_id:
             return False
         
-        if self.state_manager:
-            displayed_ids = self.state_manager.get_displayed_message_ids()
-        else:
-            display_sections = st.session_state.get("display_sections", [])
-            displayed_ids = {s.get("message_id") for s in display_sections if s.get("message_id")}
+        if not self.state_manager:
+            raise ValueError("state_manager is required. workflow_state must be the single source of truth.")
+        displayed_ids = self.state_manager.get_displayed_message_ids()
         
         if msg_id in displayed_ids:
             return False
