@@ -375,3 +375,17 @@ class FileHandler:
                     vector_store_ids.append(vs_id)
         
         return vector_store_ids
+    
+    def reset(self):
+        """
+        Reset FileHandler internal state.
+        
+        Clears all tracked files, vector stores, and resets container.
+        This should be called when resetting the chat interface.
+        """
+        self.files.clear()
+        self._tracked_files.clear()
+        self._dynamic_vector_store = None
+        if "file_handler_vector_stores" in st.session_state:
+            st.session_state.file_handler_vector_stores = []
+        self._container_id = None
