@@ -190,7 +190,13 @@ class LangGraphChat:
                                 st.write(f"- {cap}")
             st.header("Controls")
             if st.button("Reset All", type="secondary"):
+                self.file_handler.reset()
+                self._container_id = None
+                if hasattr(self, 'stream_processor'):
+                    self.stream_processor._container_id = None
                 st.session_state.clear()
+                self._init_session_state()
+                
                 st.rerun()
     
     def _render_chat_interface(self):
