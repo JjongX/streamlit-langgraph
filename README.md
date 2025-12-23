@@ -1,5 +1,7 @@
 # streamlit-langgraph
 
+> Recommendation: It is recommended to use this package for production or critical projects only after it reaches alpha status (release version 0.2.0 or higher), which is scheduled to be completed and released no later than December 14, 2025. Until then, expect breaking changes and experimental features.
+
 [![PyPI version](https://badge.fury.io/py/streamlit-langgraph.svg)](https://badge.fury.io/py/streamlit-langgraph)
 
 A Python package that integrates Streamlit's intuitive web interface with LangGraph's advanced multi-agent orchestration. Build interactive AI applications featuring multiple specialized agents collaborating in customizable workflows.
@@ -64,15 +66,15 @@ With that in mind, this package is designed so users can focus on defining agent
 
 **Key Features:**
 
-1. **Seamless Integration of Streamlit and LangGraph:** Combine Streamlit's rapid UI development to turn simple Python scripts into interactive web applications with LangGraph's flexible agent orchestration for real-time interaction.
+1. **Seamless Integration of Streamlit and LangGraph:** Combine Streamlit's rapid UI development, which turns simple Python scripts into interactive web applications, with LangGraph's flexible agent orchestration for real-time interaction.
 
-2. **Lowering the Barrier to Multi-Agent Orchestration:** Simplify multi-agent development with easy-to-use interfaces that abstract LangGraph's complexity.
+2. **Lowering the Barrier to Multi-Agent Orchestration:** Simplify multi-agent development with easy-to-use interfaces that abstract away LangGraph's complexity.
 
-3. **Ready-to-Use Multi-Agent Architectures:** Include standard patterns (supervisor, hierarchical, networked) out of the box.
+3. **Ready-to-Use Multi-Agent Architectures:** Include standard patterns (supervisor, hierarchical, network) out of the box.
 
-4. **Dual Executor Architecture:** Automatically selects between ResponseAPIExecutor (for native OpenAI tools) and CreateAgentExecutor (for HITL and multi-provider support), ensuring optimal performance for each use case.
+4. **Fully support OpenAI Responses API unlike the partial support of LangChain:** Automatically configures OpenAI's Responses API when native tools are enabled. LangChain's ChatOpenAI supports only basic native tool features and lacks support for partial image generation, real-time code interpreter output, and several other advanced functionalities. To provide a true live experience, I separately integrated the Responses API while maintaining compatibility with other LangChain features.
 
-5. **Extensibility to Other LLMs:** Design for easy integration with Gemini, Claude, and local models.
+5. **Extensibility to Other LLMs:** Not limited to OpenAI, the framework is designed to support additional LLM providers such as Gemini, Claude, and others by utilizing LangChain and manual adaptations as needed, similar to the approach used for OpenAI's Response API.
 
 ## Status
 
@@ -86,7 +88,7 @@ This project is in **alpha**. Features and APIs are subject to change.
 |----------|---------|-------|
 | **OpenAI** | ✅ | Uses **ResponseAPIExecutor** (Responses API) when native tools enabled and HITL disabled. Uses **CreateAgentExecutor** (ChatCompletion API) for HITL or when native tools disabled. |
 | **Anthropic (Claude)** | ❓ | May work but not explicitly tested. |
-| **Google (Gemini)** | ✅ | Full support via LangChain's `init_chat_model` |
+| **Google (Gemini)** | ❓ | Full support via LangChain's `init_chat_model` |
 | **Other LangChain Providers** | ❓ | May work but not explicitly tested.|
 
 **Legend:**
