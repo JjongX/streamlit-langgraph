@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Union, Tuple
 import streamlit as st
 from langgraph.graph import StateGraph
 
-from .agent import Agent, AgentManager
+from .agent import Agent, get_llm_client
 from .core.executor import WorkflowExecutor
 from .core.executor.registry import ExecutorRegistry
 from .core.state import StateSynchronizer, WorkflowStateManager
@@ -81,7 +81,7 @@ class LangGraphChat:
         """
         self.config = config or UIConfig()
         self._init_session_state()
-        self.agent_manager = AgentManager()
+        self.agents: Dict[str, Agent] = {}
         self.state_manager = StateSynchronizer()
         self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
         self.workflow = workflow
@@ -96,7 +96,7 @@ class LangGraphChat:
             for agent in agents:
                 if agent.human_in_loop and not workflow:
                     raise ValueError("Human-in-the-loop is only available for multiagent workflows.")
-                self.agent_manager.add_agent(agent)
+                self.agents[agent.name] = agent
         if custom_tools:
             for tool in custom_tools:
                 CustomTool.register_tool(
@@ -104,7 +104,7 @@ class LangGraphChat:
                     parameters=tool.parameters, return_direct=tool.return_direct
                 )
         
-        first_agent = next(iter(self.agent_manager.agents.values()))
+        first_agent = next(iter(self.agents.values()))
         
         openai_client = None
         if (first_agent.provider.lower() == "openai" and
@@ -128,10 +128,10 @@ class LangGraphChat:
             first_agent.container_id = self.file_handler._container_id
         
         vector_store_ids = self.file_handler.get_vector_store_ids()
-        self.llm = AgentManager.get_llm_client(first_agent, vector_store_ids=vector_store_ids)
+        self.llm = get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
         self._container_id = first_agent.container_id
-        self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
+        self.interrupt_handler = HITLHandler(self.agents, self.config, self.state_manager, self.display_manager)
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
     
     def _init_session_state(self):
@@ -169,7 +169,7 @@ class LangGraphChat:
         """Render the sidebar with controls and information."""
         with st.sidebar:
             st.header("Agent Configuration")
-            agents = list(self.agent_manager.agents.values())
+            agents = list(self.agents.values())
             if agents:
                 for agent in agents:
                     with st.expander(f"{agent.name}", expanded=False):
@@ -307,8 +307,8 @@ class LangGraphChat:
         """Generate response using the configured workflow or dynamically selected agents."""
         if self.workflow:
             return self._run_workflow(prompt)
-        elif self.agent_manager.agents:
-            agent = next(iter(self.agent_manager.agents.values()))
+        elif self.agents:
+            agent = next(iter(self.agents.values()))
             return self._run_agent(prompt, agent)
         return {"role": "assistant", "content": "", "agent": "system"}
     
@@ -346,7 +346,7 @@ class LangGraphChat:
         if agent.allow_file_search and vector_store_ids:
             current_vector_ids = getattr(self.llm, '_vector_store_ids', None)
             if current_vector_ids != vector_store_ids:
-                self.llm = AgentManager.get_llm_client(agent, vector_store_ids=vector_store_ids)
+                self.llm = get_llm_client(agent, vector_store_ids=vector_store_ids)
         
         response = self.workflow_executor.execute_agent(
             agent, prompt,

@@ -1,7 +1,7 @@
 # Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes.
 
 import uuid
-from ...agent import AgentManager
+from ...agent import get_llm_client
 from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
 from ...core.state import WorkflowStateManager, create_message_with_id
@@ -22,7 +22,7 @@ class AgentNodeBase:
         executor_key = f"workflow_executor_{executor.agent.name}"
         config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
-        llm_client = AgentManager.get_llm_client(agent)
+        llm_client = get_llm_client(agent)
         conversation_messages = state.get("messages", [])
         stream = False
         
@@ -32,7 +32,7 @@ class AgentNodeBase:
         if agent.allow_file_search and vector_store_ids:
             current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
             if current_vector_ids != vector_store_ids:
-                llm_client = AgentManager.get_llm_client(agent, vector_store_ids=vector_store_ids)
+                llm_client = get_llm_client(agent, vector_store_ids=vector_store_ids)
         
         result = executor.execute_workflow(
             llm_client=llm_client,

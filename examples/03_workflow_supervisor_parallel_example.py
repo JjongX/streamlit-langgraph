@@ -32,7 +32,7 @@ def create_parallel_supervisor_workflow():
     )
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
-    agents = slg.AgentManager.load_from_yaml(config_path)
+    agents = slg.Agent.load_from_yaml(config_path)
     supervisor = agents[0]
     workers = agents[1:]
     

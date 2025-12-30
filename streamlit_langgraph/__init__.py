@@ -1,4 +1,4 @@
-from .agent import Agent, AgentManager
+from .agent import Agent, get_llm_client
 from .chat import UIConfig, LangGraphChat
 from .utils import CustomTool
 from .workflow import WorkflowBuilder
@@ -7,7 +7,7 @@ from .version import __version__
 __all__ = [
     # Agent classes (agent.py)
     "Agent",
-    "AgentManager",
+    "get_llm_client",
     # UI components (chat.py)
     "UIConfig",
     "LangGraphChat",

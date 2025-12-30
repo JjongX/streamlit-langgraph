@@ -52,7 +52,7 @@ class ConversationHistoryMixin:
     
     def _init_conversation_history(self, agent):
         """Initialize conversation history tracking."""
-        self._original_system_message = agent.system_message or ""
+        self._original_system_message = f"You are a {agent.role}. {agent.instructions}"
         self._history_display_manager = DisplayManager(config=None, state_manager=None)
         self._conversation_history: List[Section] = []
         self._processed_message_ids: set = set()

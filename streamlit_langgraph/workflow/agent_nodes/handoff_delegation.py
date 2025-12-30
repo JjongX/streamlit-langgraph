@@ -7,7 +7,7 @@ import streamlit as st
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from ...agent import Agent, AgentManager
+from ...agent import Agent, get_llm_client
 from ...core.executor.conversation_history import extract_text_from_content
 from ...core.executor.registry import ExecutorRegistry
 from ...core.state import WorkflowState, WorkflowStateManager
@@ -92,7 +92,7 @@ class HandoffDelegation:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
-        llm_client = AgentManager.get_llm_client(agent)
+        llm_client = get_llm_client(agent)
         
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
@@ -128,7 +128,7 @@ class HandoffDelegation:
             content = AgentNodeBase.execute_agent(agent, state, input_message)
             return content, {"action": "finish"}
         
-        llm_client = AgentManager.get_llm_client(agent)
+        llm_client = get_llm_client(agent)
         
         existing_tools = agent.get_tools()
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])

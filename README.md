@@ -42,7 +42,6 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [MCP (Model Context Protocol)](#mcp-model-context-protocol)
 - [API Reference](#api-reference)
   - [Agent](#agent)
-  - [AgentManager](#agentmanager)
   - [UIConfig](#uiconfig)
   - [LangGraphChat](#langgraphchat)
   - [WorkflowBuilder](#workflowbuilder)
@@ -183,7 +182,7 @@ import streamlit as st
 import streamlit_langgraph as slg
 
 # Load agents from YAML
-agents = slg.AgentManager.load_from_yaml("configs/my_agents.yaml")
+agents = slg.Agent.load_from_yaml("configs/my_agents.yaml")
 
 # Create workflow
 supervisor = agents[0]
@@ -398,7 +397,7 @@ This section provides an overview of the package's internal organization and mod
 
 ### Top-Level Modules
 
-- **`agent.py`**: `Agent` class and `AgentManager` for agent configuration and management
+- **`agent.py`**: `Agent` class for agent configuration
 - **`chat.py`**: `LangGraphChat` main interface and `UIConfig` for UI settings
 - **`workflow/`**: Workflow builders and patterns (supervisor, hierarchical, network)
 
@@ -531,7 +530,7 @@ Streamlit renders UI
 
 Agents can be configured in two ways:
 
-**Python Configuration:**
+**Single Agent (Python Configuration):**
 ```python
 import streamlit_langgraph as slg
 
@@ -550,9 +549,9 @@ agent = slg.Agent(
 )
 ```
 
-**YAML File Configuration:**
+**Multi-Agent (YAML Configuration - Recommended):**
 
-Agents can be configured using YAML files for easier management:
+For multi-agent workflows, YAML configuration is recommended for better organization and maintainability:
 
 ```yaml
 - name: supervisor
@@ -576,15 +575,26 @@ Agents can be configured using YAML files for easier management:
   temperature: 0.0
 ```
 
-Load the above YAML to python:
+Load the above YAML:
 ```python
 import streamlit_langgraph as slg
 
-# Load agents from YAML file
-agents = slg.AgentManager.load_from_yaml("configs/agents.yaml")
+# Load agents from YAML file (recommended for multi-agent)
+agents = slg.Agent.load_from_yaml("configs/agents.yaml")
 supervisor = agents[0]
 workers = agents[1:]
 ```
+
+**Note**: For multi-agent workflows, you can also create agents directly in Python:
+```python
+# Works but less organized for multiple agents
+supervisor = slg.Agent(name="supervisor", ...)
+worker1 = slg.Agent(name="worker1", ...)
+worker2 = slg.Agent(name="worker2", ...)
+agents = [supervisor, worker1, worker2]
+```
+
+However, YAML is recommended for multi-agent configurations as it provides better organization, easier maintenance, and cleaner code.
 
 For complete parameter reference, see [Agent API Reference](#agent).
 
@@ -1108,6 +1118,12 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 
 **Description**: Core class for defining individual agents with their configurations.
 
+**Class Methods**:
+
+| Method | Parameters | Returns | Description |
+|--------|-----------|---------|-------------|
+| `load_from_yaml(path)` | `path: str` | `List[Agent]` | Load multiple agents from YAML configuration file (recommended for multi-agent workflows) |
+
 **Constructor Parameters**:
 
 | Parameter | Type | Default | Description |
@@ -1117,7 +1133,6 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 | `instructions` | `str` | Required | Detailed instructions guiding agent behavior |
 | `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
 | `model` | `str` | `"gpt-4.1-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
-| `system_message` | `str` | `None` | Custom system message (auto-generated from role and instructions if None) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
 | `tools` | `List[str]` | `[]` | List of tool names available to the agent |
 | `mcp_servers` | `Dict[str, Dict]` | `None` | MCP server configurations (see [MCP Tools](#mcp-model-context-protocol)) |
@@ -1153,46 +1168,6 @@ agent = slg.Agent(
         }
     }
 )
-```
-
----
-
-### `AgentManager`
-
-**Description**: Manages multiple agents and handles agent loading/retrieval.
-
-**Class Methods**:
-
-| Method | Parameters | Returns | Description |
-|--------|-----------|---------|-------------|
-| `load_from_yaml(path)` | `path: str` | `List[Agent]` | Load agents from YAML configuration file |
-| `get_llm_client(agent)` | `agent: Agent` | LLM client | Get configured LLM client for an agent |
-
-**Instance Methods**:
-
-| Method | Parameters | Returns | Description |
-|--------|-----------|---------|-------------|
-| `add_agent(agent)` | `agent: Agent` | `None` | Add agent to the manager |
-| `remove_agent(name)` | `name: str` | `None` | Remove agent by name |
-
-**Properties**:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `agents` | `Dict[str, Agent]` | Dictionary of agents keyed by name |
-| `active_agent` | `str` | Name of the currently active agent |
-
-**Example**:
-```python
-import streamlit_langgraph as slg
-
-# Load from YAML
-agents = slg.AgentManager.load_from_yaml("config/agents.yaml")
-
-# Or create manager and add agents
-manager = slg.AgentManager()
-manager.add_agent(my_agent)
-agent = manager.agents["analyst"]  # Access via agents dictionary
 ```
 
 ---

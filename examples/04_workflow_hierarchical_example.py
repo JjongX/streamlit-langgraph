@@ -8,7 +8,7 @@ def create_hierarchical_workflow_example():
     """Create a hierarchical workflow with multiple supervisor teams."""
     
     config_path = os.path.join(os.path.dirname(__file__), "./configs/hierarchical.yaml")
-    agents = slg.AgentManager.load_from_yaml(config_path)
+    agents = slg.Agent.load_from_yaml(config_path)
 
     # Unpack agents
     project_manager = agents[0]
