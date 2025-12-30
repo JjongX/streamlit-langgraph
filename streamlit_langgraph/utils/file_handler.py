@@ -1,6 +1,7 @@
 # File handling utilities for OpenAI API integration.
 
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -380,9 +381,17 @@ class FileHandler:
         """
         Reset FileHandler internal state.
         
-        Clears all tracked files, vector stores, and resets container.
+        Clears all tracked files, vector stores, resets container, and renews temp_dir.
         This should be called when resetting the chat interface.
         """
+        old_temp_dir = self.temp_dir
+        if old_temp_dir and Path(old_temp_dir).exists():
+            try:
+                shutil.rmtree(old_temp_dir)
+            except Exception:
+                pass
+        self.temp_dir = tempfile.mkdtemp()
+        
         self.files.clear()
         self._tracked_files.clear()
         self._dynamic_vector_store = None
