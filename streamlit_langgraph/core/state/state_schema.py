@@ -22,25 +22,19 @@ class WorkflowStateManager:
         return result
     
     @staticmethod
-    def create_initial_state(messages: Optional[List[Dict[str, Any]]] = None, current_agent: Optional[str] = None) -> "WorkflowState":
-        """Create an initial WorkflowState with default values."""
-        return WorkflowState(
-            messages=messages or [],
-            current_agent=current_agent,
-            agent_outputs={},
-            files=[],
-            metadata={}
-        )
+    def _get_metadata_with_nested_copy(state: "WorkflowState", nested_key: str) -> Dict[str, Any]:
+        """Get metadata with a copy of a nested dict, creating if needed."""
+        metadata = state.get("metadata", {}).copy()
+        if nested_key not in metadata:
+            metadata[nested_key] = {}
+        else:
+            metadata[nested_key] = metadata[nested_key].copy()
+        return metadata
     
     @staticmethod
     def set_pending_interrupt(state: "WorkflowState", agent_name: str, interrupt_data: Dict[str, Any], executor_key: str) -> Dict[str, Any]:
         """Store a pending interrupt in workflow state metadata."""
-        if "pending_interrupts" not in state.get("metadata", {}):
-            updated_metadata = state.get("metadata", {}).copy()
-            updated_metadata["pending_interrupts"] = {}
-        else:
-            updated_metadata = state["metadata"].copy()
-            updated_metadata["pending_interrupts"] = updated_metadata["pending_interrupts"].copy()
+        updated_metadata = WorkflowStateManager._get_metadata_with_nested_copy(state, "pending_interrupts")
         
         updated_metadata["pending_interrupts"][executor_key] = {
             "agent": agent_name,
@@ -60,10 +54,9 @@ class WorkflowStateManager:
     def clear_pending_interrupt(state: "WorkflowState", executor_key: str) -> Dict[str, Any]:
         """Clear a specific pending interrupt from workflow state."""
         if "pending_interrupts" not in state.get("metadata", {}):
-            return {"metadata": state.get("metadata", {})}
+            return {"metadata": state.get("metadata", {}).copy()}
         
-        updated_metadata = state["metadata"].copy()
-        updated_metadata["pending_interrupts"] = updated_metadata["pending_interrupts"].copy()
+        updated_metadata = WorkflowStateManager._get_metadata_with_nested_copy(state, "pending_interrupts")
         updated_metadata["pending_interrupts"].pop(executor_key, None)
         return {"metadata": updated_metadata}
     
@@ -71,12 +64,7 @@ class WorkflowStateManager:
     def set_hitl_decision(state: "WorkflowState", executor_key: str, decisions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Store HITL decisions for an interrupt."""
         decisions_key = f"{executor_key}_decisions"
-        if "hitl_decisions" not in state.get("metadata", {}):
-            updated_metadata = state.get("metadata", {}).copy()
-            updated_metadata["hitl_decisions"] = {}
-        else:
-            updated_metadata = state["metadata"].copy()
-            updated_metadata["hitl_decisions"] = updated_metadata["hitl_decisions"].copy()
+        updated_metadata = WorkflowStateManager._get_metadata_with_nested_copy(state, "hitl_decisions")
         
         updated_metadata["hitl_decisions"][decisions_key] = decisions
         return {"metadata": updated_metadata}
@@ -172,7 +160,7 @@ class WorkflowStateManager:
         if "executors" not in state["metadata"]:
             state["metadata"]["executors"] = {}
         
-        workflow_thread_id = state.get("metadata", {}).get("workflow_thread_id")
+        workflow_thread_id = state["metadata"].get("workflow_thread_id")
         if not workflow_thread_id:
             workflow_thread_id = str(uuid.uuid4())
             state["metadata"]["workflow_thread_id"] = workflow_thread_id

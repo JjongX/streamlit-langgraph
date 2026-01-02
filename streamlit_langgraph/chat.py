@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph
 from .agent import Agent, get_llm_client
 from .core.executor import WorkflowExecutor
 from .core.executor.registry import ExecutorRegistry
-from .core.state import StateSynchronizer, WorkflowStateManager
+from .core.state import StateSynchronizer, WorkflowState, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
 from .ui import DisplayManager, StreamProcessor
 from .utils import FileHandler, CustomTool
@@ -138,7 +138,13 @@ class LangGraphChat:
     def _init_session_state(self):
         """Initialize all Streamlit session state variables in one place."""
         if "workflow_state" not in st.session_state:
-            st.session_state.workflow_state = WorkflowStateManager.create_initial_state()
+            st.session_state.workflow_state = WorkflowState(
+                messages=[],
+                current_agent=None,
+                agent_outputs={},
+                files=[],
+                metadata={}
+            )
         if "agent_executors" not in st.session_state:
             st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
