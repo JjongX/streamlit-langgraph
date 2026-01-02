@@ -4,7 +4,7 @@ import uuid
 from ...agent import get_llm_client
 from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
-from ...core.state import WorkflowStateManager, create_message_with_id
+from ...core.state import WorkflowStateManager
 from ..prompts import SupervisorPromptBuilder
 
 
@@ -102,7 +102,7 @@ class AgentNodeFactory:
                     supervisor, state, supervisor_instructions, workers, allow_parallel
                 )
                 # Always create message
-                messages_update = [create_message_with_id("assistant", response, supervisor.name)]
+                messages_update = [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": supervisor.name}]
                 return {
                     "current_agent": supervisor.name,
                     "messages": messages_update,
@@ -121,7 +121,7 @@ class AgentNodeFactory:
                 )
                 return {
                     "current_agent": supervisor.name,
-                    "messages": [create_message_with_id("assistant", response, supervisor.name)],
+                    "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": supervisor.name}],
                     "agent_outputs": {supervisor.name: response}
                 }
             return supervisor_agent_node
@@ -151,7 +151,7 @@ class AgentNodeFactory:
                 }
             return {
                 "current_agent": worker.name,
-                "messages": [create_message_with_id("assistant", response, worker.name)],
+                "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": worker.name}],
                 "agent_outputs": {worker.name: response}
             }
         return worker_agent_node
@@ -187,7 +187,7 @@ class AgentNodeFactory:
                 agent, state, network_instructions, peer_agents, allow_parallel=False
             )
             
-            messages_update = [create_message_with_id("assistant", response, agent.name)]
+            messages_update = [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": agent.name}]
             return {
                 "current_agent": agent.name,
                 "messages": messages_update,

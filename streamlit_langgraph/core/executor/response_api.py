@@ -2,6 +2,7 @@
 
 import json
 import os
+import uuid
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
@@ -165,6 +166,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         
         if stream:
             return {
+                "id": str(uuid.uuid4()),
                 "role": "assistant",
                 "content": "",
                 "agent": self.agent.name,
@@ -183,6 +185,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             blocks = self._convert_message_to_blocks(content)
             self._add_to_conversation_history("assistant", blocks)
             return {
+                "id": str(uuid.uuid4()),
                 "role": "assistant",
                 "content": content,
                 "agent": self.agent.name

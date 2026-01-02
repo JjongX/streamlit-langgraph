@@ -1,5 +1,6 @@
 # Main chat interface.
 
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Union, Tuple
@@ -310,7 +311,7 @@ class LangGraphChat:
         elif self.agents:
             agent = next(iter(self.agents.values()))
             return self._run_agent(prompt, agent)
-        return {"role": "assistant", "content": "", "agent": "system"}
+        return {"id": str(uuid.uuid4()), "role": "assistant", "content": "", "agent": "system"}
     
     def _run_workflow(self, prompt):
         """Execute multiagent workflow and handle UI updates."""
@@ -336,7 +337,7 @@ class LangGraphChat:
         )
         st.session_state.workflow_state = result_state
         
-        return {"role": "assistant", "content": "", "agent": "workflow-completed"}
+        return {"id": str(uuid.uuid4()), "role": "assistant", "content": "", "agent": "workflow-completed"}
     
     def _run_agent(self, prompt, agent):
         """Run single agent (HITL not supported - use workflows for HITL)."""

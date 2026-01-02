@@ -739,6 +739,46 @@ Both executors work seamlessly with handoff delegation patterns:
 - **CreateAgentExecutor**: Uses LangChain tool calling for delegation
 - The delegation system automatically routes to the appropriate execution method based on executor type
 
+#### **Message Format Conversion**
+
+Both executors convert API response objects to plain dictionary format before returning:
+
+**Why not use API message objects directly?**
+
+1. **Serialization Requirements**: 
+   - LangGraph state must be JSON-serializable for checkpointing
+   - Streamlit `session_state` requires JSON-serializable data
+   - LangChain `AIMessage` and OpenAI Response objects are not JSON-serializable
+
+2. **LangGraph State Management**:
+   - `WorkflowState` defines `messages: List[Dict[str, Any]]` (plain dicts)
+   - State reducers (`operator.add`) work with lists of dicts, not objects
+   - LangGraph checkpointers serialize state, requiring plain data structures
+
+3. **Unified Format**:
+   - User messages are plain dicts: `{"id": "...", "role": "user", "content": "...", "agent": None}`
+   - Assistant messages need the same structure for consistency
+   - Both types go into the same `workflow_state["messages"]` list
+
+4. **Custom Fields**:
+   - We need `agent` field (which agent generated the message) - not in API responses
+   - We need `id` field (UUID for deduplication) - APIs may not provide stable IDs
+   - Unified format enables consistent display/rendering logic
+
+**Message Structure**:
+```python
+{
+    "id": str(uuid.uuid4()),      # Unique identifier for deduplication
+    "role": "assistant",           # Message role
+    "content": str,                # Message content
+    "agent": str                   # Agent name that generated the message
+}
+```
+
+This conversion happens in:
+- `CreateAgentExecutor._extract_response_text()` - Extracts content from LangChain `AIMessage`
+- `ResponseAPIExecutor._extract_response_content()` - Extracts content from OpenAI Response API
+
 ### Conversation History Modes
 
 Control how conversation history is managed for agents:

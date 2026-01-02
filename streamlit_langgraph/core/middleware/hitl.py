@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from ...agent import AgentManager
+from ...agent import get_llm_client
 from ..executor.registry import ExecutorRegistry
 from ..state import WorkflowStateManager
 from .interrupts import InterruptManager
@@ -20,9 +20,7 @@ class HITLUtils:
         if not workflow_state:
             return False
         return InterruptManager.has_pending_interrupts(workflow_state)
-    
-    # --- Action Request Extraction ---
-    
+        
     @staticmethod
     def extract_action_requests_from_interrupt(interrupt_raw):
         """Extract action_requests from Interrupt objects."""
@@ -90,17 +88,17 @@ class HITLHandler:
     Uses HITLUtils for data transformation utilities.
     """
     
-    def __init__(self, agent_manager, config, state_manager, display_manager):
+    def __init__(self, agents, config, state_manager, display_manager):
         """
         Initialize interrupt handler with dependencies.
         
         Args:
-            agent_manager: AgentManager instance for accessing agents
+            agents: Map agent names to Agent instances
             config: UIConfig instance for UI settings
             state_manager: StateSynchronizer instance for state management
             display_manager: DisplayManager instance for rendering messages
         """
-        self.agent_manager = agent_manager
+        self.agents = agents
         self.config = config
         self.state_manager = state_manager
         self.display_manager = display_manager
@@ -162,7 +160,7 @@ class HITLHandler:
         executor_key = f"workflow_executor_{agent_name}"
         executor = st.session_state.agent_executors.get(executor_key)
         if executor is None:
-            agent = self.agent_manager.agents.get(agent_name)
+            agent = self.agents.get(agent_name)
             if agent:
                 executor = registry.create_for_hitl(agent, executor_key)
         
@@ -183,7 +181,7 @@ class HITLHandler:
         
         # Handle CreateAgentExecutor which needs agent_obj initialization
         if hasattr(executor, 'agent_obj') and executor.agent_obj is None:
-            llm_client = AgentManager.get_llm_client(executor.agent)
+            llm_client = get_llm_client(executor.agent)
             executor.build_agent(llm_client)
         
         # Always use workflow_thread_id from workflow_state metadata (single source of truth)

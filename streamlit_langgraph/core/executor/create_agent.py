@@ -1,6 +1,7 @@
 # CreateAgentExecutor for LangChain agents.
 
 import json
+import uuid
 from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
@@ -75,9 +76,9 @@ class CreateAgentExecutor(ConversationHistoryMixin):
                 result_text = self._extract_response_text(out)
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
-                return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+                return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
         except Exception as e:
-            return {"role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
+            return {"id": str(uuid.uuid4()), "role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
     
     def execute_workflow(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -111,9 +112,9 @@ class CreateAgentExecutor(ConversationHistoryMixin):
                 result_text = self._extract_response_text(out)
                 blocks = self._convert_message_to_blocks(result_text)
                 self._add_to_conversation_history("assistant", blocks)
-                return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+                return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
         except Exception as e:
-            return {"role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
+            return {"id": str(uuid.uuid4()), "role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
     
     def resume(
         self, 
@@ -145,7 +146,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         result_text = self._extract_response_text(out)
         blocks = self._convert_message_to_blocks(result_text)
         self._add_to_conversation_history("assistant", blocks)
-        return {"role": "assistant", "content": result_text, "agent": self.agent.name}
+        return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
     
     def detect_interrupt_in_stream(
         self, 
@@ -229,7 +230,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             config=execution_config,
             stream_mode="messages"
         )
-        return {"role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
+        return {"id": str(uuid.uuid4()), "role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
   
     def build_agent(self, llm_chat_model):
         """
@@ -378,6 +379,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             Response dictionary with interrupt information
         """
         return {
+            "id": str(uuid.uuid4()),
             "role": "assistant",
             "content": "",
             "agent": self.agent.name,
