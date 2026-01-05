@@ -15,19 +15,15 @@ class StateSynchronizer:
         
         if "messages" in updates:
             workflow_state["messages"].extend(updates["messages"])
-        
         if "metadata" in updates:
             workflow_state["metadata"] = WorkflowStateManager.merge_metadata(
                 workflow_state.get("metadata", {}),
                 updates["metadata"]
             )
-        
         if "agent_outputs" in updates:
             workflow_state["agent_outputs"].update(updates["agent_outputs"])
-        
         if "current_agent" in updates and updates["current_agent"] is not None:
             workflow_state["current_agent"] = updates["current_agent"]
-        
         if "files" in updates:
             workflow_state["files"].extend(updates["files"])
     

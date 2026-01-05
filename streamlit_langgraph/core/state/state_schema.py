@@ -22,28 +22,33 @@ class WorkflowStateManager:
         return result
     
     @staticmethod
-    def _get_metadata_with_nested_copy(state: "WorkflowState", nested_key: str) -> Dict[str, Any]:
-        """Get metadata with a copy of a nested dict, creating if needed."""
-        metadata = state.get("metadata", {}).copy()
+    def _ensure_metadata(state: "WorkflowState") -> Dict[str, Any]:
+        """Ensure metadata dict exists in state and return it."""
+        if "metadata" not in state:
+            state["metadata"] = {}
+        return state["metadata"]
+    
+    @staticmethod
+    def _ensure_nested_dict(state: "WorkflowState", nested_key: str) -> Dict[str, Any]:
+        """Ensure metadata and nested dict exist in state, return nested dict."""
+        metadata = WorkflowStateManager._ensure_metadata(state)
         if nested_key not in metadata:
             metadata[nested_key] = {}
-        else:
-            metadata[nested_key] = metadata[nested_key].copy()
-        return metadata
+        return metadata[nested_key]
     
     @staticmethod
     def set_pending_interrupt(state: "WorkflowState", agent_name: str, interrupt_data: Dict[str, Any], executor_key: str) -> Dict[str, Any]:
         """Store a pending interrupt in workflow state metadata."""
-        updated_metadata = WorkflowStateManager._get_metadata_with_nested_copy(state, "pending_interrupts")
+        pending_interrupts = WorkflowStateManager._ensure_nested_dict(state, "pending_interrupts")
         
-        updated_metadata["pending_interrupts"][executor_key] = {
+        pending_interrupts[executor_key] = {
             "agent": agent_name,
             "__interrupt__": interrupt_data.get("__interrupt__"),
             "thread_id": interrupt_data.get("thread_id"),
             "config": interrupt_data.get("config"),
             "executor_key": executor_key
         }
-        return {"metadata": updated_metadata}
+        return {"metadata": state["metadata"]}
     
     @staticmethod
     def get_pending_interrupts(state: "WorkflowState") -> Dict[str, Dict[str, Any]]:
@@ -54,20 +59,20 @@ class WorkflowStateManager:
     def clear_pending_interrupt(state: "WorkflowState", executor_key: str) -> Dict[str, Any]:
         """Clear a specific pending interrupt from workflow state."""
         if "pending_interrupts" not in state.get("metadata", {}):
-            return {"metadata": state.get("metadata", {}).copy()}
+            return {"metadata": state.get("metadata", {})}
         
-        updated_metadata = WorkflowStateManager._get_metadata_with_nested_copy(state, "pending_interrupts")
-        updated_metadata["pending_interrupts"].pop(executor_key, None)
-        return {"metadata": updated_metadata}
+        pending_interrupts = WorkflowStateManager._ensure_nested_dict(state, "pending_interrupts")
+        pending_interrupts.pop(executor_key, None)
+        return {"metadata": state["metadata"]}
     
     @staticmethod
     def set_hitl_decision(state: "WorkflowState", executor_key: str, decisions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Store HITL decisions for an interrupt."""
-        decisions_key = f"{executor_key}_decisions"
-        updated_metadata = WorkflowStateManager._get_metadata_with_nested_copy(state, "hitl_decisions")
+        hitl_decisions = WorkflowStateManager._ensure_nested_dict(state, "hitl_decisions")
         
-        updated_metadata["hitl_decisions"][decisions_key] = decisions
-        return {"metadata": updated_metadata}
+        decisions_key = f"{executor_key}_decisions"
+        hitl_decisions[decisions_key] = decisions
+        return {"metadata": state["metadata"]}
     
     @staticmethod
     def get_hitl_decision(state: "WorkflowState", executor_key: str) -> Optional[List[Dict[str, Any]]]:
@@ -83,10 +88,7 @@ class WorkflowStateManager:
         if not initial_metadata:
             return
         
-        if "metadata" not in final_state:
-            final_state["metadata"] = {}
-        
-        final_metadata = final_state["metadata"]
+        final_metadata = WorkflowStateManager._ensure_metadata(final_state)
         for key in HITL_METADATA_KEYS:
             if key not in initial_metadata:
                 continue
@@ -107,10 +109,7 @@ class WorkflowStateManager:
         if not initial_display_sections:
             return
         
-        if "metadata" not in final_state:
-            final_state["metadata"] = {}
-        
-        final_metadata = final_state["metadata"]
+        final_metadata = WorkflowStateManager._ensure_metadata(final_state)
         
         if "display_sections" not in final_metadata:
             final_metadata["display_sections"] = []
@@ -155,17 +154,15 @@ class WorkflowStateManager:
     @staticmethod
     def get_or_create_workflow_config(state: "WorkflowState", executor_key: str) -> Tuple[Dict[str, Any], str]:
         """Get or create workflow thread_id and config."""
-        if "metadata" not in state:
-            state["metadata"] = {}
-        if "executors" not in state["metadata"]:
-            state["metadata"]["executors"] = {}
+        metadata = WorkflowStateManager._ensure_metadata(state)
+        executors = WorkflowStateManager._ensure_nested_dict(state, "executors")
         
-        workflow_thread_id = state["metadata"].get("workflow_thread_id")
+        workflow_thread_id = metadata.get("workflow_thread_id")
         if not workflow_thread_id:
             workflow_thread_id = str(uuid.uuid4())
-            state["metadata"]["workflow_thread_id"] = workflow_thread_id
+            metadata["workflow_thread_id"] = workflow_thread_id
         
-        state["metadata"]["executors"][executor_key] = {"thread_id": workflow_thread_id}
+        executors[executor_key] = {"thread_id": workflow_thread_id}
         config = {"configurable": {"thread_id": workflow_thread_id}}
         return config, workflow_thread_id
 

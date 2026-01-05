@@ -47,6 +47,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         self._init_conversation_history(agent)
         
         self.tools = tools if tools is not None else self.agent.get_tools()
+        self._checkpointer = None
     
     def execute_agent(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -261,8 +262,10 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             agent_kwargs["middleware"] = middleware
         
         if self.agent.human_in_loop and self.agent.interrupt_on:
-            agent_checkpointer = InMemorySaver()
-            agent_kwargs["checkpointer"] = agent_checkpointer
+            # Reuse existing checkpointer if available to preserve state across rebuilds
+            if self._checkpointer is None:
+                self._checkpointer = InMemorySaver()
+            agent_kwargs["checkpointer"] = self._checkpointer
         
         self.agent_obj = create_agent(**agent_kwargs)
         
