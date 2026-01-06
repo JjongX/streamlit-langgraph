@@ -66,17 +66,6 @@ class ExecutorRegistry:
         
         return executor
     
-    def create_for_hitl(self, agent: Agent, executor_key: Optional[str] = None) -> Any:
-        """Create executor for HITL scenarios."""
-        from .create_agent import CreateAgentExecutor
-
-        if executor_key is None:
-            executor_key = f"workflow_executor_{agent.name}"
-        executor = CreateAgentExecutor(agent)
-        
-        st.session_state.agent_executors[executor_key] = executor
-        return executor
-    
     @staticmethod
     def has_native_tools(agent: Agent) -> bool:
         """Check if agent has native OpenAI tools enabled."""
