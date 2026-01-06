@@ -1,20 +1,33 @@
 # Main agent class.
 
 import os
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional
 
 import yaml
 from langchain.chat_models import init_chat_model
 
 
-@dataclass
 class Agent:
     """
     Agent configuration for multiagent workflows.
     
     This class represents a single agent in a multi-agent system, including its 
     configuration, capabilities, and behavior settings.
+    
+    **Configuration via YAML:**
+        Load agents from YAML file:
+        
+        Single agent:
+        ```python
+        agent = Agent("configs/agent.yaml")
+        ```
+        
+        Multiple agents:
+        ```python
+        agents = Agent("configs/agents.yaml")
+        supervisor = agents[0]
+        workers = agents[1:]
+        ```
     
     Executor selection logic:
     - HITL enabled -> CreateAgentExecutor (HITL requires tool interception, 
@@ -32,7 +45,7 @@ class Agent:
         temperature: Sampling temperature for responses (default: 0.0)
         allow_file_search: Enable file search capability
         allow_code_interpreter: Enable code interpreter capability
-        container_id: Container ID for code interpreter (required for code_interpreter)
+        container_id: Container ID for code interpreter (auto-created by FileHandler when code_interpreter is enabled, not loaded from YAML)
         allow_web_search: Enable web search capability
         allow_image_generation: Enable image generation capability
         tools: List of custom tool names available to the agent
@@ -43,24 +56,24 @@ class Agent:
         hitl_description_prefix: Prefix for HITL approval messages
         conversation_history_mode: Conversation history mode ("full", "filtered", or "disable")
     """
-    name: str
-    role: str
-    instructions: str
-    provider: Optional[str] = "openai"
-    model: Optional[str] = "gpt-4.1-mini"
-    temperature: float = 0.0
-    allow_file_search: bool = False
-    allow_code_interpreter: bool = False
-    container_id: Optional[str] = None  # Required for code_interpreter functionality
-    allow_web_search: bool = False
-    allow_image_generation: bool = False
-    tools: List[str] = field(default_factory=list)
-    mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None
-    context: Optional[str] = "least"
-    human_in_loop: bool = False
-    interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None
-    hitl_description_prefix: Optional[str] = "Tool execution pending approval"
-    conversation_history_mode: str = "filtered"  # Options: "full", "filtered", "disable"
+    
+    def __new__(cls, file_path: str = None, **kwargs):
+        """
+        Create Agent instance(s) from YAML file.
+
+        Returns:
+            Agent instance if single agent, or List[Agent] if multiple agents
+        """
+        if file_path is None:
+            raise ValueError("file_path is required. Use Agent(file_path='config.yaml')")
+        
+        agents = cls._load_from_yaml(file_path)
+        if len(agents) == 1:
+            return agents[0]
+        elif len(agents) > 1:
+            return agents
+        else:
+            raise ValueError("YAML file contains no agents.")
 
     def __post_init__(self):
         """Initialize and validate settings."""
@@ -115,36 +128,19 @@ class Agent:
         return tools
     
     @classmethod
-    def load_from_yaml(cls, yaml_path: str) -> List["Agent"]:
+    def _load_from_yaml(cls, yaml_path: str) -> List["Agent"]:
         """
-        Load multiple Agent instances from a YAML configuration file.
-
-        For single agents, use the Agent class directly: Agent(name="...", role="...", ...)
-        
-        For multi-agent workflows, you can either:
-        - Use YAML (recommended): Agent.load_from_yaml("configs/agents.yaml")
-        - Use code: [Agent(...), Agent(...), ...] - works but less organized
-        
-        **Recommended for multi-agent workflows** - YAML provides better organization
-        and maintainability compared to creating multiple Agent instances in code.
-            
-        Example:
-            # Load agents from a config file
-            agents = Agent.load_from_yaml("./configs/supervisor_sequential.yaml")
-            supervisor = agents[0]
-            workers = agents[1:]
-            
-            # Or use relative to current file
-            config_path = os.path.join(os.path.dirname(__file__), "./configs/my_agents.yaml")
-            agents = Agent.load_from_yaml(config_path)
+        Internal method to load Agent instances from a YAML configuration file.
+        Creates agents directly without going through constructor to avoid double initialization.
         """
-        if not os.path.isabs(yaml_path):
-            yaml_path = os.path.abspath(yaml_path)
         if not os.path.exists(yaml_path):
             raise FileNotFoundError(f"YAML config file not found: {yaml_path}")
         
         with open(yaml_path, "r", encoding="utf-8") as f:
             agent_configs = yaml.safe_load(f)
+        
+        if agent_configs is None:
+            raise ValueError("YAML file is empty or contains no configuration.")
         
         if not isinstance(agent_configs, list):
             raise ValueError(
@@ -157,7 +153,27 @@ class Agent:
                 raise ValueError(
                     f"Each agent configuration must be a dictionary. Got: {type(cfg)}"
                 )
-            agents.append(cls(**cfg))
+            # Create agent directly without going through constructor
+            agent = object.__new__(cls)
+            agent.name = cfg.get("name")
+            agent.role = cfg.get("role")
+            agent.instructions = cfg.get("instructions")
+            agent.provider = cfg.get("provider", "openai")
+            agent.model = cfg.get("model", "gpt-4.1-mini")
+            agent.temperature = cfg.get("temperature", 0.0)
+            agent.allow_file_search = cfg.get("allow_file_search", False)
+            agent.allow_code_interpreter = cfg.get("allow_code_interpreter", False)
+            agent.container_id = None
+            agent.allow_web_search = cfg.get("allow_web_search", False)
+            agent.allow_image_generation = cfg.get("allow_image_generation", False)
+            agent.tools = cfg.get("tools", [])
+            agent.mcp_servers = cfg.get("mcp_servers")
+            agent.context = cfg.get("context", "least")
+            agent.human_in_loop = cfg.get("human_in_loop", False)
+            agent.interrupt_on = cfg.get("interrupt_on")
+            agent.hitl_description_prefix = cfg.get("hitl_description_prefix", "Tool execution pending approval")
+            agent.conversation_history_mode = cfg.get("conversation_history_mode", "filtered")
+            agents.append(agent)
         
         return agents
 

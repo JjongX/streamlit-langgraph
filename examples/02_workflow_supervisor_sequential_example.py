@@ -7,8 +7,8 @@ import streamlit_langgraph as slg
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""
     
-    config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_sequential.yaml")
-    agents = slg.Agent.load_from_yaml(config_path)
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/02_supervisor_sequential.yaml")
+    agents = slg.Agent(config_path)
 
     supervisor = agents[0]
     workers = agents[1:]

@@ -31,8 +31,8 @@ def create_parallel_supervisor_workflow():
         function=analyze_sentiment
     )
     
-    config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_parallel.yaml")
-    agents = slg.Agent.load_from_yaml(config_path)
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/03_supervisor_parallel.yaml")
+    agents = slg.Agent(config_path)
     supervisor = agents[0]
     workers = agents[1:]
     

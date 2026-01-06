@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import streamlit as st
 import streamlit_langgraph as slg
@@ -22,17 +23,8 @@ def callback_test(file_path: str) -> str:
 
 
 def main():
-    assistant = slg.Agent(
-        name="Assistant",
-        role="A helpful assistant that can analyze CSV files",
-        instructions=(
-            "You are a helpful assistant that can answer questions and have conversations. "
-            "If you do not know the answer, just state that you do not know."
-        ),
-        model="gpt-4o",
-        provider="openai",
-        allow_code_interpreter=True,
-    )
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/06_file_callback.yaml")
+    assistant = slg.Agent(config_path)
     config = slg.UIConfig(
         title="File Preprocessing Example",
         file_callback=callback_test,

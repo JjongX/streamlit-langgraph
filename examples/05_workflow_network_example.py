@@ -7,8 +7,8 @@ import streamlit_langgraph as slg
 def create_network_workflow_example():
     """Create a network workflow with peer-to-peer agent collaboration."""
     
-    config_path = os.path.join(os.path.dirname(__file__), "./configs/network.yaml")
-    agents = slg.Agent.load_from_yaml(config_path)
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/05_network.yaml")
+    agents = slg.Agent(config_path)
     
     return agents
 
