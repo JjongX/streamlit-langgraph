@@ -195,6 +195,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             self.build_agent(llm_client)
         
         langchain_messages = self.convert_to_langchain_messages(messages, prompt, file_messages)
+        
         execution_config = config if config is not None else {}
         out = self.agent_obj.invoke(
             {"messages": langchain_messages}, 

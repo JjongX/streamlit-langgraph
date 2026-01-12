@@ -454,6 +454,33 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         # Update conversation history from messages (this includes file messages)
         self._update_conversation_history_from_messages(messages, file_messages)
         
+        # Add file messages directly to input (Response API needs them in the input array)
+        # This is critical for code_interpreter and file_search to work properly
+        # Only include messages with actual file references (input_file, input_image), not text messages
+        if file_messages:
+            file_count = 0
+            for file_msg in file_messages:
+                if isinstance(file_msg, dict) and file_msg.get("role") == "user":
+                    content = file_msg.get("content", [])
+                    if isinstance(content, list):
+                        # Check if this message contains actual file references
+                        has_file_reference = False
+                        file_content = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                block_type = block.get("type")
+                                if block_type in ("input_file", "input_image"):
+                                    has_file_reference = True
+                                    file_content.append(block)
+                        
+                        # Only add messages that contain actual file references
+                        if has_file_reference:
+                            input_list.append({
+                                "role": "user",
+                                "content": file_content
+                            })
+                            file_count += 1
+        
         # Add current prompt as user message (like reference code does)
         input_list.append({"role": "user", "content": current_prompt})
 
@@ -475,6 +502,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             return ""
 
         text_parts = []
+        
         # Check response.items first (Response API format)
         if hasattr(response, 'items') and response.items:
             for item in response.items:
@@ -484,10 +512,11 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                     elif hasattr(item, 'content'):
                         text_parts.append(extract_text_from_content(item.content))
         
-        # Check response.output for text items
+        # Check response.output for text items and code_interpreter outputs
         if hasattr(response, 'output') and response.output:
             for item in response.output:
                 item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+                
                 if item_type == 'output_text':
                     if isinstance(item, dict):
                         text_content = item.get('text', '')
@@ -495,6 +524,49 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                         text_content = getattr(item, 'text', '')
                     if text_content:
                         text_parts.append(str(text_content))
+                elif item_type == 'code_interpreter_call':
+                    # Extract code from code_interpreter_call
+                    code = None
+                    if isinstance(item, dict):
+                        code = item.get('code', '') or item.get('input', '')
+                    else:
+                        code = getattr(item, 'code', '') or getattr(item, 'input', '')
+                    if code:
+                        # Include code block in output (will be converted to code block by _convert_message_to_blocks)
+                        text_parts.append(f"\n\n```python\n{code}\n```\n\n")
+                    # Extract output from code_interpreter_call
+                    output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
+                    if output:
+                        # Output can be a list of output items
+                        if isinstance(output, list):
+                            for output_item in output:
+                                if isinstance(output_item, dict):
+                                    output_type = output_item.get('type', '')
+                                    if output_type == 'text':
+                                        output_text = output_item.get('text', '')
+                                        if output_text:
+                                            text_parts.append(str(output_text))
+                                    elif output_type == 'image':
+                                        # Image outputs - note in text (actual image handling would need different approach)
+                                        text_parts.append("\n[Code generated an image]\n")
+                        elif isinstance(output, str):
+                            text_parts.append(str(output))
+                elif item_type == 'code_interpreter_call_output':
+                    # Extract output from code_interpreter_call_output
+                    output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
+                    if output:
+                        if isinstance(output, list):
+                            for output_item in output:
+                                if isinstance(output_item, dict):
+                                    output_type = output_item.get('type', '')
+                                    if output_type == 'text':
+                                        output_text = output_item.get('text', '')
+                                        if output_text:
+                                            text_parts.append(str(output_text))
+                                    elif output_type == 'image':
+                                        text_parts.append("\n[Code generated an image]\n")
+                        elif isinstance(output, str):
+                            text_parts.append(str(output))
                 elif item_type == 'message':
                     # Message items contain a 'content' field with ResponseOutputText objects
                     if isinstance(item, dict):

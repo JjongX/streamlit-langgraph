@@ -128,6 +128,16 @@ class LangGraphChat:
         if self.file_handler._container_id and not first_agent.container_id:
             first_agent.container_id = self.file_handler._container_id
         
+        # Sync container_id to ALL agents with code_interpreter enabled
+        # This ensures all agents use the same container where files are uploaded
+        if self.file_handler._container_id:
+            all_agents = list(self.agents.values())
+            Agent.sync_container_ids(all_agents)
+            # If sync didn't set it (because no agent had it), set it manually
+            for agent in all_agents:
+                if agent.allow_code_interpreter and not agent.container_id:
+                    agent.container_id = self.file_handler._container_id
+        
         vector_store_ids = self.file_handler.get_vector_store_ids()
         self.llm = get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
@@ -307,6 +317,16 @@ class LangGraphChat:
                 # Optimize dict creation; exclude content to reduce memory usage
                 file_dict = {k: v for k, v in file_info.__dict__.items() if k != "content"}
                 self.state_manager.update_workflow_state({"files": [file_dict]})
+        
+        # Sync container_id to all code_interpreter agents after file processing
+        # This ensures all agents use the same container where files were uploaded
+        if self.file_handler._container_id:
+            all_agents = list(self.agents.values())
+            Agent.sync_container_ids(all_agents)
+            # If sync didn't set it (because no agent had it), set it manually
+            for agent in all_agents:
+                if agent.allow_code_interpreter and not agent.container_id:
+                    agent.container_id = self.file_handler._container_id
         
         self._update_file_messages_in_state(force=True)
 

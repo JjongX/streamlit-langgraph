@@ -153,9 +153,12 @@ class FileHandler:
             )
         
         openai_file, vision_file = self._process_file_uploads(file_path, file_ext, file_info)
+        
         self._process_code_interpreter(file_path, file_ext, file_info, openai_file, vision_file)
+        
         self._process_file_search(file_path, file_ext, openai_file)
         self._finalize_file_info(file_info, file_path, openai_file, vision_file)
+        
         self._store_file_info(file_info, file_id)
         
         return file_info
@@ -284,6 +287,13 @@ class FileHandler:
         # Store file info for conversation context
         file_info.metadata['container_file_id'] = openai_file.id
         file_info.metadata['container_id'] = self._container_id
+        
+        # DO NOT add input_file message for code_interpreter files
+        # Code_interpreter files are accessed via the container, not via input_file messages
+        # input_file messages in the input array are only for context stuffing (PDFs, images)
+        # which doesn't support .xlsx, .csv, etc.
+        # The code_interpreter tool can access files in the container automatically
+        # Adding input_file messages for .xlsx files causes errors because they're not supported for context stuffing
     
     def _process_file_search(self, file_path: Path, file_ext: str, openai_file):
         """Process file for file search if enabled."""

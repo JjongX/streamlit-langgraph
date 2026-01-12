@@ -28,6 +28,7 @@ class AgentNodeBase:
         
         file_messages = state.get("metadata", {}).get("file_messages")
         vector_store_ids = state.get("metadata", {}).get("vector_store_ids")
+        
         # Update LLM client with vector_store_ids if file_search is enabled
         if agent.allow_file_search and vector_store_ids:
             current_vector_ids = getattr(llm_client, '_vector_store_ids', None)

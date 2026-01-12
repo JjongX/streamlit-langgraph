@@ -102,6 +102,7 @@ class HandoffDelegation:
         # Extract conversation history and file messages from workflow state
         conversation_messages = state.get("messages", [])
         file_messages = state.get("metadata", {}).get("file_messages")
+        
         with st.spinner(f"🤖 {agent.name} is working..."):
             out = executor.invoke_response_api(
                 prompt=input_message,
@@ -147,6 +148,7 @@ class HandoffDelegation:
         
         conversation_messages = state.get("messages", [])
         file_messages = state.get("metadata", {}).get("file_messages")
+        
         with st.spinner(f"🤖 {agent.name} is working..."):
             if executor.agent_obj is None:
                 executor.build_agent(llm_client)
@@ -310,8 +312,51 @@ class HandoffDelegation:
                     text = item.get("text") or item.get("content", "")
                 else:
                     text = getattr(item, "text", "") or getattr(item, "content", "")
-                if text and not content:
-                    content = str(text)
+                if text:
+                    content = content + str(text) if content else str(text)
+            elif item_type == "code_interpreter_call":
+                # Extract code from code_interpreter_call
+                code = None
+                if isinstance(item, dict):
+                    code = item.get('code', '') or item.get('input', '')
+                else:
+                    code = getattr(item, 'code', '') or getattr(item, 'input', '')
+                if code:
+                    # Include code block in content
+                    code_block = f"\n\n```python\n{code}\n```\n\n"
+                    content = content + code_block if content else code_block
+                
+                # Extract output from code_interpreter_call
+                output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
+                if output:
+                    if isinstance(output, list):
+                        for output_item in output:
+                            if isinstance(output_item, dict):
+                                output_type = output_item.get('type', '')
+                                if output_type == 'text':
+                                    output_text = output_item.get('text', '')
+                                    if output_text:
+                                        content = content + str(output_text) if content else str(output_text)
+                                elif output_type == 'image':
+                                    content = content + "\n[Code generated an image]\n" if content else "\n[Code generated an image]\n"
+                    elif isinstance(output, str):
+                        content = content + str(output) if content else str(output)
+            elif item_type == "code_interpreter_call_output":
+                # Extract output from code_interpreter_call_output
+                output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
+                if output:
+                    if isinstance(output, list):
+                        for output_item in output:
+                            if isinstance(output_item, dict):
+                                output_type = output_item.get('type', '')
+                                if output_type == 'text':
+                                    output_text = output_item.get('text', '')
+                                    if output_text:
+                                        content = content + str(output_text) if content else str(output_text)
+                                elif output_type == 'image':
+                                    content = content + "\n[Code generated an image]\n" if content else "\n[Code generated an image]\n"
+                    elif isinstance(output, str):
+                        content = content + str(output) if content else str(output)
             elif item_type == "message":
                 # Response API message items contain content blocks
                 if isinstance(item, dict):
@@ -321,7 +366,7 @@ class HandoffDelegation:
                 
                 # Extract text from content blocks
                 # Blocks can be ResponseOutputText objects (with .text attribute) or dicts
-                if content_blocks and not content:
+                if content_blocks:
                     text_parts = []
                     for block in content_blocks:
                         # Handle ResponseOutputText objects (from OpenAI SDK)
@@ -340,7 +385,8 @@ class HandoffDelegation:
                         elif isinstance(block, str):
                             text_parts.append(block)
                     if text_parts:
-                        content = ''.join(text_parts)
+                        message_text = ''.join(text_parts)
+                        content = content + message_text if content else message_text
         
         return routing_decision, content or ""
     
