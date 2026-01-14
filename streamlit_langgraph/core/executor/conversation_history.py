@@ -16,33 +16,31 @@ def extract_text_from_content(content: Any) -> str:
     if isinstance(content, list):
         text_parts = []
         for block in content:
-            if isinstance(block, dict):
-                block_type = block.get('type')
-                if block_type == 'text':
-                    text_parts.append(block.get('text', ''))
-                elif 'text' in block:
-                    text_parts.append(block.get('text', ''))
-            elif isinstance(block, str):
+            if isinstance(block, str):
                 text_parts.append(block)
-            # Handle objects with .text attribute like ResponseOutputText
-            elif hasattr(block, 'text'):
-                text_parts.append(str(block.text) if block.text else "")
-        return ''.join(text_parts) if text_parts else ""
+            elif isinstance(block, dict):
+                # Check for text key (handles both 'type': 'text' and direct 'text' key)
+                text = block.get('text', '')
+                if text:
+                    text_parts.append(text)
+            elif hasattr(block, 'text') and block.text:
+                text_parts.append(str(block.text))
+        return ''.join(text_parts)
     
     if isinstance(content, dict):
-        # Try common dict patterns
+        # Try text key first
         if 'text' in content:
             return str(content.get('text', ''))
+        # Try nested content
         if 'content' in content:
             return extract_text_from_content(content.get('content'))
-        # Try to extract from nested structures
-        return str(content) if content else ""
+        return str(content)
     
     # Handle objects with attributes
     if hasattr(content, 'content'):
         return extract_text_from_content(content.content)
-    if hasattr(content, 'text'):
-        return str(content.text) if content.text else ""
+    if hasattr(content, 'text') and content.text:
+        return str(content.text)
     
     return str(content) if content else ""
 
@@ -62,7 +60,6 @@ class ConversationHistoryMixin:
         """Convert message content to Block objects."""
         blocks = []
         
-        # Skip empty/None content
         if not content:
             return blocks
         
@@ -72,14 +69,13 @@ class ConversationHistoryMixin:
             for block in content:
                 if isinstance(block, dict):
                     block_type = block.get("type")
-                    if block_type == "input_text":
-                        blocks.append(self._history_display_manager.create_block("text", content=block.get("text", "")))
+                    text_content = None
+                    if block_type in ("input_text", "output_text", "text"):
+                        text_content = block.get("text", "")
                     elif block_type == "input_file":
-                        blocks.append(self._history_display_manager.create_block("text", content=f"[File: {block.get('file_id', 'unknown')}]"))
-                    elif block_type == "output_text":
-                        blocks.append(self._history_display_manager.create_block("text", content=block.get("text", "")))
-                    elif block_type == "text":
-                        blocks.append(self._history_display_manager.create_block("text", content=block.get("text", "")))
+                        text_content = f"[File: {block.get('file_id', 'unknown')}]"
+                    if text_content is not None:
+                        blocks.append(self._history_display_manager.create_block("text", content=text_content))
         else:
             blocks.append(self._history_display_manager.create_block("text", content=str(content)))
         

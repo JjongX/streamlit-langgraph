@@ -341,22 +341,6 @@ class HandoffDelegation:
                                     content = content + "\n[Code generated an image]\n" if content else "\n[Code generated an image]\n"
                     elif isinstance(output, str):
                         content = content + str(output) if content else str(output)
-            elif item_type == "code_interpreter_call_output":
-                # Extract output from code_interpreter_call_output
-                output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
-                if output:
-                    if isinstance(output, list):
-                        for output_item in output:
-                            if isinstance(output_item, dict):
-                                output_type = output_item.get('type', '')
-                                if output_type == 'text':
-                                    output_text = output_item.get('text', '')
-                                    if output_text:
-                                        content = content + str(output_text) if content else str(output_text)
-                                elif output_type == 'image':
-                                    content = content + "\n[Code generated an image]\n" if content else "\n[Code generated an image]\n"
-                    elif isinstance(output, str):
-                        content = content + str(output) if content else str(output)
             elif item_type == "message":
                 # Response API message items contain content blocks
                 if isinstance(item, dict):

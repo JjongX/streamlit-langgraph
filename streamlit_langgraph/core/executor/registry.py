@@ -43,15 +43,10 @@ class ExecutorRegistry:
         executor_needs_recreation = False
         
         if existing_executor is not None:
-            is_response_api = isinstance(existing_executor, ResponseAPIExecutor)
-            is_create_agent = isinstance(existing_executor, CreateAgentExecutor)
-            
-            if use_response_api and not is_response_api:
-                executor_needs_recreation = True
-            elif not use_response_api and not is_create_agent:
-                executor_needs_recreation = True
-            elif hasattr(existing_executor, 'agent') and existing_executor.agent.name != agent.name:
-                executor_needs_recreation = True
+            if use_response_api:
+                executor_needs_recreation = not isinstance(existing_executor, ResponseAPIExecutor)
+            else:
+                executor_needs_recreation = not isinstance(existing_executor, CreateAgentExecutor)
         
         if executor_key not in st.session_state.agent_executors or executor_needs_recreation:
             if use_response_api:

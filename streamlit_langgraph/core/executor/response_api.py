@@ -40,16 +40,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     ) -> Dict[str, Any]:
         """
         Execute prompt for single-agent mode (non-workflow).
-        
-        Args:
-            llm_client: Used to get vector_store_ids (kept for interface compatibility)
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
         return self._execute(llm_client, prompt, stream, messages, file_messages)
     
@@ -66,15 +56,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         For HITL scenarios, use CreateAgentExecutor instead.
         
         Args:
-            llm_client: Used to get vector_store_ids (kept for interface compatibility)
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
             config: Execution config (not used for Response API, but kept for interface compatibility)
-            
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
         return self._execute(llm_client, prompt, stream, messages, file_messages)
     
@@ -109,11 +91,9 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         file_messages: Optional[List] = None,
         delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """Invoke the Response API."""
-        return self._call_response_api(
-            prompt, stream=False, messages=messages, file_messages=file_messages,
-            delegation_tool=delegation_tool
-        )
+        """Invoke the Response API (non-streaming)."""
+        return self._call_response_api(prompt, stream=False, messages=messages, 
+                                       file_messages=file_messages, delegation_tool=delegation_tool)
     
     def _stream_response_api(
         self, prompt: str,
@@ -122,10 +102,22 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Stream the Response API."""
-        return self._call_response_api(
-            prompt, stream=True, messages=messages, file_messages=file_messages,
-            delegation_tool=delegation_tool
-        )
+        return self._call_response_api(prompt, stream=True, messages=messages,
+                                      file_messages=file_messages, delegation_tool=delegation_tool)
+    
+    def _create_response_dict(self, content: str = "", stream: Any = None, output: Any = None) -> Dict[str, Any]:
+        """Create a standardized response dictionary."""
+        response = {
+            "id": str(uuid.uuid4()),
+            "role": "assistant",
+            "content": content,
+            "agent": self.agent.name
+        }
+        if stream is not None:
+            response["stream"] = stream
+        if output is not None:
+            response["output"] = output
+        return response
     
     def _call_response_api(
         self, prompt: str, stream: bool = False,
@@ -149,10 +141,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         api_input = self._convert_messages_to_input(messages, prompt, file_messages)
         
         # Build tools config
-        if delegation_tool:
-            tools_config = self._build_tools_config_for_delegation(delegation_tool)
-        else:
-            tools_config = self._build_base_tools_config(self._vector_store_ids, stream=stream)
+        tools_config = self._build_tools_config_for_delegation(delegation_tool) if delegation_tool else self._build_base_tools_config(self._vector_store_ids, stream=stream)
         
         response = self.openai_client.responses.create(
             model=self.agent.model,
@@ -165,31 +154,20 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         )
         
         if stream:
-            return {
-                "id": str(uuid.uuid4()),
-                "role": "assistant",
-                "content": "",
-                "agent": self.agent.name,
-                "stream": response
-            }
-        else:            
-            # For delegation scenarios (when delegation_tool is provided), return output items directly
-            if delegation_tool:
-                return {"output": response.output if hasattr(response, 'output') else []}
-            
-            # Check if there are function calls that need to be executed
-            response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
-            
-            # For regular execution, extract content and update history
-            content = self._extract_response_content(response_with_tool_results)
-            blocks = self._convert_message_to_blocks(content)
-            self._add_to_conversation_history("assistant", blocks)
-            return {
-                "id": str(uuid.uuid4()),
-                "role": "assistant",
-                "content": content,
-                "agent": self.agent.name
-            }
+            return self._create_response_dict(stream=response)
+        
+        # For delegation scenarios, return output items directly
+        if delegation_tool:
+            return {"output": getattr(response, 'output', [])}
+        
+        # Check if there are function calls that need to be executed
+        response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
+        
+        # For regular execution, extract content and update history
+        content = self._extract_response_content(response_with_tool_results)
+        blocks = self._convert_message_to_blocks(content)
+        self._add_to_conversation_history("assistant", blocks)
+        return self._create_response_dict(content=content)
     
     def _build_base_tools_config(
         self, 
@@ -273,11 +251,10 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     ) -> List[Dict[str, Any]]:
         """Extract function calls from response and execute them."""
         function_results = []
-        output_items = response.output if hasattr(response, 'output') else []
+        output_items = getattr(response, 'output', [])
         
         for item in output_items:
             item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-            
             if item_type == "function_call":
                 result = self._execute_single_function_call(item, function_map, iteration)
                 if result:
@@ -290,45 +267,23 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     ) -> Optional[Dict[str, Any]]:
         """Execute a single function call and return result."""
         # Extract function call details
-        if isinstance(item, dict):
-            function_name = item.get("name")
-            arguments = item.get("arguments", "{}")
-            call_id = item.get("call_id", f"call_{iteration}")
-        else:
-            function_name = getattr(item, "name", None)
-            arguments = getattr(item, "arguments", "{}")
-            call_id = getattr(item, "call_id", f"call_{iteration}")
+        function_name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+        arguments = item.get("arguments", "{}") if isinstance(item, dict) else getattr(item, "arguments", "{}")
+        call_id = item.get("call_id", f"call_{iteration}") if isinstance(item, dict) else getattr(item, "call_id", f"call_{iteration}")
         
         if function_name not in function_map:
-            return {
-                "call_id": call_id,
-                "name": function_name,
-                "result": f"Error: Function {function_name} not found"
-            }
+            return {"call_id": call_id, "name": function_name, "result": f"Error: Function {function_name} not found"}
         
         try:
             # Parse arguments
-            if isinstance(arguments, str):
-                args_dict = json.loads(arguments)
-            else:
-                args_dict = arguments if isinstance(arguments, dict) else {}
+            args_dict = json.loads(arguments) if isinstance(arguments, str) else (arguments if isinstance(arguments, dict) else {})
             
             # Execute the custom function
-            function_impl = function_map[function_name]
-            result = function_impl(**args_dict)
-            result_str = str(result)
+            result = function_map[function_name](**args_dict)
             
-            return {
-                "call_id": call_id,
-                "name": function_name,
-                "result": result_str
-            }
+            return {"call_id": call_id, "name": function_name, "result": str(result)}
         except Exception as e:
-            return {
-                "call_id": call_id,
-                "name": function_name,
-                "result": f"Error: {str(e)}"
-            }
+            return {"call_id": call_id, "name": function_name, "result": f"Error: {str(e)}"}
     
     def _accumulate_function_results(
         self, accumulated_input: List[Dict[str, Any]],
@@ -503,81 +458,52 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
 
         text_parts = []
         
+        # Helper to get attribute or dict value
+        def get_value(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+        
         # Check response.items first (Response API format)
         if hasattr(response, 'items') and response.items:
             for item in response.items:
-                if hasattr(item, 'type') and item.type == 'output_text':
-                    if hasattr(item, 'text'):
-                        text_parts.append(str(item.text))
-                    elif hasattr(item, 'content'):
-                        text_parts.append(extract_text_from_content(item.content))
+                if get_value(item, 'type') == 'output_text':
+                    text = get_value(item, 'text') or extract_text_from_content(get_value(item, 'content'))
+                    if text:
+                        text_parts.append(str(text))
         
         # Check response.output for text items and code_interpreter outputs
         if hasattr(response, 'output') and response.output:
             for item in response.output:
-                item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+                item_type = get_value(item, 'type')
                 
                 if item_type == 'output_text':
-                    if isinstance(item, dict):
-                        text_content = item.get('text', '')
-                    else:
-                        text_content = getattr(item, 'text', '')
+                    text_content = get_value(item, 'text')
                     if text_content:
                         text_parts.append(str(text_content))
                 elif item_type == 'code_interpreter_call':
-                    # Extract code from code_interpreter_call
-                    code = None
-                    if isinstance(item, dict):
-                        code = item.get('code', '') or item.get('input', '')
-                    else:
-                        code = getattr(item, 'code', '') or getattr(item, 'input', '')
+                    code = get_value(item, 'code') or get_value(item, 'input')
                     if code:
-                        # Include code block in output (will be converted to code block by _convert_message_to_blocks)
                         text_parts.append(f"\n\n```python\n{code}\n```\n\n")
-                    # Extract output from code_interpreter_call
-                    output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
-                    if output:
-                        # Output can be a list of output items
-                        if isinstance(output, list):
-                            for output_item in output:
-                                if isinstance(output_item, dict):
-                                    output_type = output_item.get('type', '')
-                                    if output_type == 'text':
-                                        output_text = output_item.get('text', '')
-                                        if output_text:
-                                            text_parts.append(str(output_text))
-                                    elif output_type == 'image':
-                                        # Image outputs - note in text (actual image handling would need different approach)
-                                        text_parts.append("\n[Code generated an image]\n")
-                        elif isinstance(output, str):
-                            text_parts.append(str(output))
-                elif item_type == 'code_interpreter_call_output':
-                    # Extract output from code_interpreter_call_output
-                    output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
+                    output = get_value(item, 'output')
                     if output:
                         if isinstance(output, list):
                             for output_item in output:
-                                if isinstance(output_item, dict):
-                                    output_type = output_item.get('type', '')
-                                    if output_type == 'text':
-                                        output_text = output_item.get('text', '')
-                                        if output_text:
-                                            text_parts.append(str(output_text))
-                                    elif output_type == 'image':
-                                        text_parts.append("\n[Code generated an image]\n")
-                        elif isinstance(output, str):
+                                output_type = get_value(output_item, 'type')
+                                if output_type == 'text':
+                                    text = get_value(output_item, 'text')
+                                    if text:
+                                        text_parts.append(str(text))
+                                elif output_type == 'image':
+                                    text_parts.append("\n[Code generated an image]\n")
+                        else:
                             text_parts.append(str(output))
                 elif item_type == 'message':
-                    # Message items contain a 'content' field with ResponseOutputText objects
-                    if isinstance(item, dict):
-                        content_blocks = item.get('content', [])
-                    else:
-                        content_blocks = getattr(item, 'content', [])
+                    content_blocks = get_value(item, 'content', [])
                     for block in content_blocks:
-                        if hasattr(block, 'text'):
-                            text_parts.append(str(block.text))
-                        elif isinstance(block, dict) and 'text' in block:
-                            text_parts.append(str(block.get('text', '')))
+                        text = get_value(block, 'text')
+                        if text:
+                            text_parts.append(str(text))
         
         # Check response.output_text
         if hasattr(response, 'output_text'):
@@ -585,13 +511,11 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         
         # Fallback to direct attributes
         if not text_parts:
-            if hasattr(response, 'text'):
-                text_parts.append(str(response.text))
-            elif hasattr(response, 'content'):
-                text_parts.append(extract_text_from_content(response.content))
+            text = get_value(response, 'text') or extract_text_from_content(get_value(response, 'content'))
+            if text:
+                text_parts.append(str(text))
         
-        result = ''.join(text_parts) if text_parts else str(response) if response else ""
-        return result
+        return ''.join(text_parts) if text_parts else str(response) if response else ""
     
     def update_vector_store_ids(self, llm_client):
         """Update vector_store_ids from llm_client and invalidate tools config if changed."""
@@ -606,14 +530,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         """
         Build tools configuration for Response API with delegation support.
         
-        Response API expects tools in format:
-        {
-            "type": "function",
-            "name": "function_name",
-            "description": "...",
-            "parameters": {...}
-        }
-        
         Args:
             additional_tools: Additional tools to include (e.g., delegation tool in Response API format)
             
@@ -624,17 +540,11 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         
         if additional_tools:
             tools_to_process = additional_tools if isinstance(additional_tools, list) else [additional_tools]
-            for tool in tools_to_process:
-                if isinstance(tool, dict):
-                    # If already in Response API format, use as-is
-                    if "name" in tool and tool.get("type") == "function":
-                        tools.append(tool)
+            tools.extend(t for t in tools_to_process 
+                        if isinstance(t, dict) and "name" in t and t.get("type") == "function")
         
         # Add base tools (native OpenAI tools, MCP tools, custom tools)
-        base_tools = self._build_base_tools_config(
-            vector_store_ids=None,
-            stream=False  # Delegation doesn't use streaming
-        )
+        base_tools = self._build_base_tools_config(vector_store_ids=None, stream=False)
         tools.extend(base_tools)
         
         return tools

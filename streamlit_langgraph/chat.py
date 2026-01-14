@@ -133,10 +133,6 @@ class LangGraphChat:
         if self.file_handler._container_id:
             all_agents = list(self.agents.values())
             Agent.sync_container_ids(all_agents)
-            # If sync didn't set it (because no agent had it), set it manually
-            for agent in all_agents:
-                if agent.allow_code_interpreter and not agent.container_id:
-                    agent.container_id = self.file_handler._container_id
         
         vector_store_ids = self.file_handler.get_vector_store_ids()
         self.llm = get_llm_client(first_agent, vector_store_ids=vector_store_ids)
@@ -323,10 +319,7 @@ class LangGraphChat:
         if self.file_handler._container_id:
             all_agents = list(self.agents.values())
             Agent.sync_container_ids(all_agents)
-            # If sync didn't set it (because no agent had it), set it manually
-            for agent in all_agents:
-                if agent.allow_code_interpreter and not agent.container_id:
-                    agent.container_id = self.file_handler._container_id
+            # Note: sync_container_ids() should propagate container_id from FileHandler to all agents
         
         self._update_file_messages_in_state(force=True)
 

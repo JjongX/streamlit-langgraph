@@ -49,6 +49,26 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         self.tools = tools if tools is not None else self.agent.get_tools()
         self._checkpointer = None
     
+    def _execute_and_process(self, llm_client: Any, prompt: str, stream: bool,
+                             messages: Optional[List[Dict[str, Any]]], 
+                             file_messages: Optional[List], config: Dict[str, Any],
+                             workflow_thread_id: str = None) -> Dict[str, Any]:
+        """Execute agent and process response (extract text, update history, format response)."""
+        try:
+            if stream:
+                return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
+            
+            out = self.invoke_agent(llm_client, prompt, messages, file_messages, config=config)
+            if isinstance(out, dict) and "__interrupt__" in out:
+                return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
+            
+            result_text = self._extract_response_text(out)
+            blocks = self._convert_message_to_blocks(result_text)
+            self._add_to_conversation_history("assistant", blocks)
+            return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
+        except Exception as e:
+            return {"id": str(uuid.uuid4()), "role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
+    
     def execute_agent(
         self, llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -58,28 +78,8 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         Execute prompt for single-agent mode (non-workflow).
         
         Single-agent mode: no checkpointer, no HITL, no thread_id needed.
-        
-        Args:
-            llm_client: A LangChain chat model instance
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
-        try:
-            if stream:
-                return self._stream_agent(llm_client, prompt, messages, file_messages, config={})
-            else:
-                out = self.invoke_agent(llm_client, prompt, messages, file_messages, config={})
-                result_text = self._extract_response_text(out)
-                blocks = self._convert_message_to_blocks(result_text)
-                self._add_to_conversation_history("assistant", blocks)
-                return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
-        except Exception as e:
-            return {"id": str(uuid.uuid4()), "role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
+        return self._execute_and_process(llm_client, prompt, stream, messages, file_messages, config={})
     
     def execute_workflow(
         self, llm_client: Any, prompt: str, stream: bool = False,
@@ -91,31 +91,10 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         Execute prompt for workflow mode (requires config with thread_id).
 
         Args:
-            llm_client: A LangChain chat model instance
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
             config: Execution config with thread_id (required for workflows)
-
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally '__interrupt__' or 'stream' if HITL is active
         """
-        try:
-            config, workflow_thread_id = self._prepare_workflow_config(config)
-            
-            if stream:
-                return self._stream_agent(llm_client, prompt, messages, file_messages, config=config)
-            else:
-                out = self.invoke_agent(llm_client, prompt, messages, file_messages, config=config)
-                if isinstance(out, dict) and "__interrupt__" in out:
-                    return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
-                result_text = self._extract_response_text(out)
-                blocks = self._convert_message_to_blocks(result_text)
-                self._add_to_conversation_history("assistant", blocks)
-                return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
-        except Exception as e:
-            return {"id": str(uuid.uuid4()), "role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
+        config, workflow_thread_id = self._prepare_workflow_config(config)
+        return self._execute_and_process(llm_client, prompt, stream, messages, file_messages, config, workflow_thread_id)
     
     def resume(
         self, 
@@ -316,32 +295,31 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         from .conversation_history import extract_text_from_content
         
         if isinstance(out, dict):
-            if 'output' in out:
-                output = out['output']
-                if output:
-                    return extract_text_from_content(output)
+            # Try output key first
+            if 'output' in out and out['output']:
+                return extract_text_from_content(out['output'])
             
+            # Try messages key
             if 'messages' in out and out['messages']:
                 messages = out['messages']
+                # Look for AIMessage first (reverse order)
                 for msg in reversed(messages):
                     if isinstance(msg, AIMessage):
-                        if hasattr(msg, 'content') and msg.content:
-                            return extract_text_from_content(msg.content)
-                        return str(msg) if msg else ""
+                        return extract_text_from_content(msg.content) if hasattr(msg, 'content') and msg.content else str(msg) if msg else ""
                 
+                # Fallback to last message
                 last_message = messages[-1]
                 if hasattr(last_message, 'content'):
                     return extract_text_from_content(last_message.content)
                 return str(last_message) if last_message else ""
         
-        elif isinstance(out, str):
+        if isinstance(out, str):
             return out
         
-        elif hasattr(out, 'content'):
+        if hasattr(out, 'content'):
             return extract_text_from_content(out.content)
         
-        result = str(out) if out else ""
-        return result
+        return str(out) if out else ""
     
     def _prepare_workflow_config(self, config: Optional[Dict[str, Any]]) -> tuple[Dict[str, Any], str]:
         """
