@@ -1,6 +1,7 @@
 # File handling utilities for OpenAI API integration.
 
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
