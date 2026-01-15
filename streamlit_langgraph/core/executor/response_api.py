@@ -35,9 +35,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         self._init_conversation_history(agent)
     
     def execute_agent(
-        self,
-        prompt: str,
-        stream: bool = False,
+        self, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
         vector_store_ids: Optional[List[str]] = None,
@@ -48,9 +46,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         return self._execute(prompt, stream, messages, file_messages, vector_store_ids)
     
     def execute_workflow(
-        self,
-        prompt: str,
-        stream: bool = False,
+        self, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
         vector_store_ids: Optional[List[str]] = None,
@@ -63,10 +59,24 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         """
         return self._execute(prompt, stream, messages, file_messages, vector_store_ids)
     
+    def invoke_response_api(
+        self, prompt: str,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        file_messages: Optional[List] = None,
+        delegation_tool: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Invoke the Response API (non-streaming).
+        """
+        return self._call_response_api(prompt, stream=False, messages=messages, 
+                                       file_messages=file_messages, delegation_tool=delegation_tool)
+    
+    def set_vector_store_ids(self, vector_store_ids: Optional[List[str]]) -> None:
+        """Directly set vector store IDs supplied by callers."""
+        self._vector_store_ids = vector_store_ids
+    
     def _execute(
-        self,
-        prompt: str,
-        stream: bool = False,
+        self, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
         vector_store_ids: Optional[List[str]] = None,
@@ -90,18 +100,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             return self._stream_response_api(prompt, messages, file_messages)
         else:
             return self.invoke_response_api(prompt, messages, file_messages)
-    
-    def invoke_response_api(
-        self, prompt: str,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        file_messages: Optional[List] = None,
-        delegation_tool: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
-        """
-        Invoke the Response API (non-streaming).
-        """
-        return self._call_response_api(prompt, stream=False, messages=messages, 
-                                       file_messages=file_messages, delegation_tool=delegation_tool)
     
     def _stream_response_api(
         self, prompt: str,
@@ -178,6 +176,129 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             response["output"] = output
         return response
     
+    def _extract_response_content(self, response: Any) -> str:
+        """Extract text content from OpenAI Response API response."""
+        if not response:
+            return ""
+
+        text_parts = []
+        
+        # Helper to get attribute or dict value
+        def get_value(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+        
+        def append_output_text(items):
+            for item in items:
+                item_type = get_value(item, 'type')
+                if item_type == 'output_text':
+                    text = get_value(item, 'text') or extract_text_from_content(get_value(item, 'content'))
+                    if text:
+                        text_parts.append(str(text))
+                elif item_type == 'code_interpreter_call':
+                    code = get_value(item, 'code') or get_value(item, 'input')
+                    if code:
+                        text_parts.append(f"\n\n```python\n{code}\n```\n\n")
+                    output = get_value(item, 'output')
+                    if output:
+                        if isinstance(output, list):
+                            for output_item in output:
+                                output_type = get_value(output_item, 'type')
+                                if output_type == 'text':
+                                    text = get_value(output_item, 'text')
+                                    if text:
+                                        text_parts.append(str(text))
+                                elif output_type == 'image':
+                                    text_parts.append("\n[Code generated an image]\n")
+                        else:
+                            text_parts.append(str(output))
+                elif item_type == 'message':
+                    content_blocks = get_value(item, 'content', [])
+                    for block in content_blocks:
+                        text = get_value(block, 'text')
+                        if text:
+                            text_parts.append(str(text))
+        
+        if hasattr(response, 'items') and response.items:
+            append_output_text(response.items)
+        
+        if hasattr(response, 'output') and response.output:
+            append_output_text(response.output)
+        
+        if hasattr(response, 'output_text'):
+            text_parts.append(extract_text_from_content(response.output_text))
+        
+        if not text_parts:
+            text = get_value(response, 'text') or extract_text_from_content(get_value(response, 'content'))
+            if text:
+                text_parts.append(str(text))
+        
+        return ''.join(text_parts) if text_parts else str(response) if response else ""
+    
+    def _convert_messages_to_input(
+        self,
+        messages: Optional[List[Dict[str, Any]]],
+        current_prompt: str,
+        file_messages: Optional[List] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert workflow_state messages to Response API input format.
+        Response API uses a list of message dicts with 'role' and 'content' keys.
+        
+        Like the reference code, conversation history (including file context) is sent as a system message.
+        
+        Args:
+            messages: List of message dicts from workflow_state
+            current_prompt: Current user prompt
+            file_messages: Optional file messages (OpenAI format) to include
+            
+        Returns:
+            List of messages in Response API input format
+        """
+        input_list = []
+        
+        # Update conversation history from messages (this includes file messages)
+        self._update_conversation_history_from_messages(messages, file_messages)
+        
+        # Add file messages directly to input (Response API needs them in the input array)
+        # Only include messages with actual file references (input_file, input_image), not text messages
+        file_blocks = self._collect_file_blocks(file_messages)
+        input_list.extend(file_blocks)
+        
+        # Add current prompt as user message (like reference code does)
+        input_list.append({"role": "user", "content": current_prompt})
+
+        # Add conversation history as system message (like reference code does)
+        # This includes file information from previous turns
+        sections_dict = self._get_conversation_history_sections_dict()
+        if sections_dict:
+            system_content = json.dumps(sections_dict, ensure_ascii=False)
+            input_list.append({"role": "system", "content": system_content})
+
+        return input_list
+
+    def _collect_file_blocks(self, file_messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Collect file blocks from file messages for the Response API input."""
+        if not file_messages:
+            return []
+        
+        collected = []
+        for file_msg in file_messages:
+            if not (isinstance(file_msg, dict) and file_msg.get("role") == "user"):
+                continue
+            content = file_msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            
+            file_blocks = [
+                block for block in content
+                if isinstance(block, dict) and block.get("type") in ("input_file", "input_image")
+            ]
+            if file_blocks:
+                collected.append({"role": "user", "content": file_blocks})
+        return collected
+    
     def _build_base_tools_config(
         self, 
         vector_store_ids: Optional[List[str]] = None, 
@@ -211,6 +332,93 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                     tools.append(openai_tool)
         
         return tools
+    
+    def _build_tools_config_for_delegation(
+        self, additional_tools: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Build tools configuration for Response API with delegation support.
+        
+        Args:
+            additional_tools: Additional tools to include (e.g., delegation tool in Response API format)
+            
+        Returns:
+            List of tools in Response API format
+        """
+        tools = []
+        
+        if additional_tools:
+            tools_to_process = additional_tools if isinstance(additional_tools, list) else [additional_tools]
+            tools.extend(t for t in tools_to_process 
+                        if isinstance(t, dict) and "name" in t and t.get("type") == "function")
+        
+        # Add base tools (native OpenAI tools, MCP tools, custom tools)
+        base_tools = self._build_base_tools_config(vector_store_ids=None, stream=False)
+        tools.extend(base_tools)
+        
+        return tools
+    
+    def _convert_langchain_tool_to_openai(self, tool: Any) -> Dict[str, Any]:
+        """Convert a LangChain StructuredTool to Response API format."""
+        if not isinstance(tool, StructuredTool):
+            if isinstance(tool, dict) and "type" in tool:
+                # If already in Response API format, return as-is
+                if "name" in tool and tool.get("type") == "function":
+                    return tool
+                # If in ChatCompletion format, convert to Response API format
+                if "function" in tool and tool.get("type") == "function":
+                    function_def = tool["function"]
+                    return {
+                        "type": "function",
+                        "name": function_def.get("name"),
+                        "description": function_def.get("description", ""),
+                        "parameters": function_def.get("parameters", {})
+                    }
+                return tool
+            return None
+        
+        args_schema = tool.args_schema
+        properties = {}
+        required = []
+        
+        if args_schema:
+            schema_dict = args_schema.schema() if hasattr(args_schema, 'schema') else {}
+            properties = schema_dict.get("properties", {})
+            required = schema_dict.get("required", [])
+        
+        # Return Response API format directly (flattened, not nested)
+        return {
+            "type": "function",
+            "name": tool.name,
+            "description": tool.description or "",
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required
+            }
+        }
+    
+    def _build_function_map(self) -> Dict[str, Any]:
+        """
+        Build a map of function names to their implementations from custom tools.
+        
+        Returns:
+            Dict mapping function names to callable implementations
+        """
+        function_map = {}
+        
+        if not self.tools:
+            return function_map
+        
+        for tool in self.tools:
+            if isinstance(tool, StructuredTool):
+                function_map[tool.name] = tool.func
+            elif isinstance(tool, dict) and "function" in tool:
+                # If tool is a dict with function info, we need access to the actual function
+                # This shouldn't happen with our current setup, but handle it gracefully
+                pass
+        
+        return function_map
     
     def _handle_function_calls(
         self, response: Any, api_input: List[Dict[str, Any]], 
@@ -319,219 +527,3 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             stream=False,  # Don't stream during function call loop
             reasoning={"summary": "auto"},
         )
-    
-    def _build_function_map(self) -> Dict[str, Any]:
-        """
-        Build a map of function names to their implementations from custom tools.
-        
-        Returns:
-            Dict mapping function names to callable implementations
-        """
-        function_map = {}
-        
-        if not self.tools:
-            return function_map
-        
-        for tool in self.tools:
-            if isinstance(tool, StructuredTool):
-                function_map[tool.name] = tool.func
-            elif isinstance(tool, dict) and "function" in tool:
-                # If tool is a dict with function info, we need access to the actual function
-                # This shouldn't happen with our current setup, but handle it gracefully
-                pass
-        
-        return function_map
-        
-    def _convert_langchain_tool_to_openai(self, tool: Any) -> Dict[str, Any]:
-        """Convert a LangChain StructuredTool to Response API format."""
-        if not isinstance(tool, StructuredTool):
-            if isinstance(tool, dict) and "type" in tool:
-                # If already in Response API format, return as-is
-                if "name" in tool and tool.get("type") == "function":
-                    return tool
-                # If in ChatCompletion format, convert to Response API format
-                if "function" in tool and tool.get("type") == "function":
-                    function_def = tool["function"]
-                    return {
-                        "type": "function",
-                        "name": function_def.get("name"),
-                        "description": function_def.get("description", ""),
-                        "parameters": function_def.get("parameters", {})
-                    }
-                return tool
-            return None
-        
-        args_schema = tool.args_schema
-        properties = {}
-        required = []
-        
-        if args_schema:
-            schema_dict = args_schema.schema() if hasattr(args_schema, 'schema') else {}
-            properties = schema_dict.get("properties", {})
-            required = schema_dict.get("required", [])
-        
-        # Return Response API format directly (flattened, not nested)
-        return {
-            "type": "function",
-            "name": tool.name,
-            "description": tool.description or "",
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required
-            }
-        }
-    
-    def _convert_messages_to_input(
-        self,
-        messages: Optional[List[Dict[str, Any]]],
-        current_prompt: str,
-        file_messages: Optional[List] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Convert workflow_state messages to Response API input format.
-        Response API uses a list of message dicts with 'role' and 'content' keys.
-        
-        Like the reference code, conversation history (including file context) is sent as a system message.
-        
-        Args:
-            messages: List of message dicts from workflow_state
-            current_prompt: Current user prompt
-            file_messages: Optional file messages (OpenAI format) to include
-            
-        Returns:
-            List of messages in Response API input format
-        """
-        input_list = []
-        
-        # Update conversation history from messages (this includes file messages)
-        self._update_conversation_history_from_messages(messages, file_messages)
-        
-        # Add file messages directly to input (Response API needs them in the input array)
-        # Only include messages with actual file references (input_file, input_image), not text messages
-        file_blocks = self._collect_file_blocks(file_messages)
-        input_list.extend(file_blocks)
-        
-        # Add current prompt as user message (like reference code does)
-        input_list.append({"role": "user", "content": current_prompt})
-
-        # Add conversation history as system message (like reference code does)
-        # This includes file information from previous turns
-        sections_dict = self._get_conversation_history_sections_dict()
-        if sections_dict:
-            system_content = json.dumps(sections_dict, ensure_ascii=False)
-            input_list.append({"role": "system", "content": system_content})
-
-        return input_list
-
-    def _collect_file_blocks(self, file_messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        """Collect file blocks from file messages for the Response API input."""
-        if not file_messages:
-            return []
-        
-        collected = []
-        for file_msg in file_messages:
-            if not (isinstance(file_msg, dict) and file_msg.get("role") == "user"):
-                continue
-            content = file_msg.get("content", [])
-            if not isinstance(content, list):
-                continue
-            
-            file_blocks = [
-                block for block in content
-                if isinstance(block, dict) and block.get("type") in ("input_file", "input_image")
-            ]
-            if file_blocks:
-                collected.append({"role": "user", "content": file_blocks})
-        return collected
-    
-    
-    def _extract_response_content(self, response: Any) -> str:
-        """Extract text content from OpenAI Response API response."""
-
-        if not response:
-            return ""
-
-        text_parts = []
-        
-        # Helper to get attribute or dict value
-        def get_value(obj, key, default=None):
-            if isinstance(obj, dict):
-                return obj.get(key, default)
-            return getattr(obj, key, default)
-        
-        def append_output_text(items):
-            for item in items:
-                item_type = get_value(item, 'type')
-                if item_type == 'output_text':
-                    text = get_value(item, 'text') or extract_text_from_content(get_value(item, 'content'))
-                    if text:
-                        text_parts.append(str(text))
-                elif item_type == 'code_interpreter_call':
-                    code = get_value(item, 'code') or get_value(item, 'input')
-                    if code:
-                        text_parts.append(f"\n\n```python\n{code}\n```\n\n")
-                    output = get_value(item, 'output')
-                    if output:
-                        if isinstance(output, list):
-                            for output_item in output:
-                                output_type = get_value(output_item, 'type')
-                                if output_type == 'text':
-                                    text = get_value(output_item, 'text')
-                                    if text:
-                                        text_parts.append(str(text))
-                                elif output_type == 'image':
-                                    text_parts.append("\n[Code generated an image]\n")
-                        else:
-                            text_parts.append(str(output))
-                elif item_type == 'message':
-                    content_blocks = get_value(item, 'content', [])
-                    for block in content_blocks:
-                        text = get_value(block, 'text')
-                        if text:
-                            text_parts.append(str(text))
-        
-        if hasattr(response, 'items') and response.items:
-            append_output_text(response.items)
-        
-        if hasattr(response, 'output') and response.output:
-            append_output_text(response.output)
-        
-        if hasattr(response, 'output_text'):
-            text_parts.append(extract_text_from_content(response.output_text))
-        
-        if not text_parts:
-            text = get_value(response, 'text') or extract_text_from_content(get_value(response, 'content'))
-            if text:
-                text_parts.append(str(text))
-        
-        return ''.join(text_parts) if text_parts else str(response) if response else ""
-    
-    def _build_tools_config_for_delegation(
-        self, additional_tools: Optional[List[Dict[str, Any]]] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Build tools configuration for Response API with delegation support.
-        
-        Args:
-            additional_tools: Additional tools to include (e.g., delegation tool in Response API format)
-            
-        Returns:
-            List of tools in Response API format
-        """
-        tools = []
-        
-        if additional_tools:
-            tools_to_process = additional_tools if isinstance(additional_tools, list) else [additional_tools]
-            tools.extend(t for t in tools_to_process 
-                        if isinstance(t, dict) and "name" in t and t.get("type") == "function")
-        
-        # Add base tools (native OpenAI tools, MCP tools, custom tools)
-        base_tools = self._build_base_tools_config(vector_store_ids=None, stream=False)
-        tools.extend(base_tools)
-        
-        return tools
-
-    def set_vector_store_ids(self, vector_store_ids: Optional[List[str]]) -> None:
-        """Directly set vector store IDs supplied by callers."""
-        self._vector_store_ids = vector_store_ids
