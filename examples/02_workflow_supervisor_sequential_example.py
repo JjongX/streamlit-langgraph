@@ -7,8 +7,8 @@ import streamlit_langgraph as slg
 def create_supervisor_workflow_example():
     """Create a supervisor-based research workflow."""
     
-    config_path = os.path.join(os.path.dirname(__file__), "./configs/supervisor_sequential.yaml")
-    agents = slg.AgentManager.load_from_yaml(config_path)
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/02_supervisor_sequential.yaml")
+    agents = slg.Agent(config_path)
 
     supervisor = agents[0]
     workers = agents[1:]
@@ -39,12 +39,12 @@ def main():
 
 ## 🧠 How It Works:
 
-### **🎯 Team Structure**
-**🎯 Research Supervisor**: Project coordination and task delegation
-**🔍 Information Gatherer**: Comprehensive research and data collection  
-**📝 Proposal Writer**: Professional proposal creation and formatting
+### 🎯 Team Structure
+- **🎯 Research Supervisor**: Project coordination and task delegation
+- **🔍 Information Gatherer**: Comprehensive research and data collection  
+- **📝 Proposal Writer**: Professional proposal creation and formatting
 
-### **🏗️ Sequential Workflow**
+### 🏗️ Sequential Workflow
 1. **Supervisor** analyzes your request and creates a project plan
 2. **Information Gatherer** and/or **Proposal Writer** are engaged as needed
 3. **Supervisor** coordinates handoffs and ensures quality

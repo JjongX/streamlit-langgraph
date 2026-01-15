@@ -116,7 +116,7 @@ class Section:
             ))
     
     def stream(self):
-        """Render this section and all its blocks to the Streamlit interface."""
+        """Render this section and persist it."""
         avatar = (self.display_manager.config.user_avatar if self.role == "user" 
                  else self.display_manager.config.assistant_avatar)
         with self.delta_generator:
@@ -126,8 +126,6 @@ class Section:
                 # Show agent name if available
                 if hasattr(self, '_agent_info') and "agent" in self._agent_info:
                     st.caption(f"Agent: {self._agent_info['agent']}")
-        
-        # Always save section to session state for persistence across reruns
         self._save_to_session_state()
     
     def to_dict(self) -> Dict[str, Any]:
@@ -146,7 +144,6 @@ class Section:
                 "file_id": block.file_id
             }
             if block.category in ["image", "generated_image", "download"] and block.content:
-                import base64
                 if isinstance(block.content, bytes):
                     block_data["content_b64"] = base64.b64encode(block.content).decode('utf-8')
                 else:
@@ -274,4 +271,3 @@ class DisplayManager:
             return True
         
         return False
-

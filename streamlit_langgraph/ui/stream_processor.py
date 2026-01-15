@@ -34,13 +34,10 @@ class StreamProcessor:
         Returns:
             Full accumulated response text
         """
-        events_list = []
         stream_type = None
         full_response = ""
         
         for event in stream_iter:
-            events_list.append(event)
-            
             if stream_type is None:
                 if isinstance(event, tuple) and len(event) == 2:
                     stream_type = 'langchain_messages'
@@ -66,6 +63,52 @@ class StreamProcessor:
                     full_response = partial_response
         
         return full_response
+    
+    def _process_responses_api_stream(self, event, section) -> str:
+        """
+        Process a single streaming event from OpenAI Responses API.
+
+        Args:
+            event: Responses API stream event object
+            section: Display section to update
+            
+        Returns:
+            Delta text to append to response
+        """
+        if event.type == "response.output_text.delta":
+            section.update("text", event.delta)
+            section.stream()
+            return event.delta
+        elif event.type == "response.code_interpreter_call_code.delta":
+            section.update("code", event.delta)
+            section.stream()
+        elif event.type == "response.image_generation_call.partial_image":
+            image_bytes = base64.b64decode(event.partial_image_b64)
+            item_id = getattr(event, 'item_id', None)
+            filename = f"{item_id}.{getattr(event, 'output_format', 'png')}" if item_id else "image.png"
+            section.update("generated_image", image_bytes, filename=filename, file_id=item_id)
+            section.stream()
+        elif event.type == "response.output_text.annotation.added":
+            annotation = event.annotation
+            if annotation["type"] == "container_file_citation":
+                file_id = annotation["file_id"]
+                filename = annotation["filename"]
+                file_bytes = None
+                if self._client and self._container_id:
+                    file_content = self._client.containers.files.content.retrieve(
+                        file_id=file_id, container_id=self._container_id
+                    )
+                    file_bytes = file_content.read()
+                if file_bytes:
+                    if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                        section.update("image", file_bytes, filename=filename, file_id=file_id)
+                        section.update("download", file_bytes, filename=filename, file_id=file_id)
+                        section.stream()
+                    else:
+                        section.update("download", file_bytes, filename=filename, file_id=file_id)
+                        section.stream()
+                        
+        return ""
     
     def _process_langchain_message_token(self, token, section) -> str:
         """
@@ -254,50 +297,3 @@ class StreamProcessor:
                         return str(output)
         
         return accumulated_content
-    
-    def _process_responses_api_stream(self, event, section) -> str:
-        """
-        Process a single streaming event from OpenAI Responses API.
-
-        Args:
-            event: Responses API stream event object
-            section: Display section to update
-            
-        Returns:
-            Delta text to append to response
-        """
-        if event.type == "response.output_text.delta":
-            section.update("text", event.delta)
-            section.stream()
-            return event.delta
-        elif event.type == "response.code_interpreter_call_code.delta":
-            section.update("code", event.delta)
-            section.stream()
-        elif event.type == "response.image_generation_call.partial_image":
-            image_bytes = base64.b64decode(event.partial_image_b64)
-            item_id = getattr(event, 'item_id', None)
-            filename = f"{item_id}.{getattr(event, 'output_format', 'png')}" if item_id else "image.png"
-            section.update("generated_image", image_bytes, filename=filename, file_id=item_id)
-            section.stream()
-        elif event.type == "response.output_text.annotation.added":
-            annotation = event.annotation
-            if annotation["type"] == "container_file_citation":
-                file_id = annotation["file_id"]
-                filename = annotation["filename"]
-                file_bytes = None
-                if self._client and self._container_id:
-                    file_content = self._client.containers.files.content.retrieve(
-                        file_id=file_id, container_id=self._container_id
-                    )
-                    file_bytes = file_content.read()
-                if file_bytes:
-                    if filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                        section.update("image", file_bytes, filename=filename, file_id=file_id)
-                        section.update("download", file_bytes, filename=filename, file_id=file_id)
-                        section.stream()
-                    else:
-                        section.update("download", file_bytes, filename=filename, file_id=file_id)
-                        section.stream()
-                        
-        return ""
-

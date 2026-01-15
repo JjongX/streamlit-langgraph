@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
-from ...agent import Agent, AgentManager
+from ...agent import Agent, get_llm_client
 from .factory import AgentNodeBase
 from ...core.state.state_schema import WorkflowState
 from ..prompts import ToolCallingPromptBuilder
@@ -25,10 +25,11 @@ class ToolCallingDelegation:
                 f"Agent '{agent.name}' uses provider '{agent.provider}'."
             )
 
-        client = AgentManager.get_llm_client(agent)
+        client = get_llm_client(agent)
         messages = []
-        if agent.system_message:
-            messages.append({"role": "system", "content": agent.system_message})
+        system_message = f"You are a {agent.role}. {agent.instructions}"
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": input_message})
         
         for iteration in range(10):

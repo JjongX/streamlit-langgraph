@@ -1,24 +1,11 @@
+import os
 import streamlit as st
 import streamlit_langgraph as slg
 
 
 def main():    
-    assistant = slg.Agent(
-        name="assistant",
-        role="Helpful Assistant", 
-        instructions=(
-            "You are a helpful assistant that can answer questions and have conversations. "
-            "If you do not know the answer, just state that you do not know."
-        ),
-        provider="openai",
-        model="gpt-4.1-mini",
-        temperature=0.7,
-        # Native OpenAI tools are automatically handled via Responses API when enabled
-        allow_file_search=True,
-        allow_code_interpreter=True,
-        allow_web_search=True,
-        allow_image_generation=True,
-    )
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/01_basic_simple.yaml")
+    assistant = slg.Agent(config_path)
     config = slg.UIConfig(
         title="Simple Chat Assistant",
         page_icon="💬",

@@ -106,6 +106,47 @@ class FileHandler:
         
         if "file_handler_vector_stores" not in st.session_state:
             st.session_state.file_handler_vector_stores = []
+
+    @staticmethod
+    def ensure_llm_vector_ids(agent, llm_client, vector_store_ids):
+        """
+        Ensure the LLM client carries expected vector_store_ids when file search is enabled.
+        
+        Returns the existing client if IDs already match or feature is disabled; otherwise returns
+        a fresh client configured with the provided IDs.
+        """
+        from ..agent import get_llm_client
+        if not (agent.allow_file_search and vector_store_ids):
+            return llm_client
+        
+        current_vector_ids = getattr(llm_client, "_vector_store_ids", None)
+        if current_vector_ids != vector_store_ids:
+            return get_llm_client(agent, vector_store_ids=vector_store_ids)
+        return llm_client
+
+
+    def update_vector_store_metadata(self, state_manager, workflow_state, force: bool = False):
+        """
+        Update workflow_state metadata with file messages and vector_store_ids.
+        
+        Skips writes when unchanged unless force=True. Returns vector_store_ids used.
+        """
+        metadata = workflow_state.get("metadata", {})
+        file_messages = self.get_openai_input_messages()
+        vector_store_ids = self.get_vector_store_ids()
+        
+        if (not force and
+            metadata.get("file_messages") == file_messages and
+            metadata.get("vector_store_ids") == vector_store_ids):
+            return vector_store_ids
+        
+        state_manager.update_workflow_state({
+            "metadata": {
+                "file_messages": file_messages,
+                "vector_store_ids": vector_store_ids,
+            }
+        })
+        return vector_store_ids
     
     def update_settings(
         self,
@@ -160,6 +201,41 @@ class FileHandler:
         self._store_file_info(file_info, file_id)
         
         return file_info
+    
+    def get_openai_input_messages(self):
+        """Get OpenAI input messages for all tracked files."""
+        messages = []
+        for file_info in self._tracked_files:
+            messages.extend(file_info.input_messages)
+        return messages
+
+    def get_vector_store_ids(self):
+        """Get vector store IDs for file search."""
+        vector_store_ids = []
+        
+        if self._dynamic_vector_store:
+            vector_store_ids.append(self._dynamic_vector_store.id)
+        
+        if "file_handler_vector_stores" in st.session_state:
+            for vs_id in st.session_state.file_handler_vector_stores:
+                if vs_id not in vector_store_ids:
+                    vector_store_ids.append(vs_id)
+        
+        return vector_store_ids
+    
+    def reset(self):
+        """
+        Reset FileHandler internal state.
+        
+        Clears all tracked files, vector stores, and resets container.
+        This should be called when resetting the chat interface.
+        """
+        self.files.clear()
+        self._tracked_files.clear()
+        self._dynamic_vector_store = None
+        if "file_handler_vector_stores" in st.session_state:
+            st.session_state.file_handler_vector_stores = []
+        self._container_id = None
     
     def _save_uploaded_file(self, uploaded_file) -> Path:
         """Save uploaded file to temporary directory."""
@@ -285,50 +361,49 @@ class FileHandler:
         # Store file info for conversation context
         file_info.metadata['container_file_id'] = openai_file.id
         file_info.metadata['container_id'] = self._container_id
-    
+        
+        # DO NOT add input_file message for code_interpreter files
+        # Code_interpreter files are accessed via the container, not via input_file messages
+
     def _process_file_search(self, file_path: Path, file_ext: str, openai_file):
         """Process file for file search if enabled."""
         if not (self.allow_file_search and 
                 file_ext in FileHandler.FILE_SEARCH_EXTENSIONS):
             return
-        
+
         if openai_file is None:
             with open(file_path, "rb") as f:
                 openai_file = self.openai_client.files.create(file=f, purpose="user_data")
         
-        # Get existing vector store or create a new one
-        if self._dynamic_vector_store is None:
-            if ("file_handler_vector_stores" in st.session_state and 
-                st.session_state.file_handler_vector_stores):
-                existing_vs_id = st.session_state.file_handler_vector_stores[0]
-                try:
-                    self._dynamic_vector_store = self.openai_client.vector_stores.retrieve(existing_vs_id)
-                except Exception:
-                    # Create new vector store if retrieval fails
-                    self._dynamic_vector_store = self.openai_client.vector_stores.create(
-                        name="streamlit-langgraph"
-                    )
-                    # Update session state
-                    if "file_handler_vector_stores" not in st.session_state:
-                        st.session_state.file_handler_vector_stores = []
-                    if self._dynamic_vector_store.id not in st.session_state.file_handler_vector_stores:
-                        st.session_state.file_handler_vector_stores.append(self._dynamic_vector_store.id)
-            else:
-                # Create new vector store
-                self._dynamic_vector_store = self.openai_client.vector_stores.create(
-                    name="streamlit-langgraph"
-                )
-                # Update session state
-                if "file_handler_vector_stores" not in st.session_state:
-                    st.session_state.file_handler_vector_stores = []
-                if self._dynamic_vector_store.id not in st.session_state.file_handler_vector_stores:
-                    st.session_state.file_handler_vector_stores.append(self._dynamic_vector_store.id)
-        
-        vector_store = self._dynamic_vector_store
+        vector_store = self._get_or_create_vector_store()
         self.openai_client.vector_stores.files.create(
             vector_store_id=vector_store.id,
             file_id=openai_file.id
         )
+
+    def _get_or_create_vector_store(self):
+        """Retrieve or create a vector store, updating session state as needed."""
+        if self._dynamic_vector_store is not None:
+            return self._dynamic_vector_store
+
+        existing_ids = st.session_state.get("file_handler_vector_stores", [])
+        if existing_ids:
+            existing_vs_id = existing_ids[0]
+            try:
+                self._dynamic_vector_store = self.openai_client.vector_stores.retrieve(existing_vs_id)
+                return self._dynamic_vector_store
+            except Exception:
+                pass  # fall through to creation
+
+        self._dynamic_vector_store = self.openai_client.vector_stores.create(
+            name="streamlit-langgraph"
+        )
+        # Remember vector store ID in session state
+        if "file_handler_vector_stores" not in st.session_state:
+            st.session_state.file_handler_vector_stores = []
+        if self._dynamic_vector_store.id not in st.session_state.file_handler_vector_stores:
+            st.session_state.file_handler_vector_stores.append(self._dynamic_vector_store.id)
+        return self._dynamic_vector_store
     
     def _finalize_file_info(self, file_info: FileInfo, file_path: Path, openai_file, vision_file):
         """Finalize file info with IDs and context messages."""
@@ -355,46 +430,3 @@ class FileHandler:
         self._tracked_files.append(file_info)
         if file_id:
             self.files[file_id] = file_info
-    
-    def get_openai_input_messages(self):
-        """Get OpenAI input messages for all tracked files."""
-        messages = []
-        for file_info in self._tracked_files:
-            messages.extend(file_info.input_messages)
-        return messages
-
-    def get_vector_store_ids(self):
-        """Get vector store IDs for file search."""
-        vector_store_ids = []
-        
-        if self._dynamic_vector_store:
-            vector_store_ids.append(self._dynamic_vector_store.id)
-        
-        if "file_handler_vector_stores" in st.session_state:
-            for vs_id in st.session_state.file_handler_vector_stores:
-                if vs_id not in vector_store_ids:
-                    vector_store_ids.append(vs_id)
-        
-        return vector_store_ids
-    
-    def reset(self):
-        """
-        Reset FileHandler internal state.
-        
-        Clears all tracked files, vector stores, resets container, and renews temp_dir.
-        This should be called when resetting the chat interface.
-        """
-        old_temp_dir = self.temp_dir
-        if old_temp_dir and Path(old_temp_dir).exists():
-            try:
-                shutil.rmtree(old_temp_dir)
-            except Exception:
-                pass
-        self.temp_dir = tempfile.mkdtemp()
-        
-        self.files.clear()
-        self._tracked_files.clear()
-        self._dynamic_vector_store = None
-        if "file_handler_vector_stores" in st.session_state:
-            st.session_state.file_handler_vector_stores = []
-        self._container_id = None

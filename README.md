@@ -42,7 +42,6 @@ If you're using Streamlit with a single agent, consider [streamlit-openai](https
   - [MCP (Model Context Protocol)](#mcp-model-context-protocol)
 - [API Reference](#api-reference)
   - [Agent](#agent)
-  - [AgentManager](#agentmanager)
   - [UIConfig](#uiconfig)
   - [LangGraphChat](#langgraphchat)
   - [WorkflowBuilder](#workflowbuilder)
@@ -140,24 +139,33 @@ your-project/
 
 ## Quick Start
 
-Run with: `streamlit run your_app.py`
+**Create YAML File**:
 
-**Single Agent (Simple)**:
+First, create a YAML configuration file:
+
+```yaml
+# configs/agent.yaml
+- name: assistant
+  role: AI Assistant
+  instructions: You are a helpful AI assistant.
+  provider: openai
+  model: gpt-4.1-mini
+```
+
+**Create Your App**:
+
+Then use it in your app:
 
 ```python
 # your_app.py
 
+import os
 import streamlit as st
 import streamlit_langgraph as slg
 
-# Define your agent
-assistant = slg.Agent(
-    name="assistant",
-    role="AI Assistant",
-    instructions="You are a helpful AI assistant.",
-    provider="openai",
-    model="gpt-4.1-mini"
-)
+# Load agent from YAML (automatically loads for single agent)
+config_path = os.path.join(os.path.dirname(__file__), "configs/agent.yaml")
+assistant = slg.Agent(config_path)
 
 # Configure UI
 config = slg.UIConfig(
@@ -174,36 +182,10 @@ if "chat" not in st.session_state:
 st.session_state.chat.run()
 ```
 
-**Multi-Agent Workflow**:
+**Run your app**:
 
-```python
-# your_app.py
-
-import streamlit as st
-import streamlit_langgraph as slg
-
-# Load agents from YAML
-agents = slg.AgentManager.load_from_yaml("configs/my_agents.yaml")
-
-# Create workflow
-supervisor = agents[0]
-workers = agents[1:]
-
-builder = slg.WorkflowBuilder()
-workflow = builder.create_supervisor_workflow(
-    supervisor=supervisor,
-    workers=workers,
-    execution_mode="sequential",
-    delegation_mode="handoff"
-)
-
-# Create chat with workflow
-if "chat" not in st.session_state:
-    st.session_state.chat = slg.LangGraphChat(
-        workflow=workflow,
-        agents=agents
-    )
-st.session_state.chat.run()
+```bash
+streamlit run your_app.py
 ```
 
 ## Examples
@@ -398,7 +380,7 @@ This section provides an overview of the package's internal organization and mod
 
 ### Top-Level Modules
 
-- **`agent.py`**: `Agent` class and `AgentManager` for agent configuration and management
+- **`agent.py`**: `Agent` class for agent configuration
 - **`chat.py`**: `LangGraphChat` main interface and `UIConfig` for UI settings
 - **`workflow/`**: Workflow builders and patterns (supervisor, hierarchical, network)
 
@@ -529,32 +511,46 @@ Streamlit renders UI
 
 ### Agent Configuration
 
-Agents can be configured in two ways:
+Agents are configured using YAML files for better organization and maintainability.
 
-**Python Configuration:**
-```python
-import streamlit_langgraph as slg
-
-agent = slg.Agent(
-    name="analyst",              # Unique identifier
-    role="Data Analyst",         # Agent's role description
-    instructions="...",          # Detailed task instructions
-    provider="openai",           # LLM provider
-    model="gpt-4.1-mini",       # Model name
-    temperature=0.0,             # Response randomness
-    tools=["tool1", "tool2"],   # Available tools
-    mcp_servers={...},          # MCP server configurations
-    context="full",              # Context mode
-    human_in_loop=True,          # Enable HITL
-    interrupt_on={...}           # HITL configuration
-)
-```
-
-**YAML File Configuration:**
-
-Agents can be configured using YAML files for easier management:
+**Single Agent (YAML Configuration):**
 
 ```yaml
+# configs/agent.yaml
+- name: analyst
+  role: Data Analyst
+  instructions: |
+    Analyze data and provide insights.
+    Use available tools to process and visualize data.
+  provider: openai
+  model: gpt-4.1-mini
+  temperature: 0.0
+  tools:
+    - tool1
+    - tool2
+  context: full
+  human_in_loop: true
+  interrupt_on:
+    tool1:
+      allowed_decisions: ["approve", "reject", "edit"]
+```
+
+Load the agent:
+```python
+import os
+import streamlit_langgraph as slg
+
+# Load single agent from YAML (automatically loads)
+config_path = os.path.join(os.path.dirname(__file__), "configs/agent.yaml")
+agent = slg.Agent(config_path)
+```
+
+**Multi-Agent (YAML Configuration):**
+
+For multi-agent workflows, define multiple agents in a single YAML file:
+
+```yaml
+# configs/agents.yaml
 - name: supervisor
   role: Project Manager
   instructions: |
@@ -576,15 +572,19 @@ Agents can be configured using YAML files for easier management:
   temperature: 0.0
 ```
 
-Load the above YAML to python:
+Load multiple agents:
 ```python
 import streamlit_langgraph as slg
 
-# Load agents from YAML file
-agents = slg.AgentManager.load_from_yaml("configs/agents.yaml")
+# Load multiple agents from YAML file (returns list automatically)
+agents = slg.Agent("configs/agents.yaml")
 supervisor = agents[0]
 workers = agents[1:]
 ```
+
+**Path Handling:**
+- Use absolute paths or relative paths as needed
+- For relative paths, use `os.path.join(os.path.dirname(__file__), "configs/agents.yaml")` to resolve relative to your script
 
 For complete parameter reference, see [Agent API Reference](#agent).
 
@@ -706,20 +706,35 @@ The `ExecutorRegistry` automatically selects the appropriate executor:
 ```
 
 **Example**:
-```python
-# Uses ResponseAPIExecutor (native tools, no HITL)
-agent = slg.Agent(
-    name="assistant",
-    allow_code_interpreter=True,
-    allow_web_search=True
-)
+```yaml
+# configs/response_api_agent.yaml - Uses ResponseAPIExecutor (native tools, no HITL)
+- name: assistant
+  role: Assistant
+  instructions: You are a helpful assistant.
+  allow_code_interpreter: true
+  allow_web_search: true
+```
 
-# Uses CreateAgentExecutor (HITL enabled)
-agent = slg.Agent(
-    name="assistant",
-    human_in_loop=True,
-    interrupt_on={"tool_name": {"allowed_decisions": ["approve", "reject"]}}
-)
+```yaml
+# configs/hitl_agent.yaml - Uses CreateAgentExecutor (HITL enabled)
+- name: assistant
+  role: Assistant
+  instructions: You are a helpful assistant.
+  human_in_loop: true
+  interrupt_on:
+    tool_name:
+      allowed_decisions: ["approve", "reject"]
+```
+
+```python
+import os
+import streamlit_langgraph as slg
+
+# Uses ResponseAPIExecutor
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/response_api_agent.yaml"))
+
+# Uses CreateAgentExecutor
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/hitl_agent.yaml"))
 ```
 
 #### **Handoff Delegation Support**
@@ -728,6 +743,46 @@ Both executors work seamlessly with handoff delegation patterns:
 - **ResponseAPIExecutor**: Uses OpenAI ChatCompletion API with function calling for delegation
 - **CreateAgentExecutor**: Uses LangChain tool calling for delegation
 - The delegation system automatically routes to the appropriate execution method based on executor type
+
+#### **Message Format Conversion**
+
+Both executors convert API response objects to plain dictionary format before returning:
+
+**Why not use API message objects directly?**
+
+1. **Serialization Requirements**: 
+   - LangGraph state must be JSON-serializable for checkpointing
+   - Streamlit `session_state` requires JSON-serializable data
+   - LangChain `AIMessage` and OpenAI Response objects are not JSON-serializable
+
+2. **LangGraph State Management**:
+   - `WorkflowState` defines `messages: List[Dict[str, Any]]` (plain dicts)
+   - State reducers (`operator.add`) work with lists of dicts, not objects
+   - LangGraph checkpointers serialize state, requiring plain data structures
+
+3. **Unified Format**:
+   - User messages are plain dicts: `{"id": "...", "role": "user", "content": "...", "agent": None}`
+   - Assistant messages need the same structure for consistency
+   - Both types go into the same `workflow_state["messages"]` list
+
+4. **Custom Fields**:
+   - We need `agent` field (which agent generated the message) - not in API responses
+   - We need `id` field (UUID for deduplication) - APIs may not provide stable IDs
+   - Unified format enables consistent display/rendering logic
+
+**Message Structure**:
+```python
+{
+    "id": str(uuid.uuid4()),      # Unique identifier for deduplication
+    "role": "assistant",           # Message role
+    "content": str,                # Message content
+    "agent": str                   # Agent name that generated the message
+}
+```
+
+This conversion happens in:
+- `CreateAgentExecutor._extract_response_text()` - Extracts content from LangChain `AIMessage`
+- `ResponseAPIExecutor._extract_response_content()` - Extracts content from OpenAI Response API
 
 ### Conversation History Modes
 
@@ -748,15 +803,19 @@ Control how conversation history is managed for agents:
 - Best for: Stateless operations, independent tasks
 - Use case: One-off computations, API calls, isolated operations
 
+```yaml
+# configs/agent.yaml
+- name: analyst
+  role: Data Analyst
+  instructions: Analyze data
+  conversation_history_mode: filtered  # Default
+```
+
 ```python
+import os
 import streamlit_langgraph as slg
 
-agent = slg.Agent(
-    name="analyst",
-    role="Data Analyst",
-    instructions="Analyze data",
-    conversation_history_mode="filtered"  # Default
-)
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/agent.yaml"))
 ```
 
 ### Context Modes
@@ -778,16 +837,20 @@ Control how much context each agent receives from workflow execution:
 - Best for: Focused, independent tasks
 - Use case: Specialized computations, API calls
 
+```yaml
+# configs/agent.yaml
+- name: analyst
+  role: Data Analyst
+  instructions: Analyze the provided data
+  context: least  # Default: sees only task instructions
+  conversation_history_mode: filtered  # Default: filtered conversation history
+```
+
 ```python
+import os
 import streamlit_langgraph as slg
 
-analyst = slg.Agent(
-    name="analyst",
-    role="Data Analyst",
-    instructions="Analyze the provided data",
-    context="least",  # Default: sees only task instructions
-    conversation_history_mode="filtered"  # Default: filtered conversation history
-)
+analyst = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/agent.yaml"))
 ```
 
 ### Human-in-the-Loop (HITL)
@@ -805,25 +868,27 @@ Enable human approval for critical agent actions:
 - Content moderation
 - Compliance requirements
 
+```yaml
+# configs/hitl_agent.yaml
+- name: executor
+  role: Action Executor
+  instructions: Execute approved actions
+  tools:
+    - delete_data
+    - send_email
+  human_in_loop: true  # Enable HITL
+  interrupt_on:
+    delete_data:
+      allowed_decisions: ["approve", "reject"]
+    send_email:
+      allowed_decisions: ["approve", "reject", "edit"]
+```
+
 ```python
+import os
 import streamlit_langgraph as slg
 
-executor = slg.Agent(
-    name="executor",
-    role="Action Executor",
-    instructions="Execute approved actions",
-    tools=["delete_data", "send_email"],
-    human_in_loop=True,  # Enable HITL
-    interrupt_on={
-        "delete_data": {
-            "allowed_decisions": ["approve", "reject"]
-        },
-        "send_email": {
-            "allowed_decisions": ["approve", "reject", "edit"]
-        }
-    },
-    hitl_description_prefix="Action requires approval"
-)
+executor = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/hitl_agent.yaml"))
 ```
 
 #### **HITL Decision Types**
@@ -874,16 +939,21 @@ slg.CustomTool.register_tool(
 
 #### **Using Tools in Agents**
 
+```yaml
+# configs/agent.yaml
+- name: analyst
+  role: Data Analyst
+  instructions: Use analyze_data tool to process user data
+  tools:
+    - analyze_data  # Tool name from registration
+```
+
 ```python
+import os
 import streamlit_langgraph as slg
 
 # Reference registered tools by name
-agent = slg.Agent(
-    name="analyst",
-    role="Data Analyst",
-    instructions="Use analyze_data tool to process user data",
-    tools=["analyze_data"]  # Tool name from registration
-)
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/agent.yaml"))
 ```
 
 #### **Tool Best Practices**
@@ -920,18 +990,24 @@ slg.CustomTool.register_tool(
 )
 
 # Agent with HITL for this tool
-agent = slg.Agent(
-    name="admin",
-    role="Database Administrator",
-    instructions="Manage database operations",
-    tools=["delete_records"],
-    human_in_loop=True,
-    interrupt_on={
-        "delete_records": {
-            "allowed_decisions": ["approve", "reject", "edit"]
-        }
-    }
-)
+```yaml
+# configs/admin_agent.yaml
+- name: admin
+  role: Database Administrator
+  instructions: Manage database operations
+  tools:
+    - delete_records
+  human_in_loop: true
+  interrupt_on:
+    delete_records:
+      allowed_decisions: ["approve", "reject", "edit"]
+```
+
+```python
+import os
+import streamlit_langgraph as slg
+
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/admin_agent.yaml"))
 ```
 
 ### MCP (Model Context Protocol)
@@ -965,38 +1041,44 @@ MCP servers can communicate via different transport protocols:
 
 #### **Configuring MCP Servers**
 
-Configure MCP servers in your agent:
+Configure MCP servers in your agent YAML:
 
-```python
-import streamlit_langgraph as slg
-import os
-
+```yaml
+# configs/mcp_agent.yaml
 # STDIO transport (for local development)
-mcp_servers = {
-    "math": {
-        "transport": "stdio",
-        "command": "python",
-        "args": [os.path.join("mcp_servers", "math_server.py")]
-    }
-}
+- name: calculator
+  role: Calculator
+  instructions: Use MCP tools to perform calculations
+  provider: openai
+  model: gpt-4o-mini
+  mcp_servers:
+    math:
+      transport: stdio
+      command: python
+      args: ["./mcp_servers/math_server.py"]
+```
 
+```yaml
+# configs/mcp_http_agent.yaml
 # HTTP transport (for network-accessible servers)
 # Note: When using native OpenAI tools with Responses API, server must be publicly accessible
-mcp_servers = {
-    "math": {
-        "transport": "http",  # or "streamable_http" (both accepted)
-        "url": "http://your-server.com:8000/mcp"  # Public URL required when using Responses API
-    }
-}
+- name: calculator
+  role: Calculator
+  instructions: Use MCP tools to perform calculations
+  provider: openai
+  model: gpt-4o-mini
+  mcp_servers:
+    math:
+      transport: http  # or "streamable_http" (both accepted)
+      url: http://your-server.com:8000/mcp  # Public URL required when using Responses API
+```
 
-agent = slg.Agent(
-    name="calculator",
-    role="Calculator",
-    instructions="Use MCP tools to perform calculations",
-    provider="openai",
-    model="gpt-4o-mini",
-    mcp_servers=mcp_servers
-)
+```python
+import os
+import streamlit_langgraph as slg
+
+# Load agent with MCP servers
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/mcp_agent.yaml"))
 ```
 
 #### **Creating MCP Servers**
@@ -1063,27 +1145,43 @@ mcp_servers = {
     }
 }
 
-agent = slg.Agent(
-    name="calculator",
-    mcp_servers=mcp_servers
-)
+```yaml
+# configs/mcp_agent.yaml
+- name: calculator
+  role: Calculator
+  instructions: Use MCP tools for calculations
+  mcp_servers:
+    math:
+      transport: stdio
+      command: python
+      args: [math_server.py]
+```
+
+```python
+import os
+import streamlit_langgraph as slg
+
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/mcp_agent.yaml"))
 ```
 
 #### **Example: Production Deployment**
 
-```python
-# Use HTTP transport with public URL
-mcp_servers = {
-    "math": {
-        "transport": "http",
-        "url": "https://your-mcp-server.com/mcp"  # Public URL
-    }
-}
+```yaml
+# configs/mcp_prod_agent.yaml
+- name: calculator
+  role: Calculator
+  instructions: Use MCP tools for calculations
+  mcp_servers:
+    math:
+      transport: http
+      url: https://your-mcp-server.com/mcp  # Public URL
+```
 
-agent = slg.Agent(
-    name="calculator",
-    mcp_servers=mcp_servers
-)
+```python
+import os
+import streamlit_langgraph as slg
+
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/mcp_prod_agent.yaml"))
 ```
 
 #### **MCP Server Requirements**
@@ -1106,9 +1204,15 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 
 ### `Agent`
 
-**Description**: Core class for defining individual agents with their configurations.
+**Description**: Core class for defining individual agents with their configurations. Agents are configured via YAML files.
 
-**Constructor Parameters**:
+**Constructor**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file_path` | `str` | Path to YAML configuration file. Returns single Agent instance if YAML contains one agent, or List[Agent] if YAML contains multiple agents. |
+
+**YAML Configuration Parameters**:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -1117,14 +1221,12 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 | `instructions` | `str` | Required | Detailed instructions guiding agent behavior |
 | `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
 | `model` | `str` | `"gpt-4.1-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
-| `system_message` | `str` | `None` | Custom system message (auto-generated from role and instructions if None) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
 | `tools` | `List[str]` | `[]` | List of tool names available to the agent |
 | `mcp_servers` | `Dict[str, Dict]` | `None` | MCP server configurations (see [MCP Tools](#mcp-model-context-protocol)) |
 | `context` | `str` | `"least"` | Context mode: `"full"`, `"summary"`, or `"least"` |
 | `human_in_loop` | `bool` | `False` | Enable human-in-the-loop approval for tool execution |
 | `interrupt_on` | `Dict` | `{}` | HITL configuration per tool |
-| `hitl_description_prefix` | `str` | `"Tool execution pending approval"` | Prefix for HITL approval messages |
 | `allow_code_interpreter` | `bool` | `False` | Enable code interpreter (Responses API only) |
 | `container_id` | `str` | `None` | OpenAI container ID for code interpreter (auto-created if not provided) |
 | `allow_file_search` | `bool` | `False` | Enable file search (Responses API only) |
@@ -1132,67 +1234,45 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 | `allow_image_generation` | `bool` | `False` | Enable image generation (Responses API only) |
 | `conversation_history_mode` | `str` | `"filtered"` | Conversation history mode: `"full"`, `"filtered"`, or `"disable"` |
 
-**Example**:
-```python
-import streamlit_langgraph as slg
-
-agent = slg.Agent(
-    name="analyst",
-    role="Data Analyst",
-    instructions="Analyze data and provide insights",
-    provider="openai",
-    model="gpt-4o-mini",
-    temperature=0.0,
-    tools=["analyze_data", "visualize"],
-    context="full",  # See all messages and previous outputs
-    conversation_history_mode="filtered",  # Use filtered conversation history
-    human_in_loop=True,
-    interrupt_on={
-        "analyze_data": {
-            "allowed_decisions": ["approve", "reject", "edit"]
-        }
-    }
-)
+**Example - Single Agent**:
+```yaml
+# configs/agent.yaml
+- name: analyst
+  role: Data Analyst
+  instructions: |
+    Analyze data and provide insights.
+    Use available tools to process and visualize data.
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.0
+  tools:
+    - analyze_data
+    - visualize
+  context: full
+  conversation_history_mode: filtered
+  human_in_loop: true
+  interrupt_on:
+    analyze_data:
+      allowed_decisions: ["approve", "reject", "edit"]
 ```
 
----
+```python
+import os
+import streamlit_langgraph as slg
 
-### `AgentManager`
+# Load single agent from YAML (automatically loads)
+config_path = os.path.join(os.path.dirname(__file__), "configs/agent.yaml")
+agent = slg.Agent(config_path)
+```
 
-**Description**: Manages multiple agents and handles agent loading/retrieval.
-
-**Class Methods**:
-
-| Method | Parameters | Returns | Description |
-|--------|-----------|---------|-------------|
-| `load_from_yaml(path)` | `path: str` | `List[Agent]` | Load agents from YAML configuration file |
-| `get_llm_client(agent)` | `agent: Agent` | LLM client | Get configured LLM client for an agent |
-
-**Instance Methods**:
-
-| Method | Parameters | Returns | Description |
-|--------|-----------|---------|-------------|
-| `add_agent(agent)` | `agent: Agent` | `None` | Add agent to the manager |
-| `remove_agent(name)` | `name: str` | `None` | Remove agent by name |
-
-**Properties**:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `agents` | `Dict[str, Agent]` | Dictionary of agents keyed by name |
-| `active_agent` | `str` | Name of the currently active agent |
-
-**Example**:
+**Example - Multiple Agents**:
 ```python
 import streamlit_langgraph as slg
 
-# Load from YAML
-agents = slg.AgentManager.load_from_yaml("config/agents.yaml")
-
-# Or create manager and add agents
-manager = slg.AgentManager()
-manager.add_agent(my_agent)
-agent = manager.agents["analyst"]  # Access via agents dictionary
+# Load multiple agents from YAML (returns list automatically)
+agents = slg.Agent("configs/agents.yaml")
+supervisor = agents[0]
+workers = agents[1:]
 ```
 
 ---
@@ -1460,12 +1540,20 @@ slg.CustomTool.register_tool(
 )
 
 # Use in agent
-agent = slg.Agent(
-    name="calculator",
-    role="Calculator",
-    instructions="Use calculate_sum to add numbers",
-    tools=["calculate_sum"]
-)
+```yaml
+# configs/calculator_agent.yaml
+- name: calculator
+  role: Calculator
+  instructions: Use calculate_sum to add numbers
+  tools:
+    - calculate_sum
+```
+
+```python
+import os
+import streamlit_langgraph as slg
+
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/calculator_agent.yaml"))
 ```
 
 #### `tool()` (Decorator)
@@ -1492,12 +1580,20 @@ def calculate(expression: str) -> float:
     return eval(expression)
 
 # Use in agent
-agent = slg.Agent(
-    name="calculator",
-    role="Calculator",
-    instructions="Use calculator to evaluate expressions",
-    tools=["calculator"]
-)
+```yaml
+# configs/calculator_agent.yaml
+- name: calculator
+  role: Calculator
+  instructions: Use calculator to evaluate expressions
+  tools:
+    - calculator
+```
+
+```python
+import os
+import streamlit_langgraph as slg
+
+agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/calculator_agent.yaml"))
 ```
 
 ---

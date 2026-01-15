@@ -1,5 +1,6 @@
 # Main chat interface.
 
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Union, Tuple
@@ -7,10 +8,11 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Union, Tuple
 import streamlit as st
 from langgraph.graph import StateGraph
 
-from .agent import Agent, AgentManager
+from .agent import Agent, get_llm_client
 from .core.executor import WorkflowExecutor
+from .core.executor.response_api import ResponseAPIExecutor
 from .core.executor.registry import ExecutorRegistry
-from .core.state import StateSynchronizer, WorkflowStateManager
+from .core.state import StateSynchronizer, WorkflowState, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
 from .ui import DisplayManager, StreamProcessor
 from .utils import FileHandler, CustomTool
@@ -81,12 +83,12 @@ class LangGraphChat:
         """
         self.config = config or UIConfig()
         self._init_session_state()
-        self.agent_manager = AgentManager()
+        self.agents: Dict[str, Agent] = {}
         self.state_manager = StateSynchronizer()
         self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
         self.workflow = workflow
         self.workflow_executor = WorkflowExecutor()
-        
+
         if agents:
             if not workflow and len(agents) > 1:
                 raise ValueError(
@@ -96,24 +98,24 @@ class LangGraphChat:
             for agent in agents:
                 if agent.human_in_loop and not workflow:
                     raise ValueError("Human-in-the-loop is only available for multiagent workflows.")
-                self.agent_manager.add_agent(agent)
+                self.agents[agent.name] = agent
+
         if custom_tools:
             for tool in custom_tools:
                 CustomTool.register_tool(
-                    tool.name, tool.description, tool.function, 
-                    parameters=tool.parameters, return_direct=tool.return_direct
+                    tool.name, tool.description, tool.function,
+                    parameters=tool.parameters, return_direct=tool.return_direct,
                 )
-        
-        first_agent = next(iter(self.agent_manager.agents.values()))
+
+        first_agent = next(iter(self.agents.values()))
         
         openai_client = None
         if (first_agent.provider.lower() == "openai" and
             ExecutorRegistry.has_native_tools(first_agent)):
             executor = ExecutorRegistry().get_or_create(first_agent, executor_type="single_agent")
-            from .core.executor.response_api import ResponseAPIExecutor
             if isinstance(executor, ResponseAPIExecutor):
                 openai_client = executor.openai_client
-        
+
         self.file_handler = FileHandler(
             openai_client=openai_client,
             model=first_agent.model,
@@ -127,17 +129,29 @@ class LangGraphChat:
         if self.file_handler._container_id and not first_agent.container_id:
             first_agent.container_id = self.file_handler._container_id
         
+        # Sync container_id to ALL agents with code_interpreter enabled
+        # This ensures all agents use the same container where files are uploaded
+        if self.file_handler._container_id:
+            all_agents = list(self.agents.values())
+            Agent.sync_container_ids(all_agents)
+
         vector_store_ids = self.file_handler.get_vector_store_ids()
-        self.llm = AgentManager.get_llm_client(first_agent, vector_store_ids=vector_store_ids)
+        self.llm = get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
         self._container_id = first_agent.container_id
-        self.interrupt_handler = HITLHandler(self.agent_manager, self.config, self.state_manager, self.display_manager)
+        self.interrupt_handler = HITLHandler(self.agents, self.config, self.state_manager, self.display_manager)
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
     
     def _init_session_state(self):
         """Initialize all Streamlit session state variables in one place."""
         if "workflow_state" not in st.session_state:
-            st.session_state.workflow_state = WorkflowStateManager.create_initial_state()
+            st.session_state.workflow_state = WorkflowState(
+                messages=[],
+                current_agent=None,
+                agent_outputs={},
+                files=[],
+                metadata={}
+            )
         if "agent_executors" not in st.session_state:
             st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
@@ -164,59 +178,97 @@ class LangGraphChat:
         if self.config.show_sidebar:
             self._render_sidebar()
         self._render_chat_interface()
-    
-    def _render_sidebar(self):
-        """Render the sidebar with controls and information."""
-        with st.sidebar:
-            st.header("Agent Configuration")
-            agents = list(self.agent_manager.agents.values())
-            if agents:
-                for agent in agents:
-                    with st.expander(f"{agent.name}", expanded=False):
-                        st.write(f"**Role:** {agent.role}")
-                        st.write(f"**Instructions:** {agent.instructions[:100]}...")
-                        capabilities = []
-                        if agent.allow_file_search:
-                            capabilities.append("📁 File Search")
-                        if agent.allow_code_interpreter:
-                            capabilities.append("💻 Code Interpreter")
-                        if agent.allow_web_search:
-                            capabilities.append("🌐 Web Search")
-                        if agent.tools:
-                            capabilities.append(f"🛠️ {len(agent.tools)} Custom Tools")
-                        if capabilities:
-                            st.write("**Capabilities:**")
-                            for cap in capabilities:
-                                st.write(f"- {cap}")
-            st.header("Controls")
-            if st.button("Reset All", type="secondary"):
-                self.file_handler.reset()
-                self._container_id = None
-                if hasattr(self, 'stream_processor'):
-                    self.stream_processor._container_id = None
-                st.session_state.clear()
-                self._init_session_state()
-                
-                st.rerun()
-    
-    def _render_chat_interface(self):
-        """Render the main chat interface."""
-        display_sections = self.state_manager.get_display_sections()
-        if not display_sections:
-            self.display_manager.render_welcome_message()
 
+    
+    def _update_file_messages_in_state(self, force=False):
+        """Update file messages and vector store IDs in workflow state."""
         workflow_state = self._get_workflow_state()
-        if HITLUtils.has_pending_interrupts(workflow_state):
-            interrupt_handled = self.interrupt_handler.handle_pending_interrupts(workflow_state)
-            if interrupt_handled:
-                return  # Don't process messages or show input while handling interrupts
-
-        self.display_manager.render_message_history()
-        if prompt := st.chat_input(
-            self.config.placeholder, accept_file=self.config.enable_file_upload
-        ):
-            self._handle_user_input(prompt)
+        self.file_handler.update_vector_store_metadata(self.state_manager, workflow_state, force=force)
     
+    def _process_file_uploads(self, files):
+        """Process uploaded files and update workflow state."""
+        for uploaded_file in files:
+            file_id = getattr(uploaded_file, 'file_id', None) or uploaded_file.name
+            if file_id not in st.session_state.uploaded_files_set:
+                file_info = self.file_handler.track(uploaded_file)
+                st.session_state.uploaded_files.append(uploaded_file)
+                st.session_state.uploaded_files_set.add(file_id)
+                file_dict = {k: v for k, v in file_info.__dict__.items() if k != "content"}
+                self.state_manager.update_workflow_state({"files": [file_dict]})
+        
+        if self.file_handler._container_id:
+            all_agents = list(self.agents.values())
+            Agent.sync_container_ids(all_agents)
+        
+        self._update_file_messages_in_state(force=True)
+
+    def _run_agent(self, prompt, agent):
+        """Run single agent (HITL not supported - use workflows for HITL)."""
+        # Get file messages and vector store IDs from state
+        workflow_state = self._get_workflow_state()
+        metadata = workflow_state.get("metadata", {})
+        file_messages, vector_store_ids = metadata.get("file_messages"), metadata.get("vector_store_ids")
+        self.llm = FileHandler.ensure_llm_vector_ids(agent, self.llm, vector_store_ids)
+        
+        response = self.workflow_executor.execute_agent(
+            agent, prompt,
+            llm_client=self.llm,
+            config=self.config,
+            file_messages=file_messages,
+            vector_store_ids=vector_store_ids,
+        )
+        
+        if agent.container_id:
+            self._container_id = agent.container_id
+            self.stream_processor._container_id = agent.container_id
+            self.file_handler.update_settings(
+                allow_file_search=agent.allow_file_search,
+                allow_code_interpreter=agent.allow_code_interpreter,
+                container_id=agent.container_id,
+            )
+        
+        if response.get("content"):
+            self.state_manager.add_assistant_message(
+                response.get("content", ""),
+                response.get("agent", agent.name)
+            )
+        
+        return response
+    
+    def _run_workflow(self, prompt):
+        """Execute multiagent workflow and handle UI updates."""
+        self.state_manager.update_workflow_state({"metadata": {"stream": self.config.stream}})
+        self._update_file_messages_in_state()
+        
+        result_state = self.workflow_executor.execute_workflow(
+            self.workflow, display_callback=self.display_manager.render_workflow_message
+        )
+
+        if HITLUtils.has_pending_interrupts(result_state):
+            WorkflowStateManager.preserve_display_sections(
+                st.session_state.workflow_state, result_state
+            )
+            st.session_state.workflow_state = result_state
+            st.rerun()
+        else:
+            self.state_manager.clear_hitl_state()
+
+        WorkflowStateManager.preserve_display_sections(
+            st.session_state.workflow_state, result_state
+        )
+        st.session_state.workflow_state = result_state
+        
+        return {"id": str(uuid.uuid4()), "role": "assistant", "content": "", "agent": "workflow-completed"}
+    
+    def _generate_response(self, prompt):
+        """Generate response using the configured workflow or dynamically selected agents."""
+        if self.workflow:
+            return self._run_workflow(prompt)
+        elif self.agents:
+            agent = next(iter(self.agents.values()))
+            return self._run_agent(prompt, agent)
+        return {"id": str(uuid.uuid4()), "role": "assistant", "content": "", "agent": "system"}
+
     def _handle_user_input(self, chat_input):
         """Handle user input and generate responses."""
         if self.config.enable_file_upload:
@@ -247,127 +299,70 @@ class LangGraphChat:
             return
         if response.get("__interrupt__"):
             st.rerun()
-        
-        if response and "stream" in response:
-            section = self.display_manager.add_section("assistant")
-            section._agent_info = {"agent": response["agent"]}
+
+        section = self.display_manager.add_section("assistant")
+        section._agent_info = {"agent": response["agent"]}
+        if "stream" in response:
             stream_iter = response["stream"]
             full_response = self.stream_processor.process_stream(section, stream_iter)
             response["content"] = full_response
         else:
-            section = self.display_manager.add_section("assistant")
-            section._agent_info = {"agent": response["agent"]}
             section.update("text", response["content"])
             section.stream()
 
         if (response.get("content") and 
             response.get("agent") not in ["workflow", "workflow-completed"]):
             self.state_manager.add_assistant_message(
-                response["content"], 
-                response["agent"]
+                response["content"], response["agent"]
             )
-    
-    def _update_file_messages_in_state(self, force=False):
-        """Update file messages and vector store IDs in workflow state."""
+
+    def _render_sidebar(self):
+        """Render the sidebar with controls and information."""
+        with st.sidebar:
+            st.header("Agent Configuration")
+            agents = list(self.agents.values())
+            if agents:
+                for agent in agents:
+                    with st.expander(f"{agent.name}", expanded=False):
+                        st.write(f"**Role:** {agent.role}")
+                        st.write(f"**Instructions:** {agent.instructions[:100]}...")
+                        capabilities = []
+                        if agent.allow_file_search:
+                            capabilities.append("📁 File Search")
+                        if agent.allow_code_interpreter:
+                            capabilities.append("💻 Code Interpreter")
+                        if agent.allow_web_search:
+                            capabilities.append("🌐 Web Search")
+                        if agent.tools:
+                            capabilities.append(f"🛠️ {len(agent.tools)} Custom Tools")
+                        if capabilities:
+                            st.write("**Capabilities:**")
+                            for cap in capabilities:
+                                st.write(f"- {cap}")
+            st.header("Controls")
+            if st.button("Reset All", type="secondary"):
+                self.file_handler.reset()
+                self._container_id = None
+                self.stream_processor._container_id = None
+                st.session_state.clear()
+                self._init_session_state()
+                
+                st.rerun()
+
+    def _render_chat_interface(self):
+        """Render the main chat interface."""
+        display_sections = self.state_manager.get_display_sections()
+        if not display_sections:
+            self.display_manager.render_welcome_message()
+
         workflow_state = self._get_workflow_state()
-        
-        file_messages = self.file_handler.get_openai_input_messages()
-        if not force:
-            cached_messages = workflow_state["metadata"].get("file_messages")
-            if cached_messages == file_messages:
-                return
-        
-        vector_store_ids = self.file_handler.get_vector_store_ids()
-        workflow_state["metadata"]["file_messages"] = file_messages
-        workflow_state["metadata"]["vector_store_ids"] = vector_store_ids
-    
-    def _get_file_messages_from_state(self):
-        """Get file messages and vector store IDs from state."""
-        workflow_state = self._get_workflow_state()
-        metadata = workflow_state["metadata"]
-        file_messages = metadata.get("file_messages")
-        vector_store_ids = metadata.get("vector_store_ids")
-        return file_messages, vector_store_ids
+        if HITLUtils.has_pending_interrupts(workflow_state):
+            interrupt_handled = self.interrupt_handler.handle_pending_interrupts(workflow_state)
+            if interrupt_handled:
+                return  # Don't process messages or show input while handling interrupts
 
-    def _process_file_uploads(self, files):
-        """Process uploaded files and update workflow state."""
-        for uploaded_file in files:
-            file_id = getattr(uploaded_file, 'file_id', None) or uploaded_file.name
-            if file_id not in st.session_state.uploaded_files_set:
-                file_info = self.file_handler.track(uploaded_file)
-                st.session_state.uploaded_files.append(uploaded_file)
-                st.session_state.uploaded_files_set.add(file_id)
-                # Optimize dict creation; exclude content to reduce memory usage
-                file_dict = {k: v for k, v in file_info.__dict__.items() if k != "content"}
-                self.state_manager.update_workflow_state({"files": [file_dict]})
-        
-        self._update_file_messages_in_state(force=True)
-
-    def _generate_response(self, prompt):
-        """Generate response using the configured workflow or dynamically selected agents."""
-        if self.workflow:
-            return self._run_workflow(prompt)
-        elif self.agent_manager.agents:
-            agent = next(iter(self.agent_manager.agents.values()))
-            return self._run_agent(prompt, agent)
-        return {"role": "assistant", "content": "", "agent": "system"}
-    
-    def _run_workflow(self, prompt):
-        """Execute multiagent workflow and handle UI updates."""
-        workflow_state = self._get_workflow_state()
-        workflow_state["metadata"]["stream"] = self.config.stream
-        self._update_file_messages_in_state()
-        
-        result_state = self.workflow_executor.execute_workflow(
-            self.workflow, display_callback=self.display_manager.render_workflow_message
-        )
-
-        if HITLUtils.has_pending_interrupts(result_state):
-            WorkflowStateManager.preserve_display_sections(
-                st.session_state.workflow_state, result_state
-            )
-            st.session_state.workflow_state = result_state
-            st.rerun()
-        else:
-            self.state_manager.clear_hitl_state()
-
-        WorkflowStateManager.preserve_display_sections(
-            st.session_state.workflow_state, result_state
-        )
-        st.session_state.workflow_state = result_state
-        
-        return {"role": "assistant", "content": "", "agent": "workflow-completed"}
-    
-    def _run_agent(self, prompt, agent):
-        """Run single agent (HITL not supported - use workflows for HITL)."""
-        self._update_file_messages_in_state()
-        file_messages, vector_store_ids = self._get_file_messages_from_state()
-        
-        if agent.allow_file_search and vector_store_ids:
-            current_vector_ids = getattr(self.llm, '_vector_store_ids', None)
-            if current_vector_ids != vector_store_ids:
-                self.llm = AgentManager.get_llm_client(agent, vector_store_ids=vector_store_ids)
-        
-        response = self.workflow_executor.execute_agent(
-            agent, prompt,
-            llm_client=self.llm,
-            config=self.config,
-            file_messages=file_messages
-        )
-        
-        if agent.container_id:
-            self._container_id = agent.container_id
-            self.stream_processor._container_id = agent.container_id
-            self.file_handler.update_settings(
-                allow_file_search=agent.allow_file_search,
-                allow_code_interpreter=agent.allow_code_interpreter,
-                container_id=agent.container_id,
-            )
-        
-        if response.get("content"):
-            self.state_manager.add_assistant_message(
-                response.get("content", ""),
-                response.get("agent", agent.name)
-            )
-        
-        return response
+        self.display_manager.render_message_history()
+        if prompt := st.chat_input(
+            self.config.placeholder, accept_file=self.config.enable_file_upload
+        ):
+            self._handle_user_input(prompt)

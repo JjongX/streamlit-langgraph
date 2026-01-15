@@ -1,11 +1,12 @@
 # Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes.
 
 import uuid
-from ...agent import AgentManager
+from ...agent import get_llm_client
 from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
-from ...core.state import WorkflowStateManager, create_message_with_id
+from ...core.state import WorkflowStateManager
 from ..prompts import SupervisorPromptBuilder
+from ...utils.file_handler import FileHandler
 
 
 class AgentNodeBase:
@@ -22,26 +23,33 @@ class AgentNodeBase:
         executor_key = f"workflow_executor_{executor.agent.name}"
         config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
-        llm_client = AgentManager.get_llm_client(agent)
+        llm_client = get_llm_client(agent)
         conversation_messages = state.get("messages", [])
         stream = False
         
         file_messages = state.get("metadata", {}).get("file_messages")
         vector_store_ids = state.get("metadata", {}).get("vector_store_ids")
-        # Update LLM client with vector_store_ids if file_search is enabled
-        if agent.allow_file_search and vector_store_ids:
-            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-            if current_vector_ids != vector_store_ids:
-                llm_client = AgentManager.get_llm_client(agent, vector_store_ids=vector_store_ids)
         
-        result = executor.execute_workflow(
-            llm_client=llm_client,
-            prompt=input_message,
-            stream=stream,
-            config=config,
-            messages=conversation_messages,
-            file_messages=file_messages
-        )
+        llm_client = FileHandler.ensure_llm_vector_ids(agent, llm_client, vector_store_ids)
+        
+        from ...core.executor.response_api import ResponseAPIExecutor
+        if isinstance(executor, ResponseAPIExecutor):
+            result = executor.execute_workflow(
+                prompt=input_message,
+                stream=stream,
+                messages=conversation_messages,
+                file_messages=file_messages,
+                vector_store_ids=vector_store_ids,
+            )
+        else:
+            result = executor.execute_workflow(
+                llm_client=llm_client,
+                prompt=input_message,
+                stream=stream,
+                config=config,
+                messages=conversation_messages,
+                file_messages=file_messages,
+            )
         
         if InterruptManager.should_interrupt(result):
             interrupt_data = InterruptManager.extract_interrupt_data(result)
@@ -102,7 +110,7 @@ class AgentNodeFactory:
                     supervisor, state, supervisor_instructions, workers, allow_parallel
                 )
                 # Always create message
-                messages_update = [create_message_with_id("assistant", response, supervisor.name)]
+                messages_update = [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": supervisor.name}]
                 return {
                     "current_agent": supervisor.name,
                     "messages": messages_update,
@@ -121,7 +129,7 @@ class AgentNodeFactory:
                 )
                 return {
                     "current_agent": supervisor.name,
-                    "messages": [create_message_with_id("assistant", response, supervisor.name)],
+                    "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": supervisor.name}],
                     "agent_outputs": {supervisor.name: response}
                 }
             return supervisor_agent_node
@@ -151,7 +159,7 @@ class AgentNodeFactory:
                 }
             return {
                 "current_agent": worker.name,
-                "messages": [create_message_with_id("assistant", response, worker.name)],
+                "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": worker.name}],
                 "agent_outputs": {worker.name: response}
             }
         return worker_agent_node
@@ -187,7 +195,7 @@ class AgentNodeFactory:
                 agent, state, network_instructions, peer_agents, allow_parallel=False
             )
             
-            messages_update = [create_message_with_id("assistant", response, agent.name)]
+            messages_update = [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": agent.name}]
             return {
                 "current_agent": agent.name,
                 "messages": messages_update,

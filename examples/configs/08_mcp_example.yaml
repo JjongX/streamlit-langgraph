@@ -1,0 +1,20 @@
+- name: calculator_agent
+  role: Math Assistant
+  instructions: You are a helpful math assistant that can perform calculations using MCP tools.
+  provider: openai
+  model: gpt-4o-mini
+  tools: []
+  mcp_servers: {}
+  # Example MCP server configurations (uncomment as needed):
+  # stdio transport:
+  # mcp_servers:
+  #   math:
+  #     transport: stdio
+  #     command: python
+  #     args: ["./mcp_servers/math_server.py"]
+  # http transport - need mcp at the end of the url for agent:
+  # mcp_servers:
+  #   math:
+  #     transport: streamable_http
+  #     url: http://127.0.0.1:8000/mcp
+

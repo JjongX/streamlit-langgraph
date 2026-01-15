@@ -2,12 +2,15 @@
 
 import json
 import os
+import uuid
 from typing import Any, Dict, List, Optional
 
+from langchain_core.tools import StructuredTool
 from openai import OpenAI
 
 from ...agent import Agent
-from .conversation_history import ConversationHistoryMixin
+from ...utils import MCPToolManager
+from .conversation_history import ConversationHistoryMixin, extract_text_from_content
 
 
 class ResponseAPIExecutor(ConversationHistoryMixin):
@@ -28,79 +31,33 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         self.agent = agent
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self._vector_store_ids = None
-        self._tools_config = None
         self.tools = tools if tools is not None else []
         self._init_conversation_history(agent)
     
     def execute_agent(
-        self, llm_client: Any, prompt: str, stream: bool = False,
+        self, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
+        vector_store_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Execute prompt for single-agent mode (non-workflow).
-        
-        Args:
-            llm_client: Used to get vector_store_ids (kept for interface compatibility)
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
-        return self._execute(llm_client, prompt, stream, messages, file_messages)
+        return self._execute(prompt, stream, messages, file_messages, vector_store_ids)
     
     def execute_workflow(
-        self, llm_client: Any, prompt: str, stream: bool = False,
+        self, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
-        config: Optional[Dict[str, Any]] = None,
+        vector_store_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Execute prompt for workflow mode.
         
         Note: Response API does not support HITL, so this method does not handle interrupts.
         For HITL scenarios, use CreateAgentExecutor instead.
-        
-        Args:
-            llm_client: Used to get vector_store_ids (kept for interface compatibility)
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            config: Execution config (not used for Response API, but kept for interface compatibility)
-            
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
-        return self._execute(llm_client, prompt, stream, messages, file_messages)
-    
-    def _execute(
-        self, llm_client: Any, prompt: str, stream: bool = False,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        file_messages: Optional[List] = None,
-    ) -> Dict[str, Any]:
-        """
-        Common execution logic for both agent and workflow modes.
-        
-        Args:
-            llm_client: Used to get vector_store_ids (kept for interface compatibility)
-            prompt: User's question/prompt
-            stream: Whether to stream the response
-            messages: Conversation history from workflow_state
-            file_messages: Optional file messages (OpenAI format)
-            
-        Returns:
-            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
-        """
-        self.update_vector_store_ids(llm_client)
-        
-        if stream:
-            return self._stream_response_api(prompt, messages, file_messages)
-        else:
-            return self.invoke_response_api(prompt, messages, file_messages)
+        return self._execute(prompt, stream, messages, file_messages, vector_store_ids)
     
     def invoke_response_api(
         self, prompt: str,
@@ -108,11 +65,41 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         file_messages: Optional[List] = None,
         delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """Invoke the Response API."""
-        return self._call_response_api(
-            prompt, stream=False, messages=messages, file_messages=file_messages,
-            delegation_tool=delegation_tool
-        )
+        """
+        Invoke the Response API (non-streaming).
+        """
+        return self._call_response_api(prompt, stream=False, messages=messages, 
+                                       file_messages=file_messages, delegation_tool=delegation_tool)
+    
+    def set_vector_store_ids(self, vector_store_ids: Optional[List[str]]) -> None:
+        """Directly set vector store IDs supplied by callers."""
+        self._vector_store_ids = vector_store_ids
+    
+    def _execute(
+        self, prompt: str, stream: bool = False,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        file_messages: Optional[List] = None,
+        vector_store_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Common execution logic for both agent and workflow modes.
+        
+        Args:
+            prompt: User's question/prompt
+            stream: Whether to stream the response
+            messages: Conversation history from workflow_state
+            file_messages: Optional file messages (OpenAI format)
+            vector_store_ids: Optional vector store IDs supplied by FileHandler
+            
+        Returns:
+            Dict with keys 'role', 'content', 'agent', and optionally 'stream'
+        """
+        self.set_vector_store_ids(vector_store_ids)
+        
+        if stream:
+            return self._stream_response_api(prompt, messages, file_messages)
+        else:
+            return self.invoke_response_api(prompt, messages, file_messages)
     
     def _stream_response_api(
         self, prompt: str,
@@ -121,10 +108,8 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         delegation_tool: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Stream the Response API."""
-        return self._call_response_api(
-            prompt, stream=True, messages=messages, file_messages=file_messages,
-            delegation_tool=delegation_tool
-        )
+        return self._call_response_api(prompt, stream=True, messages=messages,
+                                      file_messages=file_messages, delegation_tool=delegation_tool)
     
     def _call_response_api(
         self, prompt: str, stream: bool = False,
@@ -146,13 +131,11 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             Dict with 'role', 'content', 'agent', and optionally 'stream' or 'output' key
         """
         api_input = self._convert_messages_to_input(messages, prompt, file_messages)
-        
-        # Build tools config
-        if delegation_tool:
-            tools_config = self._build_tools_config_for_delegation(delegation_tool)
-        else:
-            tools_config = self._build_base_tools_config(self._vector_store_ids, stream=stream)
-        
+        tools_config = (
+            self._build_tools_config_for_delegation(delegation_tool)
+            if delegation_tool else
+            self._build_base_tools_config(self._vector_store_ids, stream=stream)
+        )
         response = self.openai_client.responses.create(
             model=self.agent.model,
             input=api_input,
@@ -164,29 +147,157 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         )
         
         if stream:
-            return {
-                "role": "assistant",
-                "content": "",
-                "agent": self.agent.name,
-                "stream": response
-            }
-        else:            
-            # For delegation scenarios (when delegation_tool is provided), return output items directly
-            if delegation_tool:
-                return {"output": response.output if hasattr(response, 'output') else []}
+            return self._create_response_dict(stream=response)
+        
+        # For delegation scenarios, return output items directly
+        if delegation_tool:
+            return {"output": getattr(response, 'output', [])}
+        
+        # Check if there are function calls that need to be executed
+        response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
+        
+        # For regular execution, extract content and update history
+        content = self._extract_response_content(response_with_tool_results)
+        blocks = self._convert_message_to_blocks(content)
+        self._add_to_conversation_history("assistant", blocks)
+        return self._create_response_dict(content=content)
+    
+    def _create_response_dict(self, content: str = "", stream: Any = None, output: Any = None) -> Dict[str, Any]:
+        """Create a standardized response dictionary."""
+        response = {
+            "id": str(uuid.uuid4()),
+            "role": "assistant",
+            "content": content,
+            "agent": self.agent.name
+        }
+        if stream is not None:
+            response["stream"] = stream
+        if output is not None:
+            response["output"] = output
+        return response
+    
+    def _extract_response_content(self, response: Any) -> str:
+        """Extract text content from OpenAI Response API response."""
+        if not response:
+            return ""
+
+        text_parts = []
+        
+        # Helper to get attribute or dict value
+        def get_value(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+        
+        def append_output_text(items):
+            for item in items:
+                item_type = get_value(item, 'type')
+                if item_type == 'output_text':
+                    text = get_value(item, 'text') or extract_text_from_content(get_value(item, 'content'))
+                    if text:
+                        text_parts.append(str(text))
+                elif item_type == 'code_interpreter_call':
+                    code = get_value(item, 'code') or get_value(item, 'input')
+                    if code:
+                        text_parts.append(f"\n\n```python\n{code}\n```\n\n")
+                    output = get_value(item, 'output')
+                    if output:
+                        if isinstance(output, list):
+                            for output_item in output:
+                                output_type = get_value(output_item, 'type')
+                                if output_type == 'text':
+                                    text = get_value(output_item, 'text')
+                                    if text:
+                                        text_parts.append(str(text))
+                                elif output_type == 'image':
+                                    text_parts.append("\n[Code generated an image]\n")
+                        else:
+                            text_parts.append(str(output))
+                elif item_type == 'message':
+                    content_blocks = get_value(item, 'content', [])
+                    for block in content_blocks:
+                        text = get_value(block, 'text')
+                        if text:
+                            text_parts.append(str(text))
+        
+        if hasattr(response, 'items') and response.items:
+            append_output_text(response.items)
+        
+        if hasattr(response, 'output') and response.output:
+            append_output_text(response.output)
+        
+        if hasattr(response, 'output_text'):
+            text_parts.append(extract_text_from_content(response.output_text))
+        
+        if not text_parts:
+            text = get_value(response, 'text') or extract_text_from_content(get_value(response, 'content'))
+            if text:
+                text_parts.append(str(text))
+        
+        return ''.join(text_parts) if text_parts else str(response) if response else ""
+    
+    def _convert_messages_to_input(
+        self,
+        messages: Optional[List[Dict[str, Any]]],
+        current_prompt: str,
+        file_messages: Optional[List] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert workflow_state messages to Response API input format.
+        Response API uses a list of message dicts with 'role' and 'content' keys.
+        
+        Like the reference code, conversation history (including file context) is sent as a system message.
+        
+        Args:
+            messages: List of message dicts from workflow_state
+            current_prompt: Current user prompt
+            file_messages: Optional file messages (OpenAI format) to include
             
-            # Check if there are function calls that need to be executed
-            response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
+        Returns:
+            List of messages in Response API input format
+        """
+        input_list = []
+        
+        # Update conversation history from messages (this includes file messages)
+        self._update_conversation_history_from_messages(messages, file_messages)
+        
+        # Add file messages directly to input (Response API needs them in the input array)
+        # Only include messages with actual file references (input_file, input_image), not text messages
+        file_blocks = self._collect_file_blocks(file_messages)
+        input_list.extend(file_blocks)
+        
+        # Add current prompt as user message (like reference code does)
+        input_list.append({"role": "user", "content": current_prompt})
+
+        # Add conversation history as system message (like reference code does)
+        # This includes file information from previous turns
+        sections_dict = self._get_conversation_history_sections_dict()
+        if sections_dict:
+            system_content = json.dumps(sections_dict, ensure_ascii=False)
+            input_list.append({"role": "system", "content": system_content})
+
+        return input_list
+
+    def _collect_file_blocks(self, file_messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Collect file blocks from file messages for the Response API input."""
+        if not file_messages:
+            return []
+        
+        collected = []
+        for file_msg in file_messages:
+            if not (isinstance(file_msg, dict) and file_msg.get("role") == "user"):
+                continue
+            content = file_msg.get("content", [])
+            if not isinstance(content, list):
+                continue
             
-            # For regular execution, extract content and update history
-            content = self._extract_response_content(response_with_tool_results)
-            blocks = self._convert_message_to_blocks(content)
-            self._add_to_conversation_history("assistant", blocks)
-            return {
-                "role": "assistant",
-                "content": content,
-                "agent": self.agent.name
-            }
+            file_blocks = [
+                block for block in content
+                if isinstance(block, dict) and block.get("type") in ("input_file", "input_image")
+            ]
+            if file_blocks:
+                collected.append({"role": "user", "content": file_blocks})
+        return collected
     
     def _build_base_tools_config(
         self, 
@@ -194,8 +305,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         stream: bool = True
     ) -> List[Dict[str, Any]]:
         """Build base tools configuration (native OpenAI tools, MCP servers, and custom tools)."""
-        from ...utils import MCPToolManager
-
         tools = []
         vs_ids = vector_store_ids or self._vector_store_ids
         
@@ -224,170 +333,33 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         
         return tools
     
-    def _handle_function_calls(
-        self, response: Any, api_input: List[Dict[str, Any]], 
-        tools_config: List[Dict[str, Any]], stream: bool = False,
-        max_iterations: int = 10
-    ) -> Any:
+    def _build_tools_config_for_delegation(
+        self, additional_tools: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Handle function calls from Response API by executing custom functions and continuing the conversation.
+        Build tools configuration for Response API with delegation support.
         
         Args:
-            response: Initial Response API response
-            api_input: Original API input messages
-            tools_config: Tools configuration
-            stream: Whether streaming is enabled
-            max_iterations: Maximum number of function call iterations
+            additional_tools: Additional tools to include (e.g., delegation tool in Response API format)
             
         Returns:
-            Final response after all function calls are executed
+            List of tools in Response API format
         """
-        function_map = self._build_function_map()
-        iteration = 0
-        current_response = response
-        accumulated_input = list(api_input)
+        tools = []
         
-        while iteration < max_iterations:
-            function_results = self._extract_and_execute_function_calls(
-                current_response, function_map, iteration
-            )
-            
-            if not function_results:
-                return current_response
-            
-            accumulated_input = self._accumulate_function_results(
-                accumulated_input, current_response, function_results
-            )
-            current_response = self._call_api_with_results(
-                accumulated_input, tools_config
-            )
-            iteration += 1
+        if additional_tools:
+            tools_to_process = additional_tools if isinstance(additional_tools, list) else [additional_tools]
+            tools.extend(t for t in tools_to_process 
+                        if isinstance(t, dict) and "name" in t and t.get("type") == "function")
         
-        return current_response
+        # Add base tools (native OpenAI tools, MCP tools, custom tools)
+        base_tools = self._build_base_tools_config(vector_store_ids=None, stream=False)
+        tools.extend(base_tools)
+        
+        return tools
     
-    def _extract_and_execute_function_calls(
-        self, response: Any, function_map: Dict[str, Any], iteration: int
-    ) -> List[Dict[str, Any]]:
-        """Extract function calls from response and execute them."""
-        function_results = []
-        output_items = response.output if hasattr(response, 'output') else []
-        
-        for item in output_items:
-            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-            
-            if item_type == "function_call":
-                result = self._execute_single_function_call(item, function_map, iteration)
-                if result:
-                    function_results.append(result)
-        
-        return function_results
-    
-    def _execute_single_function_call(
-        self, item: Any, function_map: Dict[str, Any], iteration: int
-    ) -> Optional[Dict[str, Any]]:
-        """Execute a single function call and return result."""
-        # Extract function call details
-        if isinstance(item, dict):
-            function_name = item.get("name")
-            arguments = item.get("arguments", "{}")
-            call_id = item.get("call_id", f"call_{iteration}")
-        else:
-            function_name = getattr(item, "name", None)
-            arguments = getattr(item, "arguments", "{}")
-            call_id = getattr(item, "call_id", f"call_{iteration}")
-        
-        if function_name not in function_map:
-            return {
-                "call_id": call_id,
-                "name": function_name,
-                "result": f"Error: Function {function_name} not found"
-            }
-        
-        try:
-            # Parse arguments
-            if isinstance(arguments, str):
-                args_dict = json.loads(arguments)
-            else:
-                args_dict = arguments if isinstance(arguments, dict) else {}
-            
-            # Execute the custom function
-            function_impl = function_map[function_name]
-            result = function_impl(**args_dict)
-            result_str = str(result)
-            
-            return {
-                "call_id": call_id,
-                "name": function_name,
-                "result": result_str
-            }
-        except Exception as e:
-            return {
-                "call_id": call_id,
-                "name": function_name,
-                "result": f"Error: {str(e)}"
-            }
-    
-    def _accumulate_function_results(
-        self, accumulated_input: List[Dict[str, Any]],
-        current_response: Any, function_results: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Accumulate conversation history with function results."""
-        # Add response output to build full history
-        new_input = list(accumulated_input)
-        new_input.extend(current_response.output)
-        
-        # Add function results in Response API format
-        for func_result in function_results:
-            new_input.append({
-                "type": "function_call_output",
-                "call_id": func_result["call_id"],
-                "output": json.dumps({"result": func_result["result"]})
-            })
-        
-        return new_input
-    
-    def _call_api_with_results(
-        self, accumulated_input: List[Dict[str, Any]], tools_config: List[Dict[str, Any]]
-    ) -> Any:
-        """Call Response API with accumulated input and function results."""
-        return self.openai_client.responses.create(
-            model=self.agent.model,
-            input=accumulated_input,
-            instructions=self._original_system_message,
-            temperature=self.agent.temperature,
-            tools=tools_config if tools_config else [],
-            stream=False,  # Don't stream during function call loop
-            reasoning={"summary": "auto"},
-        )
-    
-    def _build_function_map(self) -> Dict[str, Any]:
-        """
-        Build a map of function names to their implementations from custom tools.
-        
-        Returns:
-            Dict mapping function names to callable implementations
-        """
-        function_map = {}
-        
-        if not self.tools:
-            return function_map
-        
-        from langchain_core.tools import StructuredTool
-        
-        for tool in self.tools:
-            if isinstance(tool, StructuredTool):
-                function_map[tool.name] = tool.func
-            elif isinstance(tool, dict) and "function" in tool:
-                # If tool is a dict with function info, we need access to the actual function
-                # This shouldn't happen with our current setup, but handle it gracefully
-                pass
-        
-        return function_map
-        
     def _convert_langchain_tool_to_openai(self, tool: Any) -> Dict[str, Any]:
         """Convert a LangChain StructuredTool to Response API format."""
-        from langchain_core.tools import StructuredTool
-        
         if not isinstance(tool, StructuredTool):
             if isinstance(tool, dict) and "type" in tool:
                 # If already in Response API format, return as-is
@@ -426,140 +398,132 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             }
         }
     
-    def _convert_messages_to_input(
+    def _build_function_map(self) -> Dict[str, Any]:
+        """
+        Build a map of function names to their implementations from custom tools.
+        
+        Returns:
+            Dict mapping function names to callable implementations
+        """
+        function_map = {}
+        
+        if not self.tools:
+            return function_map
+        
+        for tool in self.tools:
+            if isinstance(tool, StructuredTool):
+                function_map[tool.name] = tool.func
+            elif isinstance(tool, dict) and "function" in tool:
+                # If tool is a dict with function info, we need access to the actual function
+                # This shouldn't happen with our current setup, but handle it gracefully
+                pass
+        
+        return function_map
+    
+    def _handle_function_calls(
+        self, response: Any, api_input: List[Dict[str, Any]], 
+        tools_config: List[Dict[str, Any]], stream: bool = False,
+        max_iterations: int = 10
+    ) -> Any:
+        """
+        Handle function calls from Response API by executing custom functions and continuing the conversation.
+        
+        Args:
+            response: Initial Response API response
+            api_input: Original API input messages
+            tools_config: Tools configuration
+            stream: Whether streaming is enabled
+            max_iterations: Maximum number of function call iterations
+            
+        Returns:
+            Final response after all function calls are executed
+        """
+        function_map = self._build_function_map()
+        iteration = 0
+        current_response = response
+        accumulated_input = list(api_input)
+        
+        while iteration < max_iterations:
+            function_results = self._extract_and_execute_function_calls(
+                current_response, function_map, iteration
+            )
+            
+            if not function_results:
+                return current_response
+            
+            self._accumulate_function_results(accumulated_input, current_response, function_results)
+            current_response = self._call_api_with_results(
+                accumulated_input, tools_config
+            )
+            iteration += 1
+        
+        return current_response
+    
+    def _extract_and_execute_function_calls(
+        self, response: Any, function_map: Dict[str, Any], iteration: int
+    ) -> List[Dict[str, Any]]:
+        """Extract function calls from response and execute them."""
+        function_results = []
+        output_items = getattr(response, 'output', [])
+        
+        for item in output_items:
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if item_type == "function_call":
+                result = self._execute_single_function_call(item, function_map, iteration)
+                if result:
+                    function_results.append(result)
+        
+        return function_results
+    
+    def _execute_single_function_call(
+        self, item: Any, function_map: Dict[str, Any], iteration: int
+    ) -> Optional[Dict[str, Any]]:
+        """Execute a single function call and return result."""
+        # Extract function call details
+        function_name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+        arguments = item.get("arguments", "{}") if isinstance(item, dict) else getattr(item, "arguments", "{}")
+        call_id = item.get("call_id", f"call_{iteration}") if isinstance(item, dict) else getattr(item, "call_id", f"call_{iteration}")
+        
+        if function_name not in function_map:
+            return {"call_id": call_id, "name": function_name, "result": f"Error: Function {function_name} not found"}
+        
+        try:
+            # Parse arguments
+            args_dict = json.loads(arguments) if isinstance(arguments, str) else (arguments if isinstance(arguments, dict) else {})
+            
+            # Execute the custom function
+            result = function_map[function_name](**args_dict)
+            
+            return {"call_id": call_id, "name": function_name, "result": str(result)}
+        except Exception as e:
+            return {"call_id": call_id, "name": function_name, "result": f"Error: {str(e)}"}
+    
+    def _accumulate_function_results(
         self,
-        messages: Optional[List[Dict[str, Any]]],
-        current_prompt: str,
-        file_messages: Optional[List] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Convert workflow_state messages to Response API input format.
-        Response API uses a list of message dicts with 'role' and 'content' keys.
+        accumulated_input: List[Dict[str, Any]],
+        current_response: Any,
+        function_results: List[Dict[str, Any]]
+    ) -> None:
+        """Accumulate conversation history with function results in-place."""
+        accumulated_input.extend(current_response.output)
         
-        Like the reference code, conversation history (including file context) is sent as a system message.
-        
-        Args:
-            messages: List of message dicts from workflow_state
-            current_prompt: Current user prompt
-            file_messages: Optional file messages (OpenAI format) to include
-            
-        Returns:
-            List of messages in Response API input format
-        """
-        input_list = []
-        
-        # Update conversation history from messages (this includes file messages)
-        self._update_conversation_history_from_messages(messages, file_messages)
-        
-        # Add current prompt as user message (like reference code does)
-        input_list.append({"role": "user", "content": current_prompt})
-
-        # Add conversation history as system message (like reference code does)
-        # This includes file information from previous turns
-        sections_dict = self._get_conversation_history_sections_dict()
-        if sections_dict:
-            system_content = json.dumps(sections_dict, ensure_ascii=False)
-            input_list.append({"role": "system", "content": system_content})
-
-        return input_list
+        for func_result in function_results:
+            accumulated_input.append({
+                "type": "function_call_output",
+                "call_id": func_result["call_id"],
+                "output": json.dumps({"result": func_result["result"]})
+            })
     
-    
-    def _extract_response_content(self, response: Any) -> str:
-        """Extract text content from OpenAI Response API response."""
-        from .conversation_history import extract_text_from_content
-
-        if not response:
-            return ""
-
-        text_parts = []
-        # Check response.items first (Response API format)
-        if hasattr(response, 'items') and response.items:
-            for item in response.items:
-                if hasattr(item, 'type') and item.type == 'output_text':
-                    if hasattr(item, 'text'):
-                        text_parts.append(str(item.text))
-                    elif hasattr(item, 'content'):
-                        text_parts.append(extract_text_from_content(item.content))
-        
-        # Check response.output for text items
-        if hasattr(response, 'output') and response.output:
-            for item in response.output:
-                item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-                if item_type == 'output_text':
-                    if isinstance(item, dict):
-                        text_content = item.get('text', '')
-                    else:
-                        text_content = getattr(item, 'text', '')
-                    if text_content:
-                        text_parts.append(str(text_content))
-                elif item_type == 'message':
-                    # Message items contain a 'content' field with ResponseOutputText objects
-                    if isinstance(item, dict):
-                        content_blocks = item.get('content', [])
-                    else:
-                        content_blocks = getattr(item, 'content', [])
-                    for block in content_blocks:
-                        if hasattr(block, 'text'):
-                            text_parts.append(str(block.text))
-                        elif isinstance(block, dict) and 'text' in block:
-                            text_parts.append(str(block.get('text', '')))
-        
-        # Check response.output_text
-        if hasattr(response, 'output_text'):
-            text_parts.append(extract_text_from_content(response.output_text))
-        
-        # Fallback to direct attributes
-        if not text_parts:
-            if hasattr(response, 'text'):
-                text_parts.append(str(response.text))
-            elif hasattr(response, 'content'):
-                text_parts.append(extract_text_from_content(response.content))
-        
-        result = ''.join(text_parts) if text_parts else str(response) if response else ""
-        return result
-    
-    def update_vector_store_ids(self, llm_client):
-        """Update vector_store_ids from llm_client and invalidate tools config if changed."""
-        current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-        if current_vector_ids != self._vector_store_ids:
-            self._vector_store_ids = current_vector_ids
-            self._tools_config = None
-    
-    def _build_tools_config_for_delegation(
-        self, additional_tools: Optional[List[Dict[str, Any]]] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Build tools configuration for Response API with delegation support.
-        
-        Response API expects tools in format:
-        {
-            "type": "function",
-            "name": "function_name",
-            "description": "...",
-            "parameters": {...}
-        }
-        
-        Args:
-            additional_tools: Additional tools to include (e.g., delegation tool in Response API format)
-            
-        Returns:
-            List of tools in Response API format
-        """
-        tools = []
-        
-        if additional_tools:
-            tools_to_process = additional_tools if isinstance(additional_tools, list) else [additional_tools]
-            for tool in tools_to_process:
-                if isinstance(tool, dict):
-                    # If already in Response API format, use as-is
-                    if "name" in tool and tool.get("type") == "function":
-                        tools.append(tool)
-        
-        # Add base tools (native OpenAI tools, MCP tools, custom tools)
-        base_tools = self._build_base_tools_config(
-            vector_store_ids=None,
-            stream=False  # Delegation doesn't use streaming
+    def _call_api_with_results(
+        self, accumulated_input: List[Dict[str, Any]], tools_config: List[Dict[str, Any]]
+    ) -> Any:
+        """Call Response API with accumulated input and function results."""
+        return self.openai_client.responses.create(
+            model=self.agent.model,
+            input=accumulated_input,
+            instructions=self._original_system_message,
+            temperature=self.agent.temperature,
+            tools=tools_config if tools_config else [],
+            stream=False,  # Don't stream during function call loop
+            reasoning={"summary": "auto"},
         )
-        tools.extend(base_tools)
-        
-        return tools

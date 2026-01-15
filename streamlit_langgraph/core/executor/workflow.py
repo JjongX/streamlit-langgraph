@@ -8,6 +8,8 @@ import streamlit as st
 from langgraph.graph import StateGraph
 
 from ...agent import Agent
+from .registry import ExecutorRegistry
+from .response_api import ResponseAPIExecutor
 from ..state import WorkflowState, WorkflowStateManager
 
 
@@ -95,8 +97,13 @@ class WorkflowExecutor:
         return wrapper
     
     def execute_agent(
-        self, agent: Agent, prompt: str, llm_client: Any,
-        config: Any, file_messages: Optional[List[Dict[str, Any]]] = None
+        self,
+        agent: Agent,
+        prompt: str,
+        llm_client: Any,
+        config: Any,
+        file_messages: Optional[List[Dict[str, Any]]] = None,
+        vector_store_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a single agent (non-workflow mode).
@@ -113,16 +120,24 @@ class WorkflowExecutor:
         Returns:
             Dict with 'role', 'content', 'agent', and optionally 'stream'
         """
-        from .registry import ExecutorRegistry
-        
         conversation_messages = st.session_state.workflow_state.get("messages", [])
         executor = ExecutorRegistry().get_or_create(agent, executor_type="single_agent")
-        response = executor.execute_agent(
-            llm_client, prompt,
-            stream=config.stream if config else True,
-            file_messages=file_messages,
-            messages=conversation_messages
-        )
+        if isinstance(executor, ResponseAPIExecutor):
+            response = executor.execute_agent(
+                prompt,
+                stream=config.stream if config else True,
+                file_messages=file_messages,
+                messages=conversation_messages,
+                vector_store_ids=vector_store_ids,
+            )
+        else:
+            response = executor.execute_agent(
+                llm_client,
+                prompt,
+                stream=config.stream if config else True,
+                file_messages=file_messages,
+                messages=conversation_messages,
+            )
         return response
     
     def _execute_invoke(
@@ -145,8 +160,13 @@ class WorkflowExecutor:
         for node_output in workflow.stream(initial_state, config=config):
             for node_name, state_update in node_output.items():
                 if isinstance(state_update, dict):
-                    self._apply_state_update(accumulated_state, state_update)
-                if self._has_interrupt(accumulated_state, node_name, state_update):
+                    # Apply state update to accumulated state, handling reducers manually
+                    WorkflowStateManager.apply_reducer_updates(accumulated_state, state_update)
+                # Check if state contains interrupt
+                has_pending_interrupts = "pending_interrupts" in accumulated_state.get("metadata", {})
+                is_interrupt_node = node_name == "__interrupt__"
+                has_interrupt_in_update = isinstance(state_update, dict) and "__interrupt__" in state_update
+                if (is_interrupt_node or has_interrupt_in_update) and has_pending_interrupts:
                     return accumulated_state
                 display_callback(accumulated_state)
         
@@ -156,30 +176,4 @@ class WorkflowExecutor:
         # Ensure final state is displayed
         display_callback(accumulated_state)
         return accumulated_state
-    
-    def _apply_state_update(self, accumulated_state, state_update):
-        """Apply state update to accumulated state, handling reducers manually."""
-        if "messages" in state_update:
-            accumulated_state["messages"] = accumulated_state.get("messages", []) + state_update["messages"]
-        
-        if "metadata" in state_update:
-            accumulated_state["metadata"] = WorkflowStateManager.merge_metadata(
-                accumulated_state.get("metadata", {}),
-                state_update["metadata"]
-            )
-        
-        if "agent_outputs" in state_update:
-            existing_outputs = accumulated_state.get("agent_outputs", {})
-            accumulated_state["agent_outputs"] = {**existing_outputs, **state_update["agent_outputs"]}
-        
-        if "current_agent" in state_update and state_update["current_agent"] is not None:
-            accumulated_state["current_agent"] = state_update["current_agent"]
-    
-    def _has_interrupt(self, accumulated_state: WorkflowState, node_name: str, state_update: Any) -> bool:
-        """Check if state contains interrupt."""
-        has_pending_interrupts = "pending_interrupts" in accumulated_state.get("metadata", {})
-        is_interrupt_node = node_name == "__interrupt__"
-        has_interrupt_in_update = isinstance(state_update, dict) and "__interrupt__" in state_update
-        
-        return (is_interrupt_node or has_interrupt_in_update) and has_pending_interrupts
     

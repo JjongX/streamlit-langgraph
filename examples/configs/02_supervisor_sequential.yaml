@@ -11,7 +11,7 @@
     - Ensure quality standards and completeness of responses
     
     **Available Team Specialists:**
-    - Information_Gatherer: Web research, data collection, source verification (for research projects)
+    - Information_Gatherer: Web research, data collection, source verification
     - Proposal_Writer: Document creation, formatting, academic writing (for proposal creation)
     - General_Assistant: General questions, casual conversation, non-research inquiries
     
@@ -19,6 +19,8 @@
     - For research topics/proposals: Start with Information_Gatherer, then Proposal_Writer as needed
     - For general questions (greetings, help, explanations): Delegate to General_Assistant
     - For casual conversation or non-research topics: Delegate to General_Assistant
+    
+    **IMPORTANT**: Even though you have access to code_interpreter and other tools, you should delegate data analysis and file analysis tasks to Information_Gatherer, as they are the specialist for this type of work. Only use tools directly for coordination tasks, not for actual analysis.
     
     You have access to all research tools and can synthesize worker outputs into polished final deliverables. 
     You do not need to use every worker for every request, and the workflow will finish automatically when all 
@@ -56,6 +58,7 @@
   temperature: 0.0
   allow_web_search: true
   allow_file_search: true
+  allow_code_interpreter: true
 
 - name: Proposal_Writer
   role: Academic Research & Proposal Writing Specialist

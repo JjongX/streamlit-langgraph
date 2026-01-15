@@ -1,8 +1,10 @@
 # Synchronizes between WorkflowState and Streamlit's session_state for UI rendering.
 
+import uuid
+
 import streamlit as st
 
-from .state_schema import WorkflowStateManager, create_message_with_id
+from .state_schema import WorkflowStateManager
 
 
 class StateSynchronizer:
@@ -10,35 +12,18 @@ class StateSynchronizer:
     def update_workflow_state(self, updates):
         """Update workflow state with new data."""
         workflow_state = st.session_state.workflow_state
-        
-        if "messages" in updates:
-            workflow_state["messages"].extend(updates["messages"])
-        
-        if "metadata" in updates:
-            workflow_state["metadata"] = WorkflowStateManager.merge_metadata(
-                workflow_state.get("metadata", {}),
-                updates["metadata"]
-            )
-        
-        if "agent_outputs" in updates:
-            workflow_state["agent_outputs"].update(updates["agent_outputs"])
-        
-        if "current_agent" in updates and updates["current_agent"] is not None:
-            workflow_state["current_agent"] = updates["current_agent"]
-        
-        if "files" in updates:
-            workflow_state["files"].extend(updates["files"])
+        WorkflowStateManager.apply_reducer_updates(workflow_state, updates)
     
     def add_user_message(self, content):
         """Add a user message to workflow state with unique ID."""
         self.update_workflow_state({
-            "messages": [create_message_with_id("user", content, None)]
+            "messages": [{"id": str(uuid.uuid4()), "role": "user", "content": content, "agent": None}]
         })
     
     def add_assistant_message(self, content, agent_name):
         """Add an assistant message to workflow state with unique ID."""
         self.update_workflow_state({
-            "messages": [create_message_with_id("assistant", content, agent_name)],
+            "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": content, "agent": agent_name}],
             "agent_outputs": {agent_name: content},
             "current_agent": agent_name
         })
@@ -102,4 +87,3 @@ class StateSynchronizer:
         """Get set of message IDs that have been displayed."""
         display_sections = self.get_display_sections()
         return {s.get("message_id") for s in display_sections if s.get("message_id")}
-
