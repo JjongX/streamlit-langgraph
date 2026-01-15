@@ -63,19 +63,19 @@ def main():
 
 ## 🧠 How It Works:
 
-### **🎯 Team Structure**
+### 🎯 Team Structure
 **📊 Analysis Supervisor**: Coordinates parallel analysis and synthesizes results
 🔍 **Market Analyst**: Market trends and competitive analysis  
 ⚙️ **Technical Analyst**: Technical specifications and features
 👥 **Customer Analyst**: Customer feedback and sentiment analysis
 
-### **⚡ Parallel Workflow**
+### ⚡ Parallel Workflow
 1. **Supervisor** receives your analysis request
 2. **All three analysts work SIMULTANEOUSLY** on different aspects
 3. **LangGraph automatically waits** for all analysts to complete
 4. **Supervisor** receives all results and creates comprehensive report
 
-### **✨ Benefits of Parallel Execution**
+### ✨ Benefits of Parallel Execution
 - ⚡ **Faster**: All analysts work at the same time
 - 🎯 **Comprehensive**: Multiple perspectives analyzed simultaneously
 - 🔄 **Efficient**: No waiting for sequential handoffs

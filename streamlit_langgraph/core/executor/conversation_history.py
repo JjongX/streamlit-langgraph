@@ -9,39 +9,38 @@ def extract_text_from_content(content: Any) -> str:
     """Extract text from content."""
     if not content:
         return ""
-    
+
     if isinstance(content, str):
         return content
-    
+
     if isinstance(content, list):
         text_parts = []
         for block in content:
             if isinstance(block, str):
                 text_parts.append(block)
             elif isinstance(block, dict):
-                # Check for text key (handles both 'type': 'text' and direct 'text' key)
-                text = block.get('text', '')
+                text = block.get("text", "")
                 if text:
                     text_parts.append(text)
-            elif hasattr(block, 'text') and block.text:
+            elif hasattr(block, "text") and block.text:
                 text_parts.append(str(block.text))
-        return ''.join(text_parts)
-    
+        return "".join(text_parts)
+
     if isinstance(content, dict):
         # Try text key first
-        if 'text' in content:
-            return str(content.get('text', ''))
+        if "text" in content:
+            return str(content.get("text", ""))
         # Try nested content
-        if 'content' in content:
-            return extract_text_from_content(content.get('content'))
+        if "content" in content:
+            return extract_text_from_content(content.get("content"))
         return str(content)
-    
+
     # Handle objects with attributes
-    if hasattr(content, 'content'):
+    if hasattr(content, "content"):
         return extract_text_from_content(content.content)
-    if hasattr(content, 'text') and content.text:
+    if hasattr(content, "text") and content.text:
         return str(content.text)
-    
+
     return str(content) if content else ""
 
 
@@ -55,18 +54,24 @@ class ConversationHistoryMixin:
         self._conversation_history: List[Section] = []
         self._processed_message_ids: set = set()
         self._conversation_history_mode = getattr(agent, 'conversation_history_mode', 'filtered')
+
+    def _text_block(self, text: str) -> Block:
+        """Create a text block using the display manager."""
+        return self._history_display_manager.create_block("text", content=text)
     
     def _convert_message_to_blocks(self, content: Any) -> List[Block]:
         """Convert message content to Block objects."""
         blocks = []
-        
         if not content:
             return blocks
-        
+
         if isinstance(content, str):
-            blocks.append(self._history_display_manager.create_block("text", content=content))
+            blocks.append(self._text_block(content))
         elif isinstance(content, list):
             for block in content:
+                if isinstance(block, str):
+                    blocks.append(self._text_block(block))
+                    continue
                 if isinstance(block, dict):
                     block_type = block.get("type")
                     text_content = None
@@ -75,10 +80,10 @@ class ConversationHistoryMixin:
                     elif block_type == "input_file":
                         text_content = f"[File: {block.get('file_id', 'unknown')}]"
                     if text_content is not None:
-                        blocks.append(self._history_display_manager.create_block("text", content=text_content))
+                        blocks.append(self._text_block(text_content))
         else:
-            blocks.append(self._history_display_manager.create_block("text", content=str(content)))
-        
+            blocks.append(self._text_block(str(content)))
+
         return blocks
     
     def _add_to_conversation_history(self, role, blocks):
@@ -129,25 +134,22 @@ class ConversationHistoryMixin:
         for file_msg in file_messages:
             if not isinstance(file_msg, dict):
                 continue
-            
+
             role = file_msg.get("role", "user")
             content = file_msg.get("content", [])
             if role != "user" or not content:
                 continue
-            
+
             file_blocks = []
             for block in content if isinstance(content, list) else [content]:
-                if isinstance(block, dict):
-                    block_type = block.get("type")
-                    if block_type == "input_file":
-                        file_blocks.append(self._history_display_manager.create_block(
-                            "text", content=f"[File: {block.get('file_id', 'unknown')}]"
-                        ))
-                    elif block_type == "input_text":
-                        file_blocks.append(self._history_display_manager.create_block(
-                            "text", content=block.get("text", "")
-                        ))
-            
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "input_file":
+                    file_blocks.append(self._text_block(f"[File: {block.get('file_id', 'unknown')}]"))
+                elif block_type == "input_text":
+                    file_blocks.append(self._text_block(block.get("text", "")))
+
             if file_blocks:
                 temp_id = f"file_msg_{len(self._conversation_history)}"
                 if temp_id not in self._processed_message_ids:
@@ -156,6 +158,8 @@ class ConversationHistoryMixin:
     
     def _update_conversation_history_from_messages(self, messages, file_messages=None):
         """Update conversation history from workflow_state messages."""
+        if self._conversation_history_mode == "disable":
+            return
         # Process regular messages
         if messages:
             for msg in messages:
@@ -175,4 +179,3 @@ class ConversationHistoryMixin:
         
         # Process file messages
         self._process_file_messages(file_messages)
-

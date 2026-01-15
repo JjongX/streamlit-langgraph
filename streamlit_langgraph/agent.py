@@ -6,6 +6,8 @@ from typing import Any, List, Optional
 import yaml
 from langchain.chat_models import init_chat_model
 
+from .utils import CustomTool, MCPToolManager
+
 
 class Agent:
     """
@@ -53,7 +55,6 @@ class Agent:
         context: Context mode ("full", "summary", or "least")
         human_in_loop: Enable human-in-the-loop approval
         interrupt_on: HITL configuration per tool
-        hitl_description_prefix: Prefix for HITL approval messages
         conversation_history_mode: Conversation history mode ("full", "filtered", or "disable")
     """
     
@@ -75,49 +76,10 @@ class Agent:
         else:
             raise ValueError("YAML file contains no agents.")
 
-    def __post_init__(self):
-        """Initialize and validate settings."""
-        if "file_search" in self.tools:
-            self.allow_file_search = True
-        if "code_interpreter" in self.tools:
-            self.allow_code_interpreter = True
-        if "web_search" in self.tools:
-            self.allow_web_search = True
-        if "image_generation" in self.tools:
-            self.allow_image_generation = True
-        
-        valid_modes = ["full", "filtered", "disable"]
-        if self.conversation_history_mode not in valid_modes:
-            raise ValueError(
-                f"conversation_history_mode must be one of {valid_modes}, "
-                f"got '{self.conversation_history_mode}'"
-            )
-    
-    @staticmethod
-    def sync_container_ids(agents):
-        """Share container_id across all code_interpreter agents."""
-        code_interpreter_agents = [a for a in agents if a.allow_code_interpreter]
-        if not code_interpreter_agents:
-            return
-        
-        # Find first agent with a container_id set
-        shared_container_id = next(
-            (a.container_id for a in code_interpreter_agents 
-             if a.container_id and isinstance(a.container_id, str)), 
-            None
-        )
-        
-        # Apply the shared container_id to all code_interpreter agents
-        if shared_container_id:
-            for agent in code_interpreter_agents:
-                agent.container_id = shared_container_id
-    
     def get_tools(self) -> List[Any]:
         """
         Get all tools for this agent (custom tools + MCP tools).
         """
-        from .utils import CustomTool, MCPToolManager
-        
         tools = []
         if self.tools:
             tools.extend(CustomTool.get_langchain_tools(self.tools))
@@ -127,6 +89,24 @@ class Agent:
             tools.extend(mcp_manager.get_tools())
         return tools
     
+    @staticmethod
+    def sync_container_ids(agents):
+        """Share container_id across all code_interpreter agents."""
+        code_interpreter_agents = [a for a in agents if a.allow_code_interpreter]
+        if not code_interpreter_agents:
+            return # No code_interpreter agents to sync
+        
+        # Find first agent with a container_id set
+        shared_container_id = next(
+            (a.container_id for a in code_interpreter_agents 
+             if a.container_id and isinstance(a.container_id, str)), 
+            None
+        )
+        # Apply the shared container_id to all code_interpreter agents
+        if shared_container_id:
+            for agent in code_interpreter_agents:
+                agent.container_id = shared_container_id
+    
     @classmethod
     def _load_from_yaml(cls, yaml_path: str) -> List["Agent"]:
         """
@@ -135,47 +115,62 @@ class Agent:
         """
         if not os.path.exists(yaml_path):
             raise FileNotFoundError(f"YAML config file not found: {yaml_path}")
-        
+
         with open(yaml_path, "r", encoding="utf-8") as f:
             agent_configs = yaml.safe_load(f)
-        
         if agent_configs is None:
             raise ValueError("YAML file is empty or contains no configuration.")
-        
         if not isinstance(agent_configs, list):
+            raise ValueError(f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}")
+
+        return [cls._build_agent_from_config(cfg) for cfg in agent_configs]
+
+    @classmethod
+    def _build_agent_from_config(cls, cfg: dict) -> "Agent":
+        """Create an Agent instance from a single configuration dict."""
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Each agent configuration must be a dictionary. Got: {type(cfg)}")
+
+        agent = object.__new__(cls)
+        agent.name = cfg.get("name")
+        agent.role = cfg.get("role")
+        agent.instructions = cfg.get("instructions")
+        agent.provider = cfg.get("provider", "openai")
+        agent.model = cfg.get("model", "gpt-4.1-mini")
+        agent.temperature = cfg.get("temperature", 0.0)
+        agent.allow_file_search = cfg.get("allow_file_search", False)
+        agent.allow_code_interpreter = cfg.get("allow_code_interpreter", False)
+        agent.container_id = None
+        agent.allow_web_search = cfg.get("allow_web_search", False)
+        agent.allow_image_generation = cfg.get("allow_image_generation", False)
+        agent.tools = cfg.get("tools", [])
+        agent.mcp_servers = cfg.get("mcp_servers")
+        agent.context = cfg.get("context", "least")
+        agent.human_in_loop = cfg.get("human_in_loop", False)
+        agent.interrupt_on = cfg.get("interrupt_on")
+        agent.conversation_history_mode = cfg.get("conversation_history_mode", "filtered")
+        cls._apply_agent_settings(agent)
+        return agent
+
+    @staticmethod
+    def _apply_agent_settings(agent: "Agent") -> None:
+        """Normalize tool flags and validate conversation history mode."""
+        tools = agent.tools or []
+        if "file_search" in tools:
+            agent.allow_file_search = True
+        if "code_interpreter" in tools:
+            agent.allow_code_interpreter = True
+        if "web_search" in tools:
+            agent.allow_web_search = True
+        if "image_generation" in tools:
+            agent.allow_image_generation = True
+        
+        valid_modes = {"full", "filtered", "disable"}
+        if agent.conversation_history_mode not in valid_modes:
             raise ValueError(
-                f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}"
+                f"conversation_history_mode must be one of {sorted(valid_modes)}, "
+                f"got '{agent.conversation_history_mode}'"
             )
-        
-        agents: List[Agent] = []
-        for cfg in agent_configs:
-            if not isinstance(cfg, dict):
-                raise ValueError(
-                    f"Each agent configuration must be a dictionary. Got: {type(cfg)}"
-                )
-            # Create agent directly without going through constructor
-            agent = object.__new__(cls)
-            agent.name = cfg.get("name")
-            agent.role = cfg.get("role")
-            agent.instructions = cfg.get("instructions")
-            agent.provider = cfg.get("provider", "openai")
-            agent.model = cfg.get("model", "gpt-4.1-mini")
-            agent.temperature = cfg.get("temperature", 0.0)
-            agent.allow_file_search = cfg.get("allow_file_search", False)
-            agent.allow_code_interpreter = cfg.get("allow_code_interpreter", False)
-            agent.container_id = None
-            agent.allow_web_search = cfg.get("allow_web_search", False)
-            agent.allow_image_generation = cfg.get("allow_image_generation", False)
-            agent.tools = cfg.get("tools", [])
-            agent.mcp_servers = cfg.get("mcp_servers")
-            agent.context = cfg.get("context", "least")
-            agent.human_in_loop = cfg.get("human_in_loop", False)
-            agent.interrupt_on = cfg.get("interrupt_on")
-            agent.hitl_description_prefix = cfg.get("hitl_description_prefix", "Tool execution pending approval")
-            agent.conversation_history_mode = cfg.get("conversation_history_mode", "filtered")
-            agents.append(agent)
-        
-        return agents
 
 
 def get_llm_client(agent: Agent, vector_store_ids: Optional[List[str]] = None) -> Any:

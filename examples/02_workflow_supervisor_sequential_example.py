@@ -39,12 +39,12 @@ def main():
 
 ## 🧠 How It Works:
 
-### **🎯 Team Structure**
-**🎯 Research Supervisor**: Project coordination and task delegation
-**🔍 Information Gatherer**: Comprehensive research and data collection  
-**📝 Proposal Writer**: Professional proposal creation and formatting
+### 🎯 Team Structure
+- **🎯 Research Supervisor**: Project coordination and task delegation
+- **🔍 Information Gatherer**: Comprehensive research and data collection  
+- **📝 Proposal Writer**: Professional proposal creation and formatting
 
-### **🏗️ Sequential Workflow**
+### 🏗️ Sequential Workflow
 1. **Supervisor** analyzes your request and creates a project plan
 2. **Information Gatherer** and/or **Proposal Writer** are engaged as needed
 3. **Supervisor** coordinates handoffs and ensures quality

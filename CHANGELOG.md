@@ -16,6 +16,7 @@
 - **Removed `system_message` field**: Now automatically computed from `role` and `instructions` instead of being a configurable field, reducing redundancy
 - **Removed unused methods**: `to_dict()` and `from_dict()` from `Agent` class (not used anywhere in codebase)
 - **Code organization**: Improved inline class documentation and structure
+- **Method inlining**: Inlined some single-use methods to reduce indirection and improve code clarity
 
 ### Bug Fix
 - None

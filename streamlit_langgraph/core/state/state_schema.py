@@ -150,6 +150,26 @@ class WorkflowStateManager:
             if block.get("category") == "text":
                 return block.get("content", "")
         return ""
+
+    @staticmethod
+    def apply_reducer_updates(state: "WorkflowState", updates: Dict[str, Any]) -> "WorkflowState":
+        """
+        Apply reducer-style updates to a WorkflowState.
+        """
+        if "messages" in updates:
+            state.setdefault("messages", []).extend(updates["messages"])
+        if "metadata" in updates:
+            state["metadata"] = WorkflowStateManager.merge_metadata(
+                state.get("metadata", {}), updates["metadata"]
+            )
+        if "agent_outputs" in updates:
+            state.setdefault("agent_outputs", {}).update(updates["agent_outputs"])
+        if "current_agent" in updates and updates["current_agent"] is not None:
+            state["current_agent"] = updates["current_agent"]
+        if "files" in updates:
+            state.setdefault("files", []).extend(updates["files"])
+        
+        return state
     
     @staticmethod
     def get_or_create_workflow_config(state: "WorkflowState", executor_key: str) -> Tuple[Dict[str, Any], str]:
@@ -185,4 +205,3 @@ class WorkflowState(TypedDict):
     agent_outputs: Annotated[Dict[str, Any], operator.or_]
     files: Annotated[List[Dict[str, Any]], operator.add]
     metadata: Annotated[Dict[str, Any], WorkflowStateManager.merge_metadata]
-

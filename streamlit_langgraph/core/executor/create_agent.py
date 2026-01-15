@@ -11,7 +11,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langgraph.types import Command
 
 from ...agent import Agent
-from .conversation_history import ConversationHistoryMixin
+from .conversation_history import ConversationHistoryMixin, extract_text_from_content
 
 
 class CreateAgentExecutor(ConversationHistoryMixin):
@@ -36,16 +36,11 @@ class CreateAgentExecutor(ConversationHistoryMixin):
     def __init__(self, agent: Agent, tools: Optional[List] = None):
         """
         Initialize CreateAgentExecutor.
-        
-        Args:
-            agent: Agent configuration
-            tools: Optional list of LangChain tools
         """
         self.agent = agent
         self.agent_obj = None
         self._last_vector_store_ids = None
         self._init_conversation_history(agent)
-        
         self.tools = tools if tools is not None else self.agent.get_tools()
         self._checkpointer = None
     
@@ -85,7 +80,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         self, llm_client: Any, prompt: str, stream: bool = False,
         messages: Optional[List[Dict[str, Any]]] = None,
         file_messages: Optional[List] = None,
-        config: Optional[Dict[str, Any]] = None, 
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute prompt for workflow mode (requires config with thread_id).
@@ -225,7 +220,6 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             middleware.append(
                 HumanInTheLoopMiddleware(
                     interrupt_on=self.agent.interrupt_on,
-                    description_prefix=self.agent.hitl_description_prefix,
                 )
             )
         
@@ -292,8 +286,6 @@ class CreateAgentExecutor(ConversationHistoryMixin):
     
     def _extract_response_text(self, out: Any) -> str:
         """Extract text content from LangChain agent output."""
-        from .conversation_history import extract_text_from_content
-        
         if isinstance(out, dict):
             # Try output key first
             if 'output' in out and out['output']:

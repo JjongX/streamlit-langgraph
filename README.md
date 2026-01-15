@@ -882,7 +882,6 @@ Enable human approval for critical agent actions:
       allowed_decisions: ["approve", "reject"]
     send_email:
       allowed_decisions: ["approve", "reject", "edit"]
-  hitl_description_prefix: Action requires approval
 ```
 
 ```python
@@ -1228,7 +1227,6 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 | `context` | `str` | `"least"` | Context mode: `"full"`, `"summary"`, or `"least"` |
 | `human_in_loop` | `bool` | `False` | Enable human-in-the-loop approval for tool execution |
 | `interrupt_on` | `Dict` | `{}` | HITL configuration per tool |
-| `hitl_description_prefix` | `str` | `"Tool execution pending approval"` | Prefix for HITL approval messages |
 | `allow_code_interpreter` | `bool` | `False` | Enable code interpreter (Responses API only) |
 | `container_id` | `str` | `None` | OpenAI container ID for code interpreter (auto-created if not provided) |
 | `allow_file_search` | `bool` | `False` | Enable file search (Responses API only) |

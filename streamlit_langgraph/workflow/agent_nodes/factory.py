@@ -6,6 +6,7 @@ from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
 from ...core.state import WorkflowStateManager
 from ..prompts import SupervisorPromptBuilder
+from ...utils.file_handler import FileHandler
 
 
 class AgentNodeBase:
@@ -29,20 +30,26 @@ class AgentNodeBase:
         file_messages = state.get("metadata", {}).get("file_messages")
         vector_store_ids = state.get("metadata", {}).get("vector_store_ids")
         
-        # Update LLM client with vector_store_ids if file_search is enabled
-        if agent.allow_file_search and vector_store_ids:
-            current_vector_ids = getattr(llm_client, '_vector_store_ids', None)
-            if current_vector_ids != vector_store_ids:
-                llm_client = get_llm_client(agent, vector_store_ids=vector_store_ids)
+        llm_client = FileHandler.ensure_llm_vector_ids(agent, llm_client, vector_store_ids)
         
-        result = executor.execute_workflow(
-            llm_client=llm_client,
-            prompt=input_message,
-            stream=stream,
-            config=config,
-            messages=conversation_messages,
-            file_messages=file_messages
-        )
+        from ...core.executor.response_api import ResponseAPIExecutor
+        if isinstance(executor, ResponseAPIExecutor):
+            result = executor.execute_workflow(
+                prompt=input_message,
+                stream=stream,
+                messages=conversation_messages,
+                file_messages=file_messages,
+                vector_store_ids=vector_store_ids,
+            )
+        else:
+            result = executor.execute_workflow(
+                llm_client=llm_client,
+                prompt=input_message,
+                stream=stream,
+                config=config,
+                messages=conversation_messages,
+                file_messages=file_messages,
+            )
         
         if InterruptManager.should_interrupt(result):
             interrupt_data = InterruptManager.extract_interrupt_data(result)

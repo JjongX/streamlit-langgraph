@@ -12,20 +12,7 @@ class StateSynchronizer:
     def update_workflow_state(self, updates):
         """Update workflow state with new data."""
         workflow_state = st.session_state.workflow_state
-        
-        if "messages" in updates:
-            workflow_state["messages"].extend(updates["messages"])
-        if "metadata" in updates:
-            workflow_state["metadata"] = WorkflowStateManager.merge_metadata(
-                workflow_state.get("metadata", {}),
-                updates["metadata"]
-            )
-        if "agent_outputs" in updates:
-            workflow_state["agent_outputs"].update(updates["agent_outputs"])
-        if "current_agent" in updates and updates["current_agent"] is not None:
-            workflow_state["current_agent"] = updates["current_agent"]
-        if "files" in updates:
-            workflow_state["files"].extend(updates["files"])
+        WorkflowStateManager.apply_reducer_updates(workflow_state, updates)
     
     def add_user_message(self, content):
         """Add a user message to workflow state with unique ID."""
@@ -100,4 +87,3 @@ class StateSynchronizer:
         """Get set of message IDs that have been displayed."""
         display_sections = self.get_display_sections()
         return {s.get("message_id") for s in display_sections if s.get("message_id")}
-
