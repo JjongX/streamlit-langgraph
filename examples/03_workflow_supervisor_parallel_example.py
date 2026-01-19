@@ -64,10 +64,10 @@ def main():
 ## 🧠 How It Works:
 
 ### 🎯 Team Structure
-**📊 Analysis Supervisor**: Coordinates parallel analysis and synthesizes results
-🔍 **Market Analyst**: Market trends and competitive analysis  
-⚙️ **Technical Analyst**: Technical specifications and features
-👥 **Customer Analyst**: Customer feedback and sentiment analysis
+- 📊 Analysis Supervisor**: Coordinates parallel analysis and synthesizes results
+- 🔍 **Market Analyst**: Market trends and competitive analysis
+- ⚙️ **Technical Analyst**: Technical specifications and features
+- 👥 **Customer Analyst**: Customer feedback and sentiment analysis
 
 ### ⚡ Parallel Workflow
 1. **Supervisor** receives your analysis request
