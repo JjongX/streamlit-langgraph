@@ -11,7 +11,8 @@ from openai import OpenAI
 from ...agent import Agent
 from ...ui.display_manager import Block
 from ...utils import MCPToolManager
-from .conversation_history import ConversationHistoryMixin, extract_text_from_content
+from .conversation_history import ConversationHistoryMixin
+from ...ui.nonstream_processor import NonStreamProcessor
 
 
 class ResponseAPIExecutor(ConversationHistoryMixin):
@@ -158,7 +159,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
         
         # For regular execution, extract content and reasoning, then update history
-        content = self._extract_response_content(response_with_tool_results)
+        content = NonStreamProcessor.extract_response_api_text(response_with_tool_results)
         blocks = self._convert_message_to_blocks(content)
         
         # Extract reasoning blocks if present (for non-streaming responses)
@@ -196,72 +197,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         if output is not None:
             response["output"] = output
         return response
-    
-    def _extract_response_content(self, response: Any) -> str:
-        """Extract text content from OpenAI Response API response."""
-        if not response:
-            return ""
-
-        text_parts = []
-        
-        # Helper to get attribute or dict value
-        def get_value(obj, key, default=None):
-            if isinstance(obj, dict):
-                return obj.get(key, default)
-            return getattr(obj, key, default)
-
-        # Parse canonical output items (avoid double-counting output_text).
-        output_items = None
-        if hasattr(response, 'output') and response.output:
-            output_items = response.output
-        elif hasattr(response, 'items') and response.items:
-            output_items = response.items
-
-        if output_items:
-            for item in output_items:
-                item_type = get_value(item, 'type')
-                if item_type == 'output_text':
-                    text = get_value(item, 'text') or extract_text_from_content(get_value(item, 'content'))
-                    if text:
-                        text_parts.append(str(text))
-                elif item_type == 'code_interpreter_call':
-                    code = get_value(item, 'code') or get_value(item, 'input')
-                    if code:
-                        text_parts.append(f"\n\n```python\n{code}\n```\n\n")
-                    output = get_value(item, 'output')
-                    if output:
-                        if isinstance(output, list):
-                            for output_item in output:
-                                output_type = get_value(output_item, 'type')
-                                if output_type == 'text':
-                                    out_text = get_value(output_item, 'text')
-                                    if out_text:
-                                        text_parts.append(str(out_text))
-                                elif output_type == 'image':
-                                    text_parts.append("\n[Code generated an image]\n")
-                        else:
-                            text_parts.append(str(output))
-                elif item_type == 'message':
-                    content_blocks = get_value(item, 'content', [])
-                    for block in content_blocks:
-                        block_text = get_value(block, 'text')
-                        if block_text:
-                            text_parts.append(str(block_text))
-
-        # If that yields no text, fall back to response.output_text.
-        if not text_parts:
-            output_text = getattr(response, 'output_text', None)
-            if output_text:
-                extracted = extract_text_from_content(output_text)
-                if extracted:
-                    text_parts.append(extracted)
-        
-        if not text_parts:
-            text = get_value(response, 'text') or extract_text_from_content(get_value(response, 'content'))
-            if text:
-                text_parts.append(str(text))
-        
-        return ''.join(text_parts) if text_parts else str(response) if response else ""
     
     def _convert_messages_to_input(
         self,

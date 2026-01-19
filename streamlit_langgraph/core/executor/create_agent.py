@@ -7,11 +7,12 @@ from typing import Any, Dict, List, Optional
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.types import Command
 
 from ...agent import Agent
-from .conversation_history import ConversationHistoryMixin, extract_text_from_content
+from .conversation_history import ConversationHistoryMixin
+from ...ui.nonstream_processor import NonStreamProcessor
 
 
 class CreateAgentExecutor(ConversationHistoryMixin):
@@ -98,7 +99,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         if isinstance(out, dict) and "__interrupt__" in out:
             return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
         
-        result_text = self._extract_response_text(out)
+        result_text = NonStreamProcessor.extract_langchain_text(out)
         blocks = self._convert_message_to_blocks(result_text)
         self._add_to_conversation_history("assistant", blocks)
         return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
@@ -267,7 +268,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             if isinstance(out, dict) and "__interrupt__" in out:
                 return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
             
-            result_text = self._extract_response_text(out)
+            result_text = NonStreamProcessor.extract_langchain_text(out)
             blocks = self._convert_message_to_blocks(result_text)
             self._add_to_conversation_history("assistant", blocks)
             return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
@@ -304,35 +305,6 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             stream_mode="messages"
         )
         return {"id": str(uuid.uuid4()), "role": "assistant", "content": "", "agent": self.agent.name, "stream": stream_iter}
-    
-    def _extract_response_text(self, out: Any) -> str:
-        """Extract text content from LangChain agent output."""
-        if isinstance(out, dict):
-            # Try output key first
-            if 'output' in out and out['output']:
-                return extract_text_from_content(out['output'])
-            
-            # Try messages key
-            if 'messages' in out and out['messages']:
-                messages = out['messages']
-                # Look for AIMessage first (reverse order)
-                for msg in reversed(messages):
-                    if isinstance(msg, AIMessage):
-                        return extract_text_from_content(msg.content) if hasattr(msg, 'content') and msg.content else str(msg) if msg else ""
-                
-                # Fallback to last message
-                last_message = messages[-1]
-                if hasattr(last_message, 'content'):
-                    return extract_text_from_content(last_message.content)
-                return str(last_message) if last_message else ""
-        
-        if isinstance(out, str):
-            return out
-        
-        if hasattr(out, 'content'):
-            return extract_text_from_content(out.content)
-        
-        return str(out) if out else ""
     
     def _prepare_workflow_config(self, config: Optional[Dict[str, Any]]) -> tuple[Dict[str, Any], str]:
         """

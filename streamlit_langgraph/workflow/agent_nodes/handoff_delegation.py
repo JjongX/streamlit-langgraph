@@ -9,7 +9,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from ...agent import Agent, get_llm_client
-from ...core.executor.conversation_history import extract_text_from_content
+from ...utils.text_extraction import extract_text_from_content
 from ...core.executor.registry import ExecutorRegistry
 from ...core.state import WorkflowState, WorkflowStateManager
 from .factory import AgentNodeBase

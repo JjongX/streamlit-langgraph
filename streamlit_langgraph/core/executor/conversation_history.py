@@ -3,45 +3,7 @@
 from typing import Any, Dict, List
 
 from ...ui.display_manager import Block, Section, DisplayManager
-
-
-def extract_text_from_content(content: Any) -> str:
-    """Extract text from content."""
-    if not content:
-        return ""
-
-    if isinstance(content, str):
-        return content
-
-    if isinstance(content, list):
-        text_parts = []
-        for block in content:
-            if isinstance(block, str):
-                text_parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text", "")
-                if text:
-                    text_parts.append(text)
-            elif hasattr(block, "text") and block.text:
-                text_parts.append(str(block.text))
-        return "".join(text_parts)
-
-    if isinstance(content, dict):
-        # Try text key first
-        if "text" in content:
-            return str(content.get("text", ""))
-        # Try nested content
-        if "content" in content:
-            return extract_text_from_content(content.get("content"))
-        return str(content)
-
-    # Handle objects with attributes
-    if hasattr(content, "content"):
-        return extract_text_from_content(content.content)
-    if hasattr(content, "text") and content.text:
-        return str(content.text)
-
-    return str(content) if content else ""
+from ...utils.text_extraction import extract_text_from_content
 
 
 class ConversationHistoryMixin:
