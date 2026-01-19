@@ -9,6 +9,7 @@ from langchain_core.tools import StructuredTool
 from openai import OpenAI
 
 from ...agent import Agent
+from ...ui.display_manager import Block
 from ...utils import MCPToolManager
 from .conversation_history import ConversationHistoryMixin, extract_text_from_content
 
@@ -143,7 +144,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             temperature=self.agent.temperature,
             tools=tools_config if tools_config else [],
             stream=stream,
-            reasoning={"summary": "auto"},
+            reasoning=self._build_reasoning_config(),
         )
         
         if stream:
@@ -156,11 +157,31 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         # Check if there are function calls that need to be executed
         response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
         
-        # For regular execution, extract content and update history
+        # For regular execution, extract content and reasoning, then update history
         content = self._extract_response_content(response_with_tool_results)
         blocks = self._convert_message_to_blocks(content)
+        
+        # Extract reasoning blocks if present (for non-streaming responses)
+        reasoning_blocks = self._extract_reasoning_blocks(response_with_tool_results)
+        blocks.extend(reasoning_blocks)
+        
         self._add_to_conversation_history("assistant", blocks)
-        return self._create_response_dict(content=content)
+        
+        # Include reasoning blocks in response so they can be displayed
+        response_dict = self._create_response_dict(content=content)
+        if reasoning_blocks:
+            # Convert blocks to dict format for response
+            blocks_data = []
+            for block in reasoning_blocks:
+                block_dict = {
+                    "category": block.category,
+                    "content": block.content,
+                    "filename": block.filename,
+                    "file_id": block.file_id
+                }
+                blocks_data.append(block_dict)
+            response_dict["blocks"] = blocks_data
+        return response_dict
     
     def _create_response_dict(self, content: str = "", stream: Any = None, output: Any = None) -> Dict[str, Any]:
         """Create a standardized response dictionary."""
@@ -188,9 +209,16 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             if isinstance(obj, dict):
                 return obj.get(key, default)
             return getattr(obj, key, default)
-        
-        def append_output_text(items):
-            for item in items:
+
+        # Parse canonical output items (avoid double-counting output_text).
+        output_items = None
+        if hasattr(response, 'output') and response.output:
+            output_items = response.output
+        elif hasattr(response, 'items') and response.items:
+            output_items = response.items
+
+        if output_items:
+            for item in output_items:
                 item_type = get_value(item, 'type')
                 if item_type == 'output_text':
                     text = get_value(item, 'text') or extract_text_from_content(get_value(item, 'content'))
@@ -206,9 +234,9 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                             for output_item in output:
                                 output_type = get_value(output_item, 'type')
                                 if output_type == 'text':
-                                    text = get_value(output_item, 'text')
-                                    if text:
-                                        text_parts.append(str(text))
+                                    out_text = get_value(output_item, 'text')
+                                    if out_text:
+                                        text_parts.append(str(out_text))
                                 elif output_type == 'image':
                                     text_parts.append("\n[Code generated an image]\n")
                         else:
@@ -216,18 +244,17 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
                 elif item_type == 'message':
                     content_blocks = get_value(item, 'content', [])
                     for block in content_blocks:
-                        text = get_value(block, 'text')
-                        if text:
-                            text_parts.append(str(text))
-        
-        if hasattr(response, 'items') and response.items:
-            append_output_text(response.items)
-        
-        if hasattr(response, 'output') and response.output:
-            append_output_text(response.output)
-        
-        if hasattr(response, 'output_text'):
-            text_parts.append(extract_text_from_content(response.output_text))
+                        block_text = get_value(block, 'text')
+                        if block_text:
+                            text_parts.append(str(block_text))
+
+        # If that yields no text, fall back to response.output_text.
+        if not text_parts:
+            output_text = getattr(response, 'output_text', None)
+            if output_text:
+                extracted = extract_text_from_content(output_text)
+                if extracted:
+                    text_parts.append(extracted)
         
         if not text_parts:
             text = get_value(response, 'text') or extract_text_from_content(get_value(response, 'content'))
@@ -525,5 +552,61 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             temperature=self.agent.temperature,
             tools=tools_config if tools_config else [],
             stream=False,  # Don't stream during function call loop
-            reasoning={"summary": "auto"},
+            reasoning=self._build_reasoning_config(),
         )
+
+    def _extract_reasoning_blocks(self, response: Any) -> List[Block]:
+        """Extract reasoning blocks from Response API response (for non-streaming)."""
+        if not response:
+            return []
+
+        def val(obj, key, default=None):
+            if obj is None:
+                return default
+            return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+        # For stream=True we only show reasoning *summary* deltas; keep stream=False consistent.
+        summary_texts: List[str] = []
+
+        reasoning = val(response, "reasoning")
+        summary = val(reasoning, "summary") if reasoning else None
+        if summary and not isinstance(summary, str):
+            text = val(summary, "text")
+            if text:
+                summary_texts.append(str(text).strip())
+
+        output_items = val(response, "output") or val(response, "items") or []
+        for item in output_items:
+            item_type = val(item, "type")
+            if item_type == "reasoning":
+                summary = val(item, "summary")
+                if isinstance(summary, list):
+                    texts = [str(val(s, "text")).strip() for s in summary if val(s, "text")]
+                    if texts:
+                        summary_texts.append("\n\n".join(t for t in texts if t))
+                elif summary and not isinstance(summary, str):
+                    text = val(summary, "text")
+                    if text:
+                        summary_texts.append(str(text).strip())
+            elif item_type == "reasoning_summary_text":
+                text = val(item, "text")
+                if text:
+                    summary_texts.append(str(text).strip())
+
+        # Deduplicate while preserving order
+        seen = set()
+        blocks: List[Block] = []
+        for text in summary_texts:
+            if text and text not in seen:
+                seen.add(text)
+                blocks.append(self._history_display_manager.create_block("reasoning", content=text))
+
+        return blocks
+    
+    def _build_reasoning_config(self) -> Dict[str, Any]:
+        """Build the Response API reasoning configuration."""
+        reasoning_config = {"summary": "auto"}
+        effort = getattr(self.agent, "reasoning_effort", None)
+        if effort:
+            reasoning_config["effort"] = effort
+        return reasoning_config

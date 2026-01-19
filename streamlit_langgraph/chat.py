@@ -226,13 +226,7 @@ class LangGraphChat:
                 allow_code_interpreter=agent.allow_code_interpreter,
                 container_id=agent.container_id,
             )
-        
-        if response.get("content"):
-            self.state_manager.add_assistant_message(
-                response.get("content", ""),
-                response.get("agent", agent.name)
-            )
-        
+
         return response
     
     def _run_workflow(self, prompt):
@@ -307,6 +301,12 @@ class LangGraphChat:
             full_response = self.stream_processor.process_stream(section, stream_iter)
             response["content"] = full_response
         else:
+            # Display reasoning blocks first
+            if "blocks" in response:
+                for block_data in response["blocks"]:
+                    if block_data.get("category") == "reasoning":
+                        section.update("reasoning", block_data.get("content", ""))
+            # Then display the final answer text
             section.update("text", response["content"])
             section.stream()
 

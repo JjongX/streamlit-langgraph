@@ -79,6 +79,12 @@ class StreamProcessor:
             section.update("text", event.delta)
             section.stream()
             return event.delta
+        elif event.type == "response.reasoning_summary_text.delta":
+            # Handle streaming reasoning summary text
+            summary_delta = getattr(event, 'delta', '')
+            if summary_delta:
+                section.update("reasoning", summary_delta)
+                section.stream()
         elif event.type == "response.code_interpreter_call_code.delta":
             section.update("code", event.delta)
             section.stream()
