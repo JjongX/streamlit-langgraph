@@ -12,11 +12,8 @@ class NonStreamProcessor:
 
     def process_nonstream(self, section: Any, response: Dict[str, Any]) -> str:
         """Render a non-stream response and return the final text content."""
-        if not response:
-            return ""
-
-        self._render_reasoning_blocks(section, response.get("blocks", []))
         content = response.get("content", "")
+        self._render_reasoning_blocks(section, response.get("blocks", []))
         if content:
             self._render_text(section, content)
         else:
@@ -126,3 +123,42 @@ class NonStreamProcessor:
                 text_parts.append(str(text))
 
         return "".join(text_parts) if text_parts else str(response) if response else ""
+
+    @staticmethod
+    def extract_reasoning_blocks(response: Any) -> List[str]:
+        """Extract reasoning texts from a Responses API object."""
+        if not response:
+            return []
+
+        def val(obj: Any, key: str, default: Any = None) -> Any:
+            if obj is None:
+                return default
+            return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+        summary_texts: List[str] = []
+        reasoning = val(response, "reasoning")
+        summary = val(reasoning, "summary") if reasoning else None
+        if summary and not isinstance(summary, str):
+            text = val(summary, "text")
+            if text:
+                summary_texts.append(str(text).strip())
+
+        output_items = val(response, "output") or val(response, "items") or []
+        for item in output_items:
+            item_type = val(item, "type")
+            if item_type == "reasoning":
+                summary = val(item, "summary")
+                if isinstance(summary, list):
+                    texts = [str(val(s, "text")).strip() for s in summary if val(s, "text")]
+                    if texts:
+                        summary_texts.append("\n\n".join(t for t in texts if t))
+                elif summary and not isinstance(summary, str):
+                    text = val(summary, "text")
+                    if text:
+                        summary_texts.append(str(text).strip())
+            elif item_type == "reasoning_summary_text":
+                text = val(item, "text")
+                if text:
+                    summary_texts.append(str(text).strip())
+
+        return summary_texts

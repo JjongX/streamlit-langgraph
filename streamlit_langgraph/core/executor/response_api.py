@@ -163,7 +163,11 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         blocks = self._convert_message_to_blocks(content)
         
         # Extract reasoning blocks if present (for non-streaming responses)
-        reasoning_blocks = self._extract_reasoning_blocks(response_with_tool_results)
+        reasoning_texts = NonStreamProcessor.extract_reasoning_blocks(response_with_tool_results)
+        reasoning_blocks = [
+            self._history_display_manager.create_block("reasoning", content=text)
+            for text in reasoning_texts
+        ]
         blocks.extend(reasoning_blocks)
         
         self._add_to_conversation_history("assistant", blocks)
@@ -490,54 +494,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             reasoning=self._build_reasoning_config(),
         )
 
-    def _extract_reasoning_blocks(self, response: Any) -> List[Block]:
-        """Extract reasoning blocks from Response API response (for non-streaming)."""
-        if not response:
-            return []
-
-        def val(obj, key, default=None):
-            if obj is None:
-                return default
-            return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
-
-        # For stream=True we only show reasoning *summary* deltas; keep stream=False consistent.
-        summary_texts: List[str] = []
-
-        reasoning = val(response, "reasoning")
-        summary = val(reasoning, "summary") if reasoning else None
-        if summary and not isinstance(summary, str):
-            text = val(summary, "text")
-            if text:
-                summary_texts.append(str(text).strip())
-
-        output_items = val(response, "output") or val(response, "items") or []
-        for item in output_items:
-            item_type = val(item, "type")
-            if item_type == "reasoning":
-                summary = val(item, "summary")
-                if isinstance(summary, list):
-                    texts = [str(val(s, "text")).strip() for s in summary if val(s, "text")]
-                    if texts:
-                        summary_texts.append("\n\n".join(t for t in texts if t))
-                elif summary and not isinstance(summary, str):
-                    text = val(summary, "text")
-                    if text:
-                        summary_texts.append(str(text).strip())
-            elif item_type == "reasoning_summary_text":
-                text = val(item, "text")
-                if text:
-                    summary_texts.append(str(text).strip())
-
-        # Deduplicate while preserving order
-        seen = set()
-        blocks: List[Block] = []
-        for text in summary_texts:
-            if text and text not in seen:
-                seen.add(text)
-                blocks.append(self._history_display_manager.create_block("reasoning", content=text))
-
-        return blocks
-    
     def _build_reasoning_config(self) -> Dict[str, Any]:
         """Build the Response API reasoning configuration."""
         reasoning_config = {"summary": "auto"}
