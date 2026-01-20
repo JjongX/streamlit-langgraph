@@ -305,11 +305,14 @@ class LangGraphChat:
             full_response = self.nonstream_processor.process_nonstream(section, response)
             response["content"] = full_response
 
-        if (response.get("content") and 
-            response.get("agent") not in ["workflow", "workflow-completed"]):
-            self.state_manager.add_assistant_message(
-                response["content"], response["agent"]
-            )
+        self._persist_assistant_message(response)
+
+    def _persist_assistant_message(self, response: dict) -> None:
+        """Persist assistant responses to workflow state when applicable."""
+        content = response.get("content")
+        agent = response.get("agent")
+        if content and agent not in ["workflow", "workflow-completed"]:
+            self.state_manager.add_assistant_message(content, agent)
 
     def _render_sidebar(self):
         """Render the sidebar with controls and information."""

@@ -160,7 +160,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         
         # For regular execution, extract content and reasoning, then update history
         content = NonStreamProcessor.extract_response_api_text(response_with_tool_results)
-        blocks = self._convert_message_to_blocks(content)
+        self._record_assistant_history(content)
         
         # Extract reasoning blocks if present (for non-streaming responses)
         reasoning_texts = NonStreamProcessor.extract_reasoning_blocks(response_with_tool_results)
@@ -168,24 +168,15 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             self._history_display_manager.create_block("reasoning", content=text)
             for text in reasoning_texts
         ]
-        blocks.extend(reasoning_blocks)
-        
-        self._add_to_conversation_history("assistant", blocks)
-        
-        # Include reasoning blocks in response so they can be displayed
-        response_dict = self._create_response_dict(content=content)
         if reasoning_blocks:
-            # Convert blocks to dict format for response
-            blocks_data = []
-            for block in reasoning_blocks:
-                block_dict = {
-                    "category": block.category,
-                    "content": block.content,
-                    "filename": block.filename,
-                    "file_id": block.file_id
-                }
-                blocks_data.append(block_dict)
-            response_dict["blocks"] = blocks_data
+            self._add_to_conversation_history("assistant", reasoning_blocks)
+        
+        response_dict = self._create_response_dict(content=content)
+        if reasoning_texts:
+            response_dict["blocks"] = [
+                {"category": "reasoning", "content": text}
+                for text in reasoning_texts
+            ]
         return response_dict
     
     def _create_response_dict(self, content: str = "", stream: Any = None, output: Any = None) -> Dict[str, Any]:

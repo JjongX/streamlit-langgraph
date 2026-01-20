@@ -100,8 +100,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
         
         result_text = NonStreamProcessor.extract_langchain_text(out)
-        blocks = self._convert_message_to_blocks(result_text)
-        self._add_to_conversation_history("assistant", blocks)
+        self._record_assistant_history(result_text)
         return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
     
     def build_agent(self, llm_chat_model):
@@ -269,8 +268,7 @@ class CreateAgentExecutor(ConversationHistoryMixin):
                 return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
             
             result_text = NonStreamProcessor.extract_langchain_text(out)
-            blocks = self._convert_message_to_blocks(result_text)
-            self._add_to_conversation_history("assistant", blocks)
+            self._record_assistant_history(result_text)
             return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
         except Exception as e:
             return {"id": str(uuid.uuid4()), "role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}

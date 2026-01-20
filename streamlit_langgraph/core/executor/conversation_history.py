@@ -56,6 +56,14 @@ class ConversationHistoryMixin:
         if blocks:
             section = Section(self._history_display_manager, role, blocks=blocks)
             self._conversation_history.append(section)
+
+    def _record_assistant_history(self, content: Any) -> None:
+        """Record assistant output into conversation history."""
+        if self._conversation_history_mode == "disable":
+            return
+        blocks = self._convert_message_to_blocks(content)
+        if blocks:
+            self._add_to_conversation_history("assistant", blocks)
     
     def _get_conversation_history_sections_dict(self) -> List[Dict[str, Any]]:
         """
