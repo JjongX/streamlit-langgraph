@@ -14,7 +14,7 @@ from .core.executor.response_api import ResponseAPIExecutor
 from .core.executor.registry import ExecutorRegistry
 from .core.state import StateSynchronizer, WorkflowState, WorkflowStateManager
 from .core.middleware import HITLHandler, HITLUtils
-from .ui import DisplayManager, StreamProcessor
+from .ui import DisplayManager, NonStreamProcessor, StreamProcessor
 from .utils import FileHandler, CustomTool
 
 
@@ -141,6 +141,7 @@ class LangGraphChat:
         self._container_id = first_agent.container_id
         self.interrupt_handler = HITLHandler(self.agents, self.config, self.state_manager, self.display_manager)
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
+        self.nonstream_processor = NonStreamProcessor()
     
     def _init_session_state(self):
         """Initialize all Streamlit session state variables in one place."""
@@ -226,13 +227,7 @@ class LangGraphChat:
                 allow_code_interpreter=agent.allow_code_interpreter,
                 container_id=agent.container_id,
             )
-        
-        if response.get("content"):
-            self.state_manager.add_assistant_message(
-                response.get("content", ""),
-                response.get("agent", agent.name)
-            )
-        
+
         return response
     
     def _run_workflow(self, prompt):
@@ -307,14 +302,17 @@ class LangGraphChat:
             full_response = self.stream_processor.process_stream(section, stream_iter)
             response["content"] = full_response
         else:
-            section.update("text", response["content"])
-            section.stream()
+            full_response = self.nonstream_processor.process_nonstream(section, response)
+            response["content"] = full_response
 
-        if (response.get("content") and 
-            response.get("agent") not in ["workflow", "workflow-completed"]):
-            self.state_manager.add_assistant_message(
-                response["content"], response["agent"]
-            )
+        self._persist_assistant_message(response)
+
+    def _persist_assistant_message(self, response: dict) -> None:
+        """Persist assistant responses to workflow state when applicable."""
+        content = response.get("content")
+        agent = response.get("agent")
+        if content and agent not in ["workflow", "workflow-completed"]:
+            self.state_manager.add_assistant_message(content, agent)
 
     def _render_sidebar(self):
         """Render the sidebar with controls and information."""

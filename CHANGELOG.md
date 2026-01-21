@@ -3,6 +3,7 @@
 ## 0.2.1 (in development)
 ### Features
 - **YAML-Only Agent Configuration**: Agents must now be configured via YAML files. The `Agent(file_path)` constructor automatically loads from YAML, supporting both single and multiple agents.
+- **Reasoning Support for Both Executors**: Both executors now fully support reasoning from OpenAI (streaming and non-streaming).
 
 ### Refactor
 - **Simplified Agent API**: 
@@ -17,6 +18,7 @@
 - **Removed unused methods**: `to_dict()` and `from_dict()` from `Agent` class (not used anywhere in codebase)
 - **Code organization**: Improved inline class documentation and structure
 - **Method inlining**: Inlined some single-use methods to reduce indirection and improve code clarity
+- **Stream Processing Simplification**: Removed unused LangChain `stream_mode="updates"` handling from `StreamProcessor`.
 
 ### Bug Fix
 - None

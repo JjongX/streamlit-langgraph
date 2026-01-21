@@ -9,8 +9,10 @@ from langchain_core.tools import StructuredTool
 from openai import OpenAI
 
 from ...agent import Agent
+from ...ui.display_manager import Block
 from ...utils import MCPToolManager
-from .conversation_history import ConversationHistoryMixin, extract_text_from_content
+from .conversation_history import ConversationHistoryMixin
+from ...ui.nonstream_processor import NonStreamProcessor
 
 
 class ResponseAPIExecutor(ConversationHistoryMixin):
@@ -143,7 +145,7 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             temperature=self.agent.temperature,
             tools=tools_config if tools_config else [],
             stream=stream,
-            reasoning={"summary": "auto"},
+            reasoning=self._build_reasoning_config(),
         )
         
         if stream:
@@ -156,11 +158,26 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         # Check if there are function calls that need to be executed
         response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
         
-        # For regular execution, extract content and update history
-        content = self._extract_response_content(response_with_tool_results)
-        blocks = self._convert_message_to_blocks(content)
-        self._add_to_conversation_history("assistant", blocks)
-        return self._create_response_dict(content=content)
+        # For regular execution, extract content and reasoning, then update history
+        content = NonStreamProcessor.extract_response_api_text(response_with_tool_results)
+        self._record_assistant_history(content)
+        
+        # Extract reasoning blocks if present (for non-streaming responses)
+        reasoning_texts = NonStreamProcessor.extract_reasoning_blocks(response_with_tool_results)
+        reasoning_blocks = [
+            self._history_display_manager.create_block("reasoning", content=text)
+            for text in reasoning_texts
+        ]
+        if reasoning_blocks:
+            self._add_to_conversation_history("assistant", reasoning_blocks)
+        
+        response_dict = self._create_response_dict(content=content)
+        if reasoning_texts:
+            response_dict["blocks"] = [
+                {"category": "reasoning", "content": text}
+                for text in reasoning_texts
+            ]
+        return response_dict
     
     def _create_response_dict(self, content: str = "", stream: Any = None, output: Any = None) -> Dict[str, Any]:
         """Create a standardized response dictionary."""
@@ -175,66 +192,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         if output is not None:
             response["output"] = output
         return response
-    
-    def _extract_response_content(self, response: Any) -> str:
-        """Extract text content from OpenAI Response API response."""
-        if not response:
-            return ""
-
-        text_parts = []
-        
-        # Helper to get attribute or dict value
-        def get_value(obj, key, default=None):
-            if isinstance(obj, dict):
-                return obj.get(key, default)
-            return getattr(obj, key, default)
-        
-        def append_output_text(items):
-            for item in items:
-                item_type = get_value(item, 'type')
-                if item_type == 'output_text':
-                    text = get_value(item, 'text') or extract_text_from_content(get_value(item, 'content'))
-                    if text:
-                        text_parts.append(str(text))
-                elif item_type == 'code_interpreter_call':
-                    code = get_value(item, 'code') or get_value(item, 'input')
-                    if code:
-                        text_parts.append(f"\n\n```python\n{code}\n```\n\n")
-                    output = get_value(item, 'output')
-                    if output:
-                        if isinstance(output, list):
-                            for output_item in output:
-                                output_type = get_value(output_item, 'type')
-                                if output_type == 'text':
-                                    text = get_value(output_item, 'text')
-                                    if text:
-                                        text_parts.append(str(text))
-                                elif output_type == 'image':
-                                    text_parts.append("\n[Code generated an image]\n")
-                        else:
-                            text_parts.append(str(output))
-                elif item_type == 'message':
-                    content_blocks = get_value(item, 'content', [])
-                    for block in content_blocks:
-                        text = get_value(block, 'text')
-                        if text:
-                            text_parts.append(str(text))
-        
-        if hasattr(response, 'items') and response.items:
-            append_output_text(response.items)
-        
-        if hasattr(response, 'output') and response.output:
-            append_output_text(response.output)
-        
-        if hasattr(response, 'output_text'):
-            text_parts.append(extract_text_from_content(response.output_text))
-        
-        if not text_parts:
-            text = get_value(response, 'text') or extract_text_from_content(get_value(response, 'content'))
-            if text:
-                text_parts.append(str(text))
-        
-        return ''.join(text_parts) if text_parts else str(response) if response else ""
     
     def _convert_messages_to_input(
         self,
@@ -525,5 +482,13 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             temperature=self.agent.temperature,
             tools=tools_config if tools_config else [],
             stream=False,  # Don't stream during function call loop
-            reasoning={"summary": "auto"},
+            reasoning=self._build_reasoning_config(),
         )
+
+    def _build_reasoning_config(self) -> Dict[str, Any]:
+        """Build the Response API reasoning configuration."""
+        reasoning_config = {"summary": "auto"}
+        effort = getattr(self.agent, "reasoning_effort", None)
+        if effort:
+            reasoning_config["effort"] = effort
+        return reasoning_config

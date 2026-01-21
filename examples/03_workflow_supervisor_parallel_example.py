@@ -56,7 +56,6 @@ def main():
     config = slg.UIConfig(
         title="Parallel Product Analysis Team",
         page_icon="📊",
-        stream=True,
         welcome_message="""Welcome to the **Parallel Product Analysis Team**!
 
 **Parallel Supervised Workflow**: Our analysis supervisor coordinates specialist agents who work SIMULTANEOUSLY for faster insights.
@@ -64,10 +63,10 @@ def main():
 ## 🧠 How It Works:
 
 ### 🎯 Team Structure
-**📊 Analysis Supervisor**: Coordinates parallel analysis and synthesizes results
-🔍 **Market Analyst**: Market trends and competitive analysis  
-⚙️ **Technical Analyst**: Technical specifications and features
-👥 **Customer Analyst**: Customer feedback and sentiment analysis
+- 📊 Analysis Supervisor**: Coordinates parallel analysis and synthesizes results
+- 🔍 **Market Analyst**: Market trends and competitive analysis
+- ⚙️ **Technical Analyst**: Technical specifications and features
+- 👥 **Customer Analyst**: Customer feedback and sentiment analysis
 
 ### ⚡ Parallel Workflow
 1. **Supervisor** receives your analysis request

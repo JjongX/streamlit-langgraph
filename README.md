@@ -1222,6 +1222,7 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 | `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
 | `model` | `str` | `"gpt-4.1-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
+| `reasoning_effort` | `str` | `None` | OpenAI Responses API reasoning effort: `"low"`, `"medium"`, or `"high"` |
 | `tools` | `List[str]` | `[]` | List of tool names available to the agent |
 | `mcp_servers` | `Dict[str, Dict]` | `None` | MCP server configurations (see [MCP Tools](#mcp-model-context-protocol)) |
 | `context` | `str` | `"least"` | Context mode: `"full"`, `"summary"`, or `"least"` |

@@ -15,11 +15,11 @@ def main():
 
 I'm a helpful AI assistant ready to chat with you about anything. I can help with:
 
-💡 **Questions & Answers**: Ask me about any topic
-🤔 **Problem Solving**: Work through challenges together  
-📚 **Learning**: Explain concepts and ideas
-🔍 **Research**: Search the web for current information
-💬 **Conversation**: Just chat about your day!
+- 💡 **Questions & Answers**: Ask me about any topic
+- 🤔 **Problem Solving**: Work through challenges together  
+- 📚 **Learning**: Explain concepts and ideas
+- 🔍 **Research**: Search the web for current information
+- 💬 **Conversation**: Just chat about your day!
 
 What would you like to talk about?""",
     )

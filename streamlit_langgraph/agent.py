@@ -44,7 +44,8 @@ class Agent:
         instructions: Detailed instructions guiding agent behavior
         provider: LLM provider name (default: "openai")
         model: Model name to use (default: "gpt-4.1-mini")
-        temperature: Sampling temperature for responses (default: 0.0)
+        temperature: Sampling temperature for responses (None if not specified)
+        reasoning_effort: Reasoning effort for OpenAI Responses API ("low", "medium", "high")
         allow_file_search: Enable file search capability
         allow_code_interpreter: Enable code interpreter capability
         container_id: Container ID for code interpreter (auto-created by FileHandler when code_interpreter is enabled, not loaded from YAML)
@@ -137,7 +138,8 @@ class Agent:
         agent.instructions = cfg.get("instructions")
         agent.provider = cfg.get("provider", "openai")
         agent.model = cfg.get("model", "gpt-4.1-mini")
-        agent.temperature = cfg.get("temperature", 0.0)
+        agent.temperature = cfg.get("temperature")
+        agent.reasoning_effort = cfg.get("reasoning_effort")
         agent.allow_file_search = cfg.get("allow_file_search", False)
         agent.allow_code_interpreter = cfg.get("allow_code_interpreter", False)
         agent.container_id = None
@@ -172,6 +174,13 @@ class Agent:
                 f"got '{agent.conversation_history_mode}'"
             )
 
+        valid_reasoning_efforts = {"low", "medium", "high"}
+        if agent.reasoning_effort is not None and agent.reasoning_effort not in valid_reasoning_efforts:
+            raise ValueError(
+                f"reasoning_effort must be one of {sorted(valid_reasoning_efforts)}, "
+                f"got '{agent.reasoning_effort}'"
+            )
+
 
 def get_llm_client(agent: Agent, vector_store_ids: Optional[List[str]] = None) -> Any:
     """
@@ -202,9 +211,15 @@ def get_llm_client(agent: Agent, vector_store_ids: Optional[List[str]] = None) -
                 self._provider = agent.provider.lower()
         return MinimalClient(vector_store_ids)
     else:
-        chat_model = init_chat_model(
-            model=agent.model,
-            temperature=agent.temperature
-        )
+        init_kwargs = {
+            "model": agent.model,
+            "temperature": agent.temperature,
+        }
+        if agent.provider.lower() == "openai" and agent.reasoning_effort:
+            init_kwargs["reasoning"] = {
+                "effort": agent.reasoning_effort,
+                "summary": "auto",
+            }
+        chat_model = init_chat_model(**init_kwargs)
         setattr(chat_model, "_provider", agent.provider.lower())
         return chat_model
