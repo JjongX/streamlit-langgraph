@@ -170,8 +170,8 @@ class HandoffDelegation:
     @staticmethod
     def _finish_without_delegation(agent: Agent, state: WorkflowState, input_message: str) -> Tuple[str, Dict[str, Any]]:
         """Execute agent directly when delegation is not possible."""
-        content = AgentNodeBase.execute_agent(agent, state, input_message)
-        return content, {"action": "finish"}
+        response = AgentNodeBase.execute_agent(agent, state, input_message)
+        return response.get("content", ""), {"action": "finish"}
     
     # Private Tool Building Methods
     @staticmethod

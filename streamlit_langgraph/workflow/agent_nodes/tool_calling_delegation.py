@@ -89,4 +89,5 @@ class ToolCallingDelegation:
             instructions=tool_agent.instructions,
             task=args.get("task", "")
         )
-        return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)
+        response = AgentNodeBase.execute_agent(tool_agent, state, tool_instructions, allow_stream=False)
+        return response.get("content", "")

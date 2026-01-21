@@ -159,6 +159,7 @@ class LangGraphChat:
             st.session_state.uploaded_files = []
         if "uploaded_files_set" not in st.session_state:
             st.session_state.uploaded_files_set = set()
+        st.session_state.slg_ui_config = self.config
     
     def _get_workflow_state(self) -> Dict[str, Any]:
         """Get workflow state, initializing metadata if needed."""

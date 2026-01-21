@@ -1,10 +1,14 @@
 # Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes.
 
 import uuid
+
+import streamlit as st
+
 from ...agent import get_llm_client
 from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
-from ...core.state import WorkflowStateManager
+from ...core.state import StateSynchronizer, WorkflowStateManager
+from ...ui import DisplayManager, StreamProcessor
 from ..prompts import SupervisorPromptBuilder
 from ...utils.file_handler import FileHandler
 
@@ -13,7 +17,7 @@ class AgentNodeBase:
     """Base class providing common functionality for agent node operations."""
     
     @staticmethod
-    def execute_agent(agent, state, input_message):
+    def execute_agent(agent, state, input_message, allow_stream=True):
         """Execute an agent and return the response."""
         executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
         
@@ -25,7 +29,7 @@ class AgentNodeBase:
         
         llm_client = get_llm_client(agent)
         conversation_messages = state.get("messages", [])
-        stream = False
+        stream = AgentNodeBase._should_stream(agent, state, allow_stream)
         
         file_messages = state.get("metadata", {}).get("file_messages")
         vector_store_ids = state.get("metadata", {}).get("vector_store_ids")
@@ -51,6 +55,9 @@ class AgentNodeBase:
                 file_messages=file_messages,
             )
         
+        if "id" not in result:
+            result["id"] = str(uuid.uuid4())
+
         if InterruptManager.should_interrupt(result):
             interrupt_data = InterruptManager.extract_interrupt_data(result)
             
@@ -68,9 +75,40 @@ class AgentNodeBase:
                 state, agent.name, interrupt_data, executor_key
             )
             state["metadata"].update(interrupt_update["metadata"])
-            return ""
+            return {"id": result["id"], "content": "", "agent": agent.name}
         
-        return result.get("content", "")
+        if stream:
+            # CreateAgentExecutor has no openai_client attribute; default to None.
+            AgentNodeBase._render_streaming_response(result, agent, client=getattr(executor, "openai_client", None))
+        return {"id": result["id"], "content": result["content"], "agent": agent.name}
+
+    @staticmethod
+    def _should_stream(agent, state, allow_stream):
+        """Decide whether to stream agent output in workflows."""
+        metadata = state["metadata"]
+        routing = metadata.get("routing_decision", {})
+        if routing.get("target_worker") == "PARALLEL":
+            return False
+        if getattr(agent, "human_in_loop", False):
+            return False
+        return allow_stream and metadata["stream"]
+    
+    @staticmethod
+    def _render_streaming_response(result, agent, stream_renderer=None, client=None):
+        """Render a streaming response directly to the UI and persist display sections."""
+        config = st.session_state["slg_ui_config"]
+        state_manager = StateSynchronizer()
+        display_manager = DisplayManager(config=config, state_manager=state_manager)
+        stream_processor = StreamProcessor(
+            client=client,
+            container_id=getattr(agent, "container_id", None),
+        )
+        section = display_manager.add_section("assistant")
+        section._agent_info = {"agent": agent.name}
+        section._message_id = result["id"]
+        full_response = stream_processor.process_stream(section, result["stream"])
+        result["content"] = full_response
+        result.pop("stream", None)
 
     @staticmethod
     def extract_user_query(state) -> str:
@@ -119,7 +157,6 @@ class AgentNodeFactory:
                 }
             return supervisor_agent_node
         else:  # tool calling delegation mode
-            
             tool_agents_map = {agent.name: agent for agent in workers}
             def supervisor_agent_node(state):
                 user_query = AgentNodeBase.extract_user_query(state)
@@ -159,8 +196,8 @@ class AgentNodeFactory:
                 }
             return {
                 "current_agent": worker.name,
-                "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": worker.name}],
-                "agent_outputs": {worker.name: response}
+                "messages": [{"id": response["id"], "role": "assistant", "content": response["content"], "agent": worker.name}],
+                "agent_outputs": {worker.name: response["content"]}
             }
         return worker_agent_node
     
