@@ -269,7 +269,20 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             
             result_text = NonStreamProcessor.extract_langchain_text(out)
             self._record_assistant_history(result_text)
-            return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
+            reasoning_texts = NonStreamProcessor.extract_langchain_reasoning(out)
+            if reasoning_texts:
+                reasoning_blocks = [
+                    self._history_display_manager.create_block("reasoning", content=text)
+                    for text in reasoning_texts
+                ]
+                self._add_to_conversation_history("assistant", reasoning_blocks)
+            response = {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
+            if reasoning_texts:
+                response["blocks"] = [
+                    {"category": "reasoning", "content": text}
+                    for text in reasoning_texts
+                ]
+            return response
         except Exception as e:
             return {"id": str(uuid.uuid4()), "role": "assistant", "content": f"Error: {str(e)}", "agent": self.agent.name}
     

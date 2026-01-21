@@ -47,7 +47,6 @@ def main():
     config = slg.UIConfig(
         title="Hierarchical Multi-Team Organization",
         page_icon="🏢",
-        stream=True,
         welcome_message="""Welcome to the **Hierarchical Multi-Team Organization**!
 
 **Hierarchical Workflow**: A senior project manager coordinates multiple specialized teams, each with their own supervisor and specialists.

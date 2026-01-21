@@ -26,7 +26,6 @@ def main():
     config = slg.UIConfig(
         title="Strategic Consulting Network",
         page_icon="🕸️",
-        stream=True,
         welcome_message="""Welcome to the **Strategic Consulting Network**!
 
 This demonstrates a **true network pattern** where specialists collaborate dynamically, handing work back and forth as needed - not just passing it sequentially.

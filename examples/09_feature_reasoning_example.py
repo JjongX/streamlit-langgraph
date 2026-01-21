@@ -9,7 +9,6 @@ def main():
     config = slg.UIConfig(
         title="Reasoning Chat Assistant",
         page_icon="🧠",
-        stream=False,
         welcome_message="""Welcome to the **Reasoning Chat Assistant**!
 
 💬 **Single Agent Mode with Reasoning**: This example demonstrates how to use OpenAI's reasoning effort feature to see the AI's thinking process.

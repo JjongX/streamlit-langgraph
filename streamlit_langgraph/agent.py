@@ -211,9 +211,15 @@ def get_llm_client(agent: Agent, vector_store_ids: Optional[List[str]] = None) -
                 self._provider = agent.provider.lower()
         return MinimalClient(vector_store_ids)
     else:
-        chat_model = init_chat_model(
-            model=agent.model,
-            temperature=agent.temperature
-        )
+        init_kwargs = {
+            "model": agent.model,
+            "temperature": agent.temperature,
+        }
+        if agent.provider.lower() == "openai" and agent.reasoning_effort:
+            init_kwargs["reasoning"] = {
+                "effort": agent.reasoning_effort,
+                "summary": "auto",
+            }
+        chat_model = init_chat_model(**init_kwargs)
         setattr(chat_model, "_provider", agent.provider.lower())
         return chat_model

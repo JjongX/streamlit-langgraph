@@ -61,6 +61,44 @@ class NonStreamProcessor:
         return str(out) if out else ""
 
     @staticmethod
+    def extract_langchain_reasoning(out: Any) -> List[str]:
+        """Extract reasoning texts from LangChain agent output."""
+        messages = []
+        if isinstance(out, dict):
+            messages = out.get("messages") or []
+        elif isinstance(out, AIMessage):
+            messages = [out]
+
+        texts: List[str] = []
+        for msg in messages:
+            if not isinstance(msg, AIMessage):
+                continue
+            content = getattr(msg, "content", None)
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "reasoning":
+                    if block.get("reasoning"):
+                        texts.append(str(block.get("reasoning")).strip())
+                    summary = block.get("summary")
+                    if isinstance(summary, list):
+                        texts.extend(
+                            str(item.get("text")).strip()
+                            for item in summary
+                            if isinstance(item, dict) and item.get("text")
+                        )
+                    elif isinstance(summary, dict) and summary.get("text"):
+                        texts.append(str(summary.get("text")).strip())
+                elif block_type == "reasoning_summary_text":
+                    if block.get("text"):
+                        texts.append(str(block.get("text")).strip())
+
+        return [text for text in texts if text]
+
+    @staticmethod
     def extract_response_api_text(response: Any) -> str:
         """Extract text content from OpenAI Response API response."""
         if not response:

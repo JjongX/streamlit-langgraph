@@ -12,7 +12,6 @@ class StreamProcessor:
     Handles:
     - OpenAI Responses API stream events
     - LangChain stream_mode="messages" format (tokens)
-    - LangChain stream_mode="updates" format (events)
     """
     
     def __init__(self, client=None, container_id=None):
@@ -43,8 +42,6 @@ class StreamProcessor:
                     stream_type = 'langchain_messages'
                 elif hasattr(event, 'type'):
                     stream_type = 'responses_api'
-                elif isinstance(event, dict):
-                    stream_type = 'langchain_updates'
                 else:
                     raise ValueError(f"Unknown stream type: {event}")
             
@@ -57,10 +54,6 @@ class StreamProcessor:
                 delta = self._process_langchain_message_token(token, section)
                 if delta:
                     full_response += delta
-            elif stream_type == 'langchain_updates':
-                partial_response = self._process_langchain_updates_event(event, section, full_response)
-                if partial_response and len(partial_response) > len(full_response):
-                    full_response = partial_response
         
         return full_response
     
@@ -149,6 +142,11 @@ class StreamProcessor:
                 if text:
                     text_parts.append(text)
                 self._message_annotations(block, section)
+            elif block_type in ('reasoning', 'reasoning_summary_text'):
+                reasoning_text = self._extract_reasoning_block_text(block)
+                if reasoning_text:
+                    section.update("reasoning", reasoning_text)
+                    section.stream()
             elif block_type == 'server_tool_call':
                 self._message_tool_call(block, section)
             elif block_type == 'server_tool_result':
@@ -238,68 +236,30 @@ class StreamProcessor:
                         section.update("image", image_bytes, filename=filename)
                         section.update("download", image_bytes, filename=filename)
                         section.stream()
+
+    def _extract_reasoning_block_text(self, block: dict) -> str:
+        """Extract reasoning text from a content block."""
+        if not isinstance(block, dict):
+            return ""
+        if block.get("type") == "reasoning_summary_text":
+            text = block.get("text", "")
+            return str(text) if text is not None else ""
+        if block.get("type") == "reasoning":
+            # Streaming emits reasoning deltas under the "reasoning" key.
+            if block.get("reasoning") is not None:
+                return str(block.get("reasoning"))
+            if block.get("text") is not None:
+                return str(block.get("text"))
+            summary = block.get("summary")
+            if isinstance(summary, list):
+                texts = [
+                    str(item.get("text"))
+                    for item in summary
+                    if isinstance(item, dict) and item.get("text")
+                ]
+                return "\n\n".join(t for t in texts if t is not None)
+            if isinstance(summary, dict) and summary.get("text"):
+                return str(summary.get("text"))
+        return ""
+
     
-    def _process_langchain_updates_event(self, event: dict, section, accumulated_content: str = "") -> str:
-        """
-        Process a single LangChain/LangGraph stream event incrementally.
-        
-        LangChain streams return dictionaries with node names as keys,
-        containing state updates with messages.
-        
-        Args:
-            event: Single stream event (dict)
-            section: Display section to update
-            accumulated_content: Previously accumulated content
-            
-        Returns:
-            Updated full response content
-        """
-        if not isinstance(event, dict):
-            return accumulated_content
-        
-        for _, state_update in event.items():
-            if isinstance(state_update, dict):
-                if 'messages' in state_update:
-                    messages = state_update['messages']
-                    for msg in messages:
-                        if isinstance(msg, AIMessage):
-                            if hasattr(msg, 'content') and msg.content:
-                                if isinstance(msg.content, str):
-                                    new_content = msg.content
-                                    if new_content.startswith(accumulated_content):
-                                        delta = new_content[len(accumulated_content):]
-                                        if delta:
-                                            section.update("text", delta)
-                                            section.stream()
-                                            return new_content
-                                    else:
-                                        section.update("text", new_content)
-                                        section.stream()
-                                        return new_content
-                                elif isinstance(msg.content, list):
-                                    text_parts = []
-                                    for block in msg.content:
-                                        if isinstance(block, dict) and block.get('type') == 'text':
-                                            text_parts.append(block.get('text', ''))
-                                        elif isinstance(block, str):
-                                            text_parts.append(block)
-                                    if text_parts:
-                                        new_content = ''.join(text_parts)
-                                        if new_content != accumulated_content:
-                                            if new_content.startswith(accumulated_content):
-                                                delta = new_content[len(accumulated_content):]
-                                                if delta:
-                                                    section.update("text", delta)
-                                                    section.stream()
-                                            else:
-                                                section.update("text", new_content)
-                                                section.stream()
-                                            return new_content
-                elif 'output' in state_update:
-                    output = state_update['output']
-                    if output and str(output) != accumulated_content:
-                        section.update("text", str(output))
-                        section.stream()
-                        return str(output)
-        
-        return accumulated_content

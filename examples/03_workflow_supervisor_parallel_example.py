@@ -56,7 +56,6 @@ def main():
     config = slg.UIConfig(
         title="Parallel Product Analysis Team",
         page_icon="📊",
-        stream=True,
         welcome_message="""Welcome to the **Parallel Product Analysis Team**!
 
 **Parallel Supervised Workflow**: Our analysis supervisor coordinates specialist agents who work SIMULTANEOUSLY for faster insights.
