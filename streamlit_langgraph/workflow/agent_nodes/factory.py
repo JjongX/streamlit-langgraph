@@ -1,25 +1,24 @@
-# Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes.
+"""Factory for creating LangGraph agent nodes with delegation modes."""
 
 import uuid
 
-import streamlit as st
-
 from ...agent import get_llm_client
-from ...core.executor.registry import ExecutorRegistry
 from ...core.middleware import InterruptManager
-from ...core.state import StateSynchronizer, WorkflowStateManager
-from ...ui import DisplayManager, StreamProcessor
+from ...core.runtime import RuntimeHooks
+from ...core.state import WorkflowStateManager
 from ..prompts import SupervisorPromptBuilder
 from ...utils.file_handler import FileHandler
 
 
 class AgentNodeBase:
     """Base class providing common functionality for agent node operations."""
-    
-    @staticmethod
-    def execute_agent(agent, state, input_message, allow_stream=True):
+
+    def __init__(self, runtime: RuntimeHooks):
+        self.runtime = runtime
+
+    def execute_agent(self, agent, state, input_message, allow_stream=True):
         """Execute an agent and return the response."""
-        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
+        executor = self.runtime.executor_registry.get_or_create(agent, executor_type="workflow")
         
         if hasattr(executor, 'tools'):
             executor.tools = agent.get_tools()
@@ -55,8 +54,7 @@ class AgentNodeBase:
                 file_messages=file_messages,
             )
         
-        if "id" not in result:
-            result["id"] = str(uuid.uuid4())
+        result.setdefault("id", str(uuid.uuid4()))
 
         if InterruptManager.should_interrupt(result):
             interrupt_data = InterruptManager.extract_interrupt_data(result)
@@ -77,9 +75,13 @@ class AgentNodeBase:
             state["metadata"].update(interrupt_update["metadata"])
             return {"id": result["id"], "content": "", "agent": agent.name}
         
-        if stream:
-            # CreateAgentExecutor has no openai_client attribute; default to None.
-            AgentNodeBase._render_streaming_response(result, agent, client=getattr(executor, "openai_client", None))
+        if stream and self.runtime.stream_renderer:
+            result["content"] = self.runtime.stream_renderer.render(
+                agent,
+                result["stream"],
+                result["id"],
+            )
+            result.pop("stream", None)
         return {"id": result["id"], "content": result["content"], "agent": agent.name}
 
     @staticmethod
@@ -94,23 +96,6 @@ class AgentNodeBase:
         return allow_stream and metadata["stream"]
     
     @staticmethod
-    def _render_streaming_response(result, agent, stream_renderer=None, client=None):
-        """Render a streaming response directly to the UI and persist display sections."""
-        config = st.session_state["slg_ui_config"]
-        state_manager = StateSynchronizer()
-        display_manager = DisplayManager(config=config, state_manager=state_manager)
-        stream_processor = StreamProcessor(
-            client=client,
-            container_id=getattr(agent, "container_id", None),
-        )
-        section = display_manager.add_section("assistant")
-        section._agent_info = {"agent": agent.name}
-        section._message_id = result["id"]
-        full_response = stream_processor.process_stream(section, result["stream"])
-        result["content"] = full_response
-        result.pop("stream", None)
-
-    @staticmethod
     def extract_user_query(state) -> str:
         """Extract user query from state messages."""
         for msg in reversed(state["messages"]):
@@ -122,13 +107,17 @@ class AgentNodeBase:
 class AgentNodeFactory:
     """Factory for creating LangGraph agent nodes with handoff and tool calling delegation modes."""
 
-    @staticmethod
-    def create_supervisor_agent_node(supervisor, workers, allow_parallel=False, delegation_mode="handoff"):
+    def __init__(self, runtime: RuntimeHooks):
+        self.runtime = runtime
+        self.base = AgentNodeBase(runtime)
+
+    def create_supervisor_agent_node(self, supervisor, workers, allow_parallel=False, delegation_mode="handoff"):
         """Create a supervisor agent node with structured routing."""
         from .tool_calling_delegation import ToolCallingDelegation  # lazy import to avoid circular import
 
         if delegation_mode == "handoff":
             from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
+            handoff = HandoffDelegation(self.runtime, self.base)
             
             def supervisor_agent_node(state):
                 pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
@@ -144,11 +133,16 @@ class AgentNodeFactory:
                     worker_list=", ".join([f"{w.name} ({w.role})" for w in workers]),
                     worker_outputs=worker_outputs
                 )
-                response, routing_decision = HandoffDelegation.execute_supervisor_with_routing(
+                response, routing_decision = handoff.execute_supervisor_with_routing(
                     supervisor, state, supervisor_instructions, workers, allow_parallel
                 )
                 # Always create message
-                messages_update = [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": supervisor.name}]
+                messages_update = [{
+                    "id": str(uuid.uuid4()),
+                    "role": "assistant",
+                    "content": response,
+                    "agent": supervisor.name,
+                }]
                 return {
                     "current_agent": supervisor.name,
                     "messages": messages_update,
@@ -158,21 +152,26 @@ class AgentNodeFactory:
             return supervisor_agent_node
         else:  # tool calling delegation mode
             tool_agents_map = {agent.name: agent for agent in workers}
+            tool_caller = ToolCallingDelegation(self.base)
             def supervisor_agent_node(state):
                 user_query = AgentNodeBase.extract_user_query(state)
                 agent_tools = ToolCallingDelegation.create_agent_tools(workers)
-                response = ToolCallingDelegation.execute_agent_with_tools(
+                response = tool_caller.execute_agent_with_tools(
                     supervisor, state, user_query, agent_tools, tool_agents_map
                 )
                 return {
                     "current_agent": supervisor.name,
-                    "messages": [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": supervisor.name}],
+                    "messages": [{
+                        "id": str(uuid.uuid4()),
+                        "role": "assistant",
+                        "content": response,
+                        "agent": supervisor.name,
+                    }],
                     "agent_outputs": {supervisor.name: response}
                 }
             return supervisor_agent_node
     
-    @staticmethod
-    def create_worker_agent_node(worker, supervisor):
+    def create_worker_agent_node(self, worker, supervisor):
         """Create a worker agent node for supervisor workflows."""
         from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
         
@@ -185,7 +184,7 @@ class AgentNodeFactory:
                 role=worker.role, instructions=worker.instructions, user_query=user_query,
                 supervisor_output=context_data, previous_worker_outputs=previous_worker_outputs
             )
-            response = AgentNodeBase.execute_agent(worker, state, worker_instructions)
+            response = self.base.execute_agent(worker, state, worker_instructions)
             
             executor_key = f"workflow_executor_{worker.name}"
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
@@ -196,16 +195,21 @@ class AgentNodeFactory:
                 }
             return {
                 "current_agent": worker.name,
-                "messages": [{"id": response["id"], "role": "assistant", "content": response["content"], "agent": worker.name}],
-                "agent_outputs": {worker.name: response["content"]}
+                "messages": [{
+                    "id": response["id"],
+                    "role": "assistant",
+                    "content": response["content"],
+                    "agent": worker.name,
+                }],
+                "agent_outputs": {worker.name: response["content"]},
             }
         return worker_agent_node
     
-    @staticmethod
-    def create_network_agent_node(agent, peer_agents):
+    def create_network_agent_node(self, agent, peer_agents):
         """Create a network agent node that can hand off to any peer."""
         from .handoff_delegation import HandoffDelegation  # lazy import to avoid circular import
         from ..prompts import NetworkPromptBuilder
+        handoff = HandoffDelegation(self.runtime, self.base)
         
         def network_agent_node(state):
             pending_interrupts = state.get("metadata", {}).get("pending_interrupts", {})
@@ -228,11 +232,16 @@ class AgentNodeFactory:
                 peer_outputs=peer_outputs
             )
             
-            response, routing_decision = HandoffDelegation.execute_supervisor_with_routing(
+            response, routing_decision = handoff.execute_supervisor_with_routing(
                 agent, state, network_instructions, peer_agents, allow_parallel=False
             )
             
-            messages_update = [{"id": str(uuid.uuid4()), "role": "assistant", "content": response, "agent": agent.name}]
+            messages_update = [{
+                "id": str(uuid.uuid4()),
+                "role": "assistant",
+                "content": response,
+                "agent": agent.name,
+            }]
             return {
                 "current_agent": agent.name,
                 "messages": messages_update,

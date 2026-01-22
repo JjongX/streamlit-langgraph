@@ -1,8 +1,6 @@
 # Executor registry for managing executor lifecycle.
 
-from typing import Any, Optional
-
-import streamlit as st
+from typing import Any, Dict, Optional
 
 from ...agent import Agent
 from .create_agent import CreateAgentExecutor
@@ -11,6 +9,9 @@ from .response_api import ResponseAPIExecutor
 
 class ExecutorRegistry:
     """Registry for managing executor instances."""
+
+    def __init__(self):
+        self._executors: Dict[str, Any] = {}
     
     def get_or_create(
         self, agent: Agent, executor_type: str = "workflow",
@@ -39,16 +40,24 @@ class ExecutorRegistry:
         desired_executor_cls = ResponseAPIExecutor if use_response_api else CreateAgentExecutor
         desired_tools = tools if tools is not None else agent.get_tools()
         
-        existing_executor = st.session_state.agent_executors.get(executor_key)
+        existing_executor = self._executors.get(executor_key)
         if not isinstance(existing_executor, desired_executor_cls):
             executor = desired_executor_cls(agent, tools=desired_tools)
-            st.session_state.agent_executors[executor_key] = executor
+            self._executors[executor_key] = executor
         else:
             executor = existing_executor
             if hasattr(executor, "tools"):
                 executor.tools = desired_tools
         
         return executor
+
+    def get(self, executor_key: str) -> Optional[Any]:
+        """Get an executor by key if available."""
+        return self._executors.get(executor_key)
+
+    def clear(self) -> None:
+        """Clear all cached executors."""
+        self._executors.clear()
     
     @staticmethod
     def has_native_tools(agent: Agent) -> bool:

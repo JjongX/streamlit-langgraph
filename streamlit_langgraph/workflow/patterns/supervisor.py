@@ -6,6 +6,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
+from ...core.executor.registry import ExecutorRegistry
+from ...core.runtime import RuntimeHooks
 from ..agent_nodes.factory import AgentNodeFactory
 from ..agent_nodes.routing import RoutingHelper
 from ...core.state import WorkflowState
@@ -21,9 +23,14 @@ class SupervisorPattern:
     """
     
     @staticmethod
-    def create_supervisor_workflow(supervisor_agent: Agent, worker_agents: List[Agent], 
-                                 execution_mode: str = "sequential", delegation_mode: str = "handoff",
-                                 checkpointer: Optional[Any] = None) -> StateGraph:
+    def create_supervisor_workflow(
+        supervisor_agent: Agent,
+        worker_agents: List[Agent],
+        execution_mode: str = "sequential",
+        delegation_mode: str = "handoff",
+        checkpointer: Optional[Any] = None,
+        runtime: Optional[RuntimeHooks] = None,
+    ) -> StateGraph:
         """
         Create a supervisor workflow where a supervisor agent coordinates and delegates tasks 
         to worker agents using specified execution and delegation modes.
@@ -50,38 +57,56 @@ class SupervisorPattern:
         # Ensure all agents with code_interpreter share the same container_id
         Agent.sync_container_ids([supervisor_agent] + worker_agents)
     
+        runtime_hooks = runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
+        node_factory = AgentNodeFactory(runtime_hooks)
+
         # Tool calling mode - single node, agents as tools
         if delegation_mode == "tool_calling":
             graph = StateGraph(WorkflowState)
-            calling_node = AgentNodeFactory.create_supervisor_agent_node(
+            calling_node = node_factory.create_supervisor_agent_node(
                 supervisor_agent, worker_agents, delegation_mode="tool_calling"
             )
             graph.add_node(supervisor_agent.name, calling_node)
             graph.add_edge(START, supervisor_agent.name)
             graph.add_edge(supervisor_agent.name, END)
-            return graph.compile(checkpointer=workflow_checkpointer)
+            compiled = graph.compile(checkpointer=workflow_checkpointer)
+            compiled.runtime_hooks = runtime_hooks
+            return compiled
         
         graph = StateGraph(WorkflowState)
         allow_parallel = (execution_mode == "parallel")
-        supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
+        supervisor_node = node_factory.create_supervisor_agent_node(
             supervisor_agent, worker_agents, allow_parallel=allow_parallel, delegation_mode="handoff"
         )
         graph.add_node(supervisor_agent.name, supervisor_node)
         graph.add_edge(START, supervisor_agent.name)
 
         if execution_mode == "sequential":
-            return SupervisorPattern._create_sequential_supervisor_workflow(
-                graph, supervisor_agent, worker_agents, workflow_checkpointer)
+            compiled = SupervisorPattern._create_sequential_supervisor_workflow(
+                graph, supervisor_agent, worker_agents, workflow_checkpointer, node_factory
+            )
+            compiled.runtime_hooks = runtime_hooks
+            return compiled
         else: # parallel
-            return SupervisorPattern._create_parallel_supervisor_workflow(
-                graph, supervisor_agent, worker_agents, workflow_checkpointer)
+            compiled = SupervisorPattern._create_parallel_supervisor_workflow(
+                graph, supervisor_agent, worker_agents, workflow_checkpointer, node_factory
+            )
+            compiled.runtime_hooks = runtime_hooks
+            return compiled
     
     @staticmethod
-    def _create_sequential_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
-                                             worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
+    def _create_sequential_supervisor_workflow(
+        graph: StateGraph,
+        supervisor_agent: Agent,
+        worker_agents: List[Agent],
+        workflow_checkpointer: Optional[Any] = None,
+        node_factory: Optional[AgentNodeFactory] = None,
+    ) -> StateGraph:
         """Create sequential workflow: supervisor -> worker -> supervisor loop."""
+        if node_factory is None:
+            node_factory = AgentNodeFactory(RuntimeHooks(executor_registry=ExecutorRegistry()))
         for worker in worker_agents:
-            graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
+            graph.add_node(worker.name, node_factory.create_worker_agent_node(worker, supervisor_agent))
 
         worker_names = [worker.name for worker in worker_agents]
         supervisor_sequential_route = RoutingHelper.create_sequential_route(worker_names)
@@ -96,13 +121,21 @@ class SupervisorPattern:
         return graph.compile(checkpointer=workflow_checkpointer)
 
     @staticmethod
-    def _create_parallel_supervisor_workflow(graph: StateGraph, supervisor_agent: Agent, 
-                                           worker_agents: List[Agent], workflow_checkpointer: Optional[Any] = None) -> StateGraph:
+    def _create_parallel_supervisor_workflow(
+        graph: StateGraph,
+        supervisor_agent: Agent,
+        worker_agents: List[Agent],
+        workflow_checkpointer: Optional[Any] = None,
+        node_factory: Optional[AgentNodeFactory] = None,
+    ) -> StateGraph:
         """Create parallel workflow: supervisor -> fanout -> all workers -> supervisor."""
         graph.add_node("parallel_fanout", lambda state: state)
+
+        if node_factory is None:
+            node_factory = AgentNodeFactory(RuntimeHooks(executor_registry=ExecutorRegistry()))
         
         for worker in worker_agents:
-            graph.add_node(worker.name, AgentNodeFactory.create_worker_agent_node(worker, supervisor_agent))
+            graph.add_node(worker.name, node_factory.create_worker_agent_node(worker, supervisor_agent))
         
         supervisor_parallel_route = RoutingHelper.create_parallel_route()
         

@@ -175,7 +175,7 @@ class DisplayManager:
         
         Args:
             config: UI configuration (optional, for non-UI use cases like executors)
-            state_manager: StateSynchronizer instance for accessing workflow_state
+            state_manager: Streamlit-backed state manager for accessing workflow_state
         """
         self.config = config
         self.state_manager = state_manager

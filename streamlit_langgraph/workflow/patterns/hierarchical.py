@@ -8,6 +8,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
+from ...core.executor.registry import ExecutorRegistry
+from ...core.runtime import RuntimeHooks
 from ..agent_nodes.factory import AgentNodeFactory
 from ..agent_nodes.routing import RoutingHelper
 from ...core.state import WorkflowState
@@ -38,7 +40,8 @@ class HierarchicalPattern:
         top_supervisor: Agent,
         supervisor_teams: List[SupervisorTeam],
         execution_mode: str = "sequential",
-        checkpointer: Optional[Any] = None
+        checkpointer: Optional[Any] = None,
+        runtime: Optional[RuntimeHooks] = None,
     ) -> StateGraph:
         """
         Create a hierarchical workflow with a top supervisor coordinating multiple
@@ -63,11 +66,13 @@ class HierarchicalPattern:
         else:
             workflow_checkpointer = checkpointer
         
+        runtime_hooks = runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
+        node_factory = AgentNodeFactory(runtime_hooks)
         graph = StateGraph(WorkflowState)
         
         # Setting up top supervisor node
         sub_supervisors = [team.supervisor for team in supervisor_teams]
-        top_supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
+        top_supervisor_node = node_factory.create_supervisor_agent_node(
             top_supervisor, sub_supervisors, allow_parallel=False
         )
         graph.add_node(top_supervisor.name, top_supervisor_node)
@@ -76,22 +81,29 @@ class HierarchicalPattern:
         # Setting up sub-supervisor nodes and worker nodes
         # sub-supervisor is just a supervisor for their team\
         for team in supervisor_teams:
-            sub_supervisor_node = AgentNodeFactory.create_supervisor_agent_node(
+            sub_supervisor_node = node_factory.create_supervisor_agent_node(
                 team.supervisor, team.workers, allow_parallel=False
             )
             graph.add_node(team.supervisor.name, sub_supervisor_node)
             # Add worker nodes using standard worker node factory
             for worker in team.workers:
-                worker_node = AgentNodeFactory.create_worker_agent_node(worker, team.supervisor)
+                worker_node = node_factory.create_worker_agent_node(worker, team.supervisor)
                 graph.add_node(worker.name, worker_node)
+
+        graph = HierarchicalPattern._add_hierarchical_routing(
+            graph, top_supervisor, supervisor_teams
+        )
         
-        graph = HierarchicalPattern._add_hierarchical_routing(graph, top_supervisor, supervisor_teams)
-        
-        return graph.compile(checkpointer=workflow_checkpointer)
+        compiled = graph.compile(checkpointer=workflow_checkpointer)
+        compiled.runtime_hooks = runtime_hooks
+        return compiled
     
     @staticmethod
-    def _add_hierarchical_routing(graph: StateGraph, top_supervisor: Agent, 
-                                  supervisor_teams: List[SupervisorTeam]) -> StateGraph:
+    def _add_hierarchical_routing(
+        graph: StateGraph,
+        top_supervisor: Agent,
+        supervisor_teams: List[SupervisorTeam],
+    ) -> StateGraph:
         """
         Add routing edges for hierarchical workflow.
         
@@ -129,4 +141,3 @@ class HierarchicalPattern:
                 graph.add_edge(worker.name, team.supervisor.name)
         
         return graph
-

@@ -3,26 +3,33 @@
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-import streamlit as st
 from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from ...agent import Agent, get_llm_client
 from ...utils.text_extraction import extract_text_from_content
-from ...core.executor.registry import ExecutorRegistry
+from ...core.runtime import RuntimeHooks
 from ...core.state import WorkflowState, WorkflowStateManager
 from .factory import AgentNodeBase
 
 
 class HandoffDelegation:
     """Handoff delegation pattern for supervisor-worker workflows."""
-    
-    # Public API Methods    
-    @staticmethod
-    def execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
-                                        input_message: str, workers: List[Agent],
-                                        allow_parallel: bool = False) -> Tuple[str, Dict[str, Any]]:
+
+    def __init__(self, runtime: RuntimeHooks, agent_executor: AgentNodeBase):
+        self.runtime = runtime
+        self.agent_executor = agent_executor
+
+    # Public API
+    def execute_supervisor_with_routing(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+        workers: List[Agent],
+        allow_parallel: bool = False,
+    ) -> Tuple[str, Dict[str, Any]]:
         """
         Execute supervisor agent with structured routing via function calling.
         
@@ -42,19 +49,26 @@ class HandoffDelegation:
         """
         from ...core.executor.response_api import ResponseAPIExecutor
         
-        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
+        executor = self.runtime.executor_registry.get_or_create(
+            agent,
+            executor_type="workflow",
+        )
         
         if isinstance(executor, ResponseAPIExecutor):
-            return HandoffDelegation._execute_with_response_api_executor(
+            return self._execute_with_response_api_executor(
                 agent, state, input_message, workers, allow_parallel
             )
         else:
-            return HandoffDelegation._execute_with_create_agent_executor(
+            return self._execute_with_create_agent_executor(
                 agent, state, input_message, workers, allow_parallel
             )
     
     @staticmethod
-    def build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
+    def build_worker_context(
+        state: WorkflowState,
+        worker: Agent,
+        supervisor: Agent,
+    ) -> Tuple[Optional[str], Optional[List[str]]]:
         """Build context data for worker based on context mode."""
         context_mode = worker.context
         supervisor_output = state["agent_outputs"].get(supervisor.name, "")
@@ -70,7 +84,10 @@ class HandoffDelegation:
             return None, None
     
     @staticmethod
-    def build_worker_outputs_summary(state: WorkflowState, workers: List[Agent]) -> List[str]:
+    def build_worker_outputs_summary(
+        state: WorkflowState,
+        workers: List[Agent],
+    ) -> List[str]:
         """Build summary of worker outputs from state."""
         worker_outputs = []
         worker_names = [w.name for w in workers]
@@ -80,50 +97,65 @@ class HandoffDelegation:
                 worker_outputs.append(f"**{worker_name}**: {output}")
         return worker_outputs
     
-    # Private Execution Methods    
-    @staticmethod
-    def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
-                                           input_message: str, workers: List[Agent],
-                                           allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
+    # Private execution
+    def _execute_with_response_api_executor(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+        workers: List[Agent],
+        allow_parallel: bool,
+    ) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using ResponseAPIExecutor approach with Response API function calling."""
         if not workers:
-            return HandoffDelegation._finish_without_delegation(agent, state, input_message)
+            return self._finish_without_delegation(agent, state, input_message)
         
         delegation_tool = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
         if not delegation_tool:
-            return HandoffDelegation._finish_without_delegation(agent, state, input_message)
+            return self._finish_without_delegation(agent, state, input_message)
         
-        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
+        executor = self.runtime.executor_registry.get_or_create(
+            agent,
+            executor_type="workflow",
+        )
         conversation_messages, file_messages, vector_store_ids = HandoffDelegation._extract_state_context(state)
         executor.set_vector_store_ids(vector_store_ids)
-        
-        with st.spinner(f"🤖 {agent.name} is working..."):
+
+        with self.runtime.spinner_context(f"🤖 {agent.name} is working..."):
             out = executor.invoke_response_api(
                 prompt=input_message,
                 messages=conversation_messages,
                 file_messages=file_messages,
-                delegation_tool=delegation_tool if delegation_tool else None
+                delegation_tool=delegation_tool if delegation_tool else None,
             )
         
         # Extract routing decision from Response API output
         routing_decision = HandoffDelegation._extract_response_api_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
     
-    @staticmethod
-    def _execute_with_create_agent_executor(agent: Agent, state: WorkflowState,
-                                           input_message: str, workers: List[Agent],
-                                           allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
+    def _execute_with_create_agent_executor(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+        workers: List[Agent],
+        allow_parallel: bool,
+    ) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
         if not workers:
-            return HandoffDelegation._finish_without_delegation(agent, state, input_message)
+            return self._finish_without_delegation(agent, state, input_message)
         
         delegation_tool = HandoffDelegation._build_langchain_delegation_tool(workers, allow_parallel)
         if not delegation_tool:
-            return HandoffDelegation._finish_without_delegation(agent, state, input_message)
+            return self._finish_without_delegation(agent, state, input_message)
         
         llm_client = get_llm_client(agent)
         
-        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow", tools=agent.get_tools())
+        executor = self.runtime.executor_registry.get_or_create(
+            agent,
+            executor_type="workflow",
+            tools=agent.get_tools(),
+        )
         HandoffDelegation._ensure_delegation_tool(executor, delegation_tool)
         
         executor_key = f"workflow_executor_{agent.name}"
@@ -131,7 +163,7 @@ class HandoffDelegation:
         
         conversation_messages, file_messages, _ = HandoffDelegation._extract_state_context(state)
         
-        with st.spinner(f"🤖 {agent.name} is working..."):
+        with self.runtime.spinner_context(f"🤖 {agent.name} is working..."):
             if executor.agent_obj is None:
                 executor.build_agent(llm_client)
             
@@ -167,10 +199,14 @@ class HandoffDelegation:
         routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
     
-    @staticmethod
-    def _finish_without_delegation(agent: Agent, state: WorkflowState, input_message: str) -> Tuple[str, Dict[str, Any]]:
+    def _finish_without_delegation(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+    ) -> Tuple[str, Dict[str, Any]]:
         """Execute agent directly when delegation is not possible."""
-        response = AgentNodeBase.execute_agent(agent, state, input_message)
+        response = self.agent_executor.execute_agent(agent, state, input_message)
         return response.get("content", ""), {"action": "finish"}
     
     # Private Tool Building Methods

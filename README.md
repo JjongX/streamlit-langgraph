@@ -386,25 +386,40 @@ This section provides an overview of the package's internal organization and mod
 
 ### Core Modules (`core/`)
 
+Core contains no Streamlit dependencies.
+
 **Executor (`core/executor/`):**
 - `response_api.py`: `ResponseAPIExecutor` for OpenAI Responses API
 - `create_agent.py`: `CreateAgentExecutor` for LangChain agents with HITL support
+- `extractors.py`: Pure text/reasoning extraction helpers for executor outputs
 - `registry.py`: `ExecutorRegistry` for automatic executor selection
 - `workflow.py`: `WorkflowExecutor` for workflow execution
-- `conversation_history.py`: Conversation history management mixin
+- `history/`: Conversation history tracking (data + mixin)
+
+**History (`core/history/`):**
+- `models.py`: `HistoryBlock` and `HistorySection` data structures
+- `tracker.py`: `ConversationHistoryMixin` for history tracking
+
+**Runtime (`core/runtime.py`):**
+- `RuntimeHooks`: Injected runtime dependencies (executor registry, stream renderer, spinner)
 
 **State (`core/state/`):**
 - `state_schema.py`: `WorkflowState` TypedDict and `WorkflowStateManager`
-- `state_sync.py`: `StateSynchronizer` for syncing workflow state
 
 **Middleware (`core/middleware/`):**
-- `hitl.py`: `HITLHandler` and `HITLUtils` for human-in-the-loop
+- `hitl.py`: `HITLUtils` for human-in-the-loop data utilities
 - `interrupts.py`: `InterruptManager` for interrupt handling
 
 ### UI Modules (`ui/`)
 
+Streamlit-specific rendering, state adapters, and HITL UX.
+
 - `display_manager.py`: `DisplayManager`, `Section`, and `Block` for UI rendering
+- `hitl_handler.py`: Streamlit HITL UI/UX handler
+- `nonstream_processor.py`: Non-streamed response rendering helpers
 - `stream_processor.py`: `StreamProcessor` for handling streaming responses
+- `stream_renderer.py`: Streamlit stream renderer used by `RuntimeHooks`
+- `streamlit_state.py`: Streamlit session state adapter
 
 ### Utility Modules (`utils/`)
 
@@ -413,6 +428,8 @@ This section provides an overview of the package's internal organization and mod
 - `mcp_tool.py`: `MCPToolManager` for MCP server integration
 
 ### Workflow Modules (`workflow/`)
+
+Workflow graph construction, patterns, and agent node factories.
 
 - `builder.py`: `WorkflowBuilder` for creating workflows
 - `patterns/`: Workflow pattern implementations (supervisor, hierarchical, network)
@@ -481,6 +498,11 @@ workflow_state = {
 **Key Separation**:
 - **`workflow_state`**: Persistent, single source of truth for all chat data
 - **`st.session_state`**: Streamlit-specific runtime state and references to workflow_state
+
+**Why persistent message IDs are needed**:
+- Streamlit reruns the script on each interaction, and workflows can emit repeated state snapshots while streaming.
+- Stable `id` values let the UI deduplicate streamed content vs. the finalized message stored in `workflow_state`.
+- IDs also prevent re-rendering the same message across reruns and preserve message order in history.
 
 **State Flow**:
 ```
