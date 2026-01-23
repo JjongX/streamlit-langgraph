@@ -1,13 +1,11 @@
 # File handling utilities for OpenAI API integration.
 
 import os
-import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import streamlit as st
 
 MIME_TYPES = {
     "txt" : "text/plain",
@@ -97,6 +95,7 @@ class FileHandler:
         self._container_id = container_id
         self._tracked_files: List[FileHandler.FileInfo] = []
         self._dynamic_vector_store = None
+        self._vector_store_ids: List[str] = []
         self.preprocessing_callback = preprocessing_callback
         
         # Auto-create container if code_interpreter is enabled but no container_id provided
@@ -104,9 +103,6 @@ class FileHandler:
             container = self.openai_client.containers.create(name="streamlit-langgraph")
             self._container_id = container.id
         
-        if "file_handler_vector_stores" not in st.session_state:
-            st.session_state.file_handler_vector_stores = []
-
     @staticmethod
     def ensure_llm_vector_ids(agent, llm_client, vector_store_ids):
         """
@@ -211,15 +207,14 @@ class FileHandler:
 
     def get_vector_store_ids(self):
         """Get vector store IDs for file search."""
-        vector_store_ids = []
+        vector_store_ids: List[str] = []
         
         if self._dynamic_vector_store:
             vector_store_ids.append(self._dynamic_vector_store.id)
         
-        if "file_handler_vector_stores" in st.session_state:
-            for vs_id in st.session_state.file_handler_vector_stores:
-                if vs_id not in vector_store_ids:
-                    vector_store_ids.append(vs_id)
+        for vs_id in self._vector_store_ids:
+            if vs_id not in vector_store_ids:
+                vector_store_ids.append(vs_id)
         
         return vector_store_ids
     
@@ -233,8 +228,7 @@ class FileHandler:
         self.files.clear()
         self._tracked_files.clear()
         self._dynamic_vector_store = None
-        if "file_handler_vector_stores" in st.session_state:
-            st.session_state.file_handler_vector_stores = []
+        self._vector_store_ids = []
         self._container_id = None
     
     def _save_uploaded_file(self, uploaded_file) -> Path:
@@ -302,7 +296,7 @@ class FileHandler:
             elif dir_path.is_file(): # Single file
                 files_to_upload = [dir_path]
         elif isinstance(additional_files, list): # List of file paths
-            files_to_upload = [Path(f) for f in additional_files if Path(f).exists()]
+            files_to_upload = [Path(f) for f in additional_files]
         
         # Upload each file to the container
         for file_path in files_to_upload:
@@ -382,13 +376,12 @@ class FileHandler:
         )
 
     def _get_or_create_vector_store(self):
-        """Retrieve or create a vector store, updating session state as needed."""
+        """Retrieve or create a vector store for file search."""
         if self._dynamic_vector_store is not None:
             return self._dynamic_vector_store
 
-        existing_ids = st.session_state.get("file_handler_vector_stores", [])
-        if existing_ids:
-            existing_vs_id = existing_ids[0]
+        if self._vector_store_ids:
+            existing_vs_id = self._vector_store_ids[0]
             try:
                 self._dynamic_vector_store = self.openai_client.vector_stores.retrieve(existing_vs_id)
                 return self._dynamic_vector_store
@@ -398,11 +391,8 @@ class FileHandler:
         self._dynamic_vector_store = self.openai_client.vector_stores.create(
             name="streamlit-langgraph"
         )
-        # Remember vector store ID in session state
-        if "file_handler_vector_stores" not in st.session_state:
-            st.session_state.file_handler_vector_stores = []
-        if self._dynamic_vector_store.id not in st.session_state.file_handler_vector_stores:
-            st.session_state.file_handler_vector_stores.append(self._dynamic_vector_store.id)
+        if self._dynamic_vector_store.id not in self._vector_store_ids:
+            self._vector_store_ids.append(self._dynamic_vector_store.id)
         return self._dynamic_vector_store
     
     def _finalize_file_info(self, file_info: FileInfo, file_path: Path, openai_file, vision_file):

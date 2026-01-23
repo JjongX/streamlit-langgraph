@@ -66,16 +66,12 @@ class Agent:
         Returns:
             Agent instance if single agent, or List[Agent] if multiple agents
         """
-        if file_path is None:
-            raise ValueError("file_path is required. Use Agent(file_path='config.yaml')")
-        
         agents = cls._load_from_yaml(file_path)
         if len(agents) == 1:
             return agents[0]
         elif len(agents) > 1:
             return agents
-        else:
-            raise ValueError("YAML file contains no agents.")
+        return agents
 
     def get_tools(self) -> List[Any]:
         """

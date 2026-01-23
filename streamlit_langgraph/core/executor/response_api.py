@@ -9,10 +9,9 @@ from langchain_core.tools import StructuredTool
 from openai import OpenAI
 
 from ...agent import Agent
-from ...ui.display_manager import Block
 from ...utils import MCPToolManager
-from .conversation_history import ConversationHistoryMixin
-from ...ui.nonstream_processor import NonStreamProcessor
+from ..history import ConversationHistoryMixin
+from .extractors import extract_reasoning_blocks, extract_response_api_text
 
 
 class ResponseAPIExecutor(ConversationHistoryMixin):
@@ -159,13 +158,13 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
         
         # For regular execution, extract content and reasoning, then update history
-        content = NonStreamProcessor.extract_response_api_text(response_with_tool_results)
+        content = extract_response_api_text(response_with_tool_results)
         self._record_assistant_history(content)
         
         # Extract reasoning blocks if present (for non-streaming responses)
-        reasoning_texts = NonStreamProcessor.extract_reasoning_blocks(response_with_tool_results)
+        reasoning_texts = extract_reasoning_blocks(response_with_tool_results)
         reasoning_blocks = [
-            self._history_display_manager.create_block("reasoning", content=text)
+            self._create_block("reasoning", text)
             for text in reasoning_texts
         ]
         if reasoning_blocks:

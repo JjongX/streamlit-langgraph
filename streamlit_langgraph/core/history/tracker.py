@@ -2,8 +2,7 @@
 
 from typing import Any, Dict, List
 
-from ...ui.display_manager import Block, Section, DisplayManager
-from ...utils.text_extraction import extract_text_from_content
+from .models import HistoryBlock, HistorySection
 
 
 class ConversationHistoryMixin:
@@ -12,17 +11,20 @@ class ConversationHistoryMixin:
     def _init_conversation_history(self, agent):
         """Initialize conversation history tracking."""
         self._original_system_message = f"You are a {agent.role}. {agent.instructions}"
-        self._history_display_manager = DisplayManager(config=None, state_manager=None)
-        self._conversation_history: List[Section] = []
+        self._conversation_history: List[HistorySection] = []
         self._processed_message_ids: set = set()
         self._conversation_history_mode = getattr(agent, 'conversation_history_mode', 'filtered')
 
-    def _text_block(self, text: str) -> Block:
-        """Create a text block using the display manager."""
-        return self._history_display_manager.create_block("text", content=text)
+    def _create_block(self, category: str, content: Any, filename: str = None, file_id: str = None) -> HistoryBlock:
+        """Create a history block."""
+        return HistoryBlock(category=category, content=content, filename=filename, file_id=file_id)
+
+    def _text_block(self, text: str) -> HistoryBlock:
+        """Create a text block for history tracking."""
+        return self._create_block("text", text)
     
-    def _convert_message_to_blocks(self, content: Any) -> List[Block]:
-        """Convert message content to Block objects."""
+    def _convert_message_to_blocks(self, content: Any) -> List[HistoryBlock]:
+        """Convert message content to history blocks."""
         blocks = []
         if not content:
             return blocks
@@ -54,7 +56,7 @@ class ConversationHistoryMixin:
         if self._conversation_history_mode == "disable":
             return
         if blocks:
-            section = Section(self._history_display_manager, role, blocks=blocks)
+            section = HistorySection(role=role, blocks=blocks)
             self._conversation_history.append(section)
 
     def _record_assistant_history(self, content: Any) -> None:

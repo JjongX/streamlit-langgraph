@@ -12,9 +12,17 @@ from .agent import Agent, get_llm_client
 from .core.executor import WorkflowExecutor
 from .core.executor.response_api import ResponseAPIExecutor
 from .core.executor.registry import ExecutorRegistry
-from .core.state import StateSynchronizer, WorkflowState, WorkflowStateManager
-from .core.middleware import HITLHandler, HITLUtils
-from .ui import DisplayManager, NonStreamProcessor, StreamProcessor
+from .core.middleware import HITLUtils
+from .core.runtime import RuntimeHooks
+from .core.state import WorkflowState, WorkflowStateManager
+from .ui import (
+    DisplayManager,
+    HITLHandler,
+    NonStreamProcessor,
+    StreamProcessor,
+    StreamlitStateSynchronizer,
+    StreamlitStreamRenderer,
+)
 from .utils import FileHandler, CustomTool
 
 
@@ -39,7 +47,7 @@ class UIConfig:
             where additional_files can be a directory path or list of file paths.
             Additional files will be automatically uploaded to code_interpreter container if enabled.
     """
-    title: str
+    title: str = "LangGraph Chat"
     page_icon: Optional[str] = "🤖"
     page_layout: str = "wide"
     stream: bool = True
@@ -66,7 +74,8 @@ class LangGraphChat:
         workflow: Optional[StateGraph] = None,
         agents: Optional[List[Agent]] = None,
         config: Optional[UIConfig] = None,
-        custom_tools: Optional[List[CustomTool]] = None
+        custom_tools: Optional[List[CustomTool]] = None,
+        runtime: Optional[RuntimeHooks] = None,
     ):
         """
         Initialize the LangGraph Chat interface.
@@ -76,18 +85,19 @@ class LangGraphChat:
             agents: List of agents to use
             config: Chat configuration
             custom_tools: List of custom tools to register
-            
-        Raises:
-            ValueError: If multiple agents are provided without a workflow,
-                       or if HITL is enabled without a workflow
+            runtime: Optional runtime hooks (executor registry, streaming renderer, spinner)
         """
         self.config = config or UIConfig()
         self._init_session_state()
         self.agents: Dict[str, Agent] = {}
-        self.state_manager = StateSynchronizer()
+        self.state_manager = StreamlitStateSynchronizer()
         self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
         self.workflow = workflow
-        self.workflow_executor = WorkflowExecutor()
+        workflow_runtime = getattr(workflow, "runtime_hooks", None) if workflow else None
+        self.runtime = runtime or workflow_runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
+        if self.runtime.spinner is None:
+            self.runtime.spinner = st.spinner
+        self.workflow_executor = WorkflowExecutor(self.runtime.executor_registry)
 
         if agents:
             if not workflow and len(agents) > 1:
@@ -107,12 +117,17 @@ class LangGraphChat:
                     parameters=tool.parameters, return_direct=tool.return_direct,
                 )
 
+        if not self.agents:
+            raise ValueError("At least one agent is required to initialize LangGraphChat.")
+
         first_agent = next(iter(self.agents.values()))
         
         openai_client = None
         if (first_agent.provider.lower() == "openai" and
             ExecutorRegistry.has_native_tools(first_agent)):
-            executor = ExecutorRegistry().get_or_create(first_agent, executor_type="single_agent")
+            executor = self.runtime.executor_registry.get_or_create(
+                first_agent, executor_type="single_agent"
+            )
             if isinstance(executor, ResponseAPIExecutor):
                 openai_client = executor.openai_client
 
@@ -139,7 +154,19 @@ class LangGraphChat:
         self.llm = get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
         self._container_id = first_agent.container_id
-        self.interrupt_handler = HITLHandler(self.agents, self.config, self.state_manager, self.display_manager)
+        if self.runtime.stream_renderer is None:
+            self.runtime.stream_renderer = StreamlitStreamRenderer(
+                config=self.config,
+                state_manager=self.state_manager,
+                client=openai_client,
+            )
+        self.interrupt_handler = HITLHandler(
+            self.agents,
+            self.config,
+            self.state_manager,
+            self.display_manager,
+            self.runtime.executor_registry,
+        )
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
         self.nonstream_processor = NonStreamProcessor()
     
@@ -153,8 +180,6 @@ class LangGraphChat:
                 files=[],
                 metadata={}
             )
-        if "agent_executors" not in st.session_state:
-            st.session_state.agent_executors = {}
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []
         if "uploaded_files_set" not in st.session_state:
@@ -212,11 +237,13 @@ class LangGraphChat:
         self.llm = FileHandler.ensure_llm_vector_ids(agent, self.llm, vector_store_ids)
         
         response = self.workflow_executor.execute_agent(
-            agent, prompt,
+            agent,
+            prompt,
             llm_client=self.llm,
             config=self.config,
             file_messages=file_messages,
             vector_store_ids=vector_store_ids,
+            messages=workflow_state.get("messages", []),
         )
         
         if agent.container_id:
@@ -236,7 +263,10 @@ class LangGraphChat:
         self._update_file_messages_in_state()
         
         result_state = self.workflow_executor.execute_workflow(
-            self.workflow, display_callback=self.display_manager.render_workflow_message
+            self.workflow,
+            display_callback=self.display_manager.render_workflow_message,
+            initial_state=st.session_state.workflow_state,
+            displayed_message_ids=self.state_manager.get_displayed_message_ids(),
         )
 
         if HITLUtils.has_pending_interrupts(result_state):
