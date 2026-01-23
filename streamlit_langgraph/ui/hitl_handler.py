@@ -67,8 +67,6 @@ class HITLHandler:
             return False
 
         executor = self.executor_registry.get(executor_key)
-        if executor is None:
-            raise ValueError(f"⚠️ Error: Executor not found for {executor_key}. This indicates a state inconsistency.")
 
         # Get or initialize decisions
         decisions = WorkflowStateManager.get_hitl_decision(workflow_state, executor_key)
@@ -105,10 +103,6 @@ class HITLHandler:
             executor.build_agent(llm_client)
 
         workflow_thread_id = workflow_state.get("metadata", {}).get("workflow_thread_id")
-        if not workflow_thread_id:
-            st.error("⚠️ Error: Could not find thread_id for resume.")
-            return False
-
         resume_config = original_config.copy() if original_config else {}
         resume_config.setdefault("configurable", {})
         resume_config["configurable"]["thread_id"] = workflow_thread_id

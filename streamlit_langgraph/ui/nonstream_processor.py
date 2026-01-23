@@ -2,13 +2,6 @@
 
 from typing import Any, Dict, List
 
-from ..core.executor.extractors import (
-    extract_langchain_reasoning,
-    extract_langchain_text,
-    extract_reasoning_blocks,
-    extract_response_api_text,
-)
-
 
 class NonStreamProcessor:
     """Process non-streamed responses for display and extraction."""
@@ -36,23 +29,3 @@ class NonStreamProcessor:
         """Render the final response text."""
         section.update("text", content)
         section.stream()
-
-    @staticmethod
-    def extract_langchain_text(out: Any) -> str:
-        """Extract text content from LangChain agent output."""
-        return extract_langchain_text(out)
-
-    @staticmethod
-    def extract_langchain_reasoning(out: Any) -> List[str]:
-        """Extract reasoning texts from LangChain agent output."""
-        return extract_langchain_reasoning(out)
-
-    @staticmethod
-    def extract_response_api_text(response: Any) -> str:
-        """Extract text content from OpenAI Response API response."""
-        return extract_response_api_text(response)
-
-    @staticmethod
-    def extract_reasoning_blocks(response: Any) -> List[str]:
-        """Extract reasoning texts from a Responses API object."""
-        return extract_reasoning_blocks(response)

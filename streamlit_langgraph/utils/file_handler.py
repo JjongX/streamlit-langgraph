@@ -296,7 +296,7 @@ class FileHandler:
             elif dir_path.is_file(): # Single file
                 files_to_upload = [dir_path]
         elif isinstance(additional_files, list): # List of file paths
-            files_to_upload = [Path(f) for f in additional_files if Path(f).exists()]
+            files_to_upload = [Path(f) for f in additional_files]
         
         # Upload each file to the container
         for file_path in files_to_upload:

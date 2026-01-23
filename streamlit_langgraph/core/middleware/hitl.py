@@ -54,10 +54,7 @@ class HITLUtils:
         if not edit_text.strip():
             return default_input, None
 
-        try:
-            parsed = json.loads(edit_text)
-        except json.JSONDecodeError as exc:
-            return default_input, f"Invalid JSON: {exc}"
+        parsed = json.loads(edit_text)
         return parsed, None
     
     @staticmethod

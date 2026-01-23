@@ -86,10 +86,6 @@ class LangGraphChat:
             config: Chat configuration
             custom_tools: List of custom tools to register
             runtime: Optional runtime hooks (executor registry, streaming renderer, spinner)
-            
-        Raises:
-            ValueError: If multiple agents are provided without a workflow,
-                       or if HITL is enabled without a workflow
         """
         self.config = config or UIConfig()
         self._init_session_state()
