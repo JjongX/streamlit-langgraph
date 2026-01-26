@@ -192,30 +192,40 @@ def get_llm_client(agent: Agent, vector_store_ids: Optional[List[str]] = None) -
     
     Otherwise, returns a LangChain chat model via init_chat_model for CreateAgentExecutor.
     """
+    provider = agent.provider.lower()
+    
     if agent.human_in_loop:
         has_native_tools = False
     else:
         from .core.executor.registry import ExecutorRegistry
         has_native_tools = ExecutorRegistry.has_native_tools(agent)
     
-    if agent.provider.lower() == "openai" and has_native_tools:
+    if provider == "openai" and has_native_tools:
         class MinimalClient:
             """Minimal client object for ResponseAPIExecutor to read vector_store_ids."""
             def __init__(self, vector_store_ids: Optional[List[str]] = None):
                 if vector_store_ids:
                     self._vector_store_ids = vector_store_ids
-                self._provider = agent.provider.lower()
+                self._provider = provider
         return MinimalClient(vector_store_ids)
     else:
+        # Map generic 'google' to 'google_genai' to ensure LangChain uses the 
+        # Generative AI SDK instead of defaulting to Vertex AI for Gemini models.
+        model_provider = "google_genai" if provider == "google" else provider
+
         init_kwargs = {
             "model": agent.model,
             "temperature": agent.temperature,
+            "model_provider": model_provider,
         }
-        if agent.provider.lower() == "openai" and agent.reasoning_effort:
+
+        # Add OpenAI-specific reasoning configuration if applicable
+        if provider == "openai" and agent.reasoning_effort:
             init_kwargs["reasoning"] = {
                 "effort": agent.reasoning_effort,
                 "summary": "auto",
             }
+
         chat_model = init_chat_model(**init_kwargs)
-        setattr(chat_model, "_provider", agent.provider.lower())
+        setattr(chat_model, "_provider", provider)
         return chat_model

@@ -85,7 +85,7 @@ This project is in **alpha**. Features and APIs are subject to change.
 |----------|---------|-------|
 | **OpenAI** | ✅ | Uses **ResponseAPIExecutor** (Responses API) when native tools enabled and HITL disabled. Uses **CreateAgentExecutor** (ChatCompletion API) for HITL or when native tools disabled. |
 | **Anthropic (Claude)** | ❓ | May work but not explicitly tested. |
-| **Google (Gemini)** | ❓ | Full support via LangChain's `init_chat_model` |
+| **Google (Gemini)** | ✅ | Full support via LangChain's `init_chat_model` and `langchain-google-genai` |
 | **Other LangChain Providers** | ❓ | May work but not explicitly tested.|
 
 **Legend:**
@@ -105,6 +105,8 @@ This project is in **alpha**. Features and APIs are subject to change.
 
 ```bash
 pip install streamlit-langgraph
+# For Google Gemini support:
+pip install langchain-google-genai
 ```
 
 **Using UV**:
@@ -121,18 +123,19 @@ uv add streamlit-langgraph
 
 ## API Key Configuration
 
-Before running your application, you need to configure your API keys. Create a `.streamlit/config.toml` file in your project root directory:
+Before running your application, you need to configure your API keys. Create a `.streamlit/secrets.toml` file in your project root directory:
 
 ```toml
 OPENAI_API_KEY = "your-openai-api-key-here"
+GOOGLE_API_KEY = "your-google-api-key-here"
 ```
 
-**File structure:**:
+**File structure:**
 
 ```
 your-project/
 ├── .streamlit/
-│   └── config.toml
+│   └── secrets.toml
 ├── your_app.py
 └── ...
 ```
@@ -1241,7 +1244,7 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
 | `name` | `str` | Required | Unique identifier for the agent |
 | `role` | `str` | Required | Brief description of the agent's role |
 | `instructions` | `str` | Required | Detailed instructions guiding agent behavior |
-| `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"`, etc. |
+| `provider` | `str` | `"openai"` | LLM provider: `"openai"`, `"anthropic"`, `"google"` (or `"google_genai"`), etc. |
 | `model` | `str` | `"gpt-4.1-mini"` | Model name (e.g., `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
 | `temperature` | `float` | `0.0` | Sampling temperature (0.0 to 2.0) |
 | `reasoning_effort` | `str` | `None` | OpenAI Responses API reasoning effort: `"low"`, `"medium"`, or `"high"` |
