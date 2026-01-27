@@ -5,7 +5,6 @@ from typing import List, Optional, Any
 from langgraph.graph import StateGraph
 
 from ..agent import Agent
-from ..core.runtime import RuntimeHooks
 from .patterns import SupervisorPattern, HierarchicalPattern, SupervisorTeam, NetworkPattern
 
 
@@ -17,8 +16,7 @@ class WorkflowBuilder:
     def create_supervisor_workflow(self, supervisor: Agent, workers: List[Agent], 
                                 execution_mode: str = "sequential", 
                                 delegation_mode: str = "handoff",
-                                checkpointer: Optional[Any] = None,
-                                runtime: Optional[RuntimeHooks] = None) -> StateGraph:
+                                checkpointer: Optional[Any] = None) -> StateGraph:
         """
         Create a supervisor workflow with a coordinating supervisor and worker agents.
         
@@ -32,19 +30,17 @@ class WorkflowBuilder:
             execution_mode (str): "sequential" or "parallel" execution of workers (only for handoff mode)
             delegation_mode (str): "handoff" or "tool_calling" delegation mode
             checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel).
-            runtime: Optional runtime hooks (executor registry, streaming renderer, spinner).
             
         Returns:
             StateGraph: Compiled workflow graph
         """
         return SupervisorPattern.create_supervisor_workflow(
-            supervisor, workers, execution_mode, delegation_mode, checkpointer, runtime)
+            supervisor, workers, execution_mode, delegation_mode, checkpointer)
     
     def create_hierarchical_workflow(self, top_supervisor: Agent, 
                                    supervisor_teams: List[SupervisorTeam],
                                    execution_mode: str = "sequential",
-                                   checkpointer: Optional[Any] = None,
-                                   runtime: Optional[RuntimeHooks] = None) -> StateGraph:
+                                   checkpointer: Optional[Any] = None) -> StateGraph:
         """
         Create a hierarchical workflow with a top supervisor coordinating multiple
         supervisor teams (sub-supervisors with their workers).
@@ -57,17 +53,15 @@ class WorkflowBuilder:
                                                      a supervisor and their workers
             execution_mode (str): "sequential" execution (default and only supported mode)
             checkpointer: Optional checkpointer for workflow state persistence (enables memory, HITL, time travel).
-            runtime: Optional runtime hooks (executor registry, streaming renderer, spinner).
             
         Returns:
             StateGraph: Compiled hierarchical workflow graph
         """
         return HierarchicalPattern.create_hierarchical_workflow(
-            top_supervisor, supervisor_teams, execution_mode, checkpointer, runtime)
+            top_supervisor, supervisor_teams, execution_mode, checkpointer)
     
     def create_network_workflow(self, agents: List[Agent],
-                               checkpointer: Optional[Any] = None,
-                               runtime: Optional[RuntimeHooks] = None) -> StateGraph:
+                               checkpointer: Optional[Any] = None) -> StateGraph:
         """
         Create a network workflow where agents can communicate peer-to-peer.
         
@@ -78,9 +72,8 @@ class WorkflowBuilder:
         Args:
             agents (List[Agent]): List of peer agents. First agent is the entry point.
             checkpointer: Optional checkpointer for workflow state persistence.
-            runtime: Optional runtime hooks (executor registry, streaming renderer, spinner).
             
         Returns:
             StateGraph: Compiled network workflow graph
         """
-        return NetworkPattern.create_network_workflow(agents, checkpointer, runtime)
+        return NetworkPattern.create_network_workflow(agents, checkpointer)

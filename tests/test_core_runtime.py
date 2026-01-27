@@ -40,7 +40,6 @@ class FakeAgent:
 
 class RuntimeHeadlessTests(unittest.TestCase):
     def test_runtime_hooks_attached_to_workflow(self):
-        runtime = RuntimeHooks(executor_registry=ExecutorRegistry())
         supervisor = FakeAgent(name="supervisor", role="Supervisor", instructions="Coordinate tasks.")
         workers = [
             FakeAgent(name="worker_a", role="Worker", instructions="Do task A."),
@@ -50,10 +49,11 @@ class RuntimeHeadlessTests(unittest.TestCase):
         workflow = WorkflowBuilder().create_supervisor_workflow(
             supervisor=supervisor,
             workers=workers,
-            runtime=runtime,
         )
 
-        self.assertIs(getattr(workflow, "runtime_hooks", None), runtime)
+        runtime = getattr(workflow, "runtime_hooks", None)
+        self.assertIsNotNone(runtime)
+        self.assertIsInstance(runtime, RuntimeHooks)
 
     def test_workflow_executor_runs_headless(self):
         graph = StateGraph(WorkflowState)

@@ -404,7 +404,7 @@ Core contains no Streamlit dependencies.
 - `tracker.py`: `ConversationHistoryMixin` for history tracking
 
 **Runtime (`core/runtime.py`):**
-- `RuntimeHooks`: Injected runtime dependencies (executor registry, stream renderer, spinner)
+- `RuntimeHooks`: Internal runtime dependencies (executor registry, stream renderer, spinner)
 
 **State (`core/state/`):**
 - `state_schema.py`: `WorkflowState` TypedDict and `WorkflowStateManager`
@@ -421,7 +421,7 @@ Streamlit-specific rendering, state adapters, and HITL UX.
 - `hitl_handler.py`: Streamlit HITL UI/UX handler
 - `nonstream_processor.py`: Non-streamed response rendering helpers
 - `stream_processor.py`: `StreamProcessor` for handling streaming responses
-- `stream_renderer.py`: Streamlit stream renderer used by `RuntimeHooks`
+- `stream_renderer.py`: Streamlit stream renderer used internally by `RuntimeHooks`
 - `streamlit_state.py`: Streamlit session state adapter
 
 ### Utility Modules (`utils/`)

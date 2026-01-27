@@ -75,7 +75,6 @@ class LangGraphChat:
         agents: Optional[List[Agent]] = None,
         config: Optional[UIConfig] = None,
         custom_tools: Optional[List[CustomTool]] = None,
-        runtime: Optional[RuntimeHooks] = None,
     ):
         """
         Initialize the LangGraph Chat interface.
@@ -85,20 +84,23 @@ class LangGraphChat:
             agents: List of agents to use
             config: Chat configuration
             custom_tools: List of custom tools to register
-            runtime: Optional runtime hooks (executor registry, streaming renderer, spinner)
         """
+        self.workflow = workflow
+        self.agents = self._validate_and_build_agents(workflow, agents)
         self.config = config or UIConfig()
+
         self._init_session_state()
-        self.agents: Dict[str, Agent] = {}
         self.state_manager = StreamlitStateSynchronizer()
         self.display_manager = DisplayManager(self.config, state_manager=self.state_manager)
-        self.workflow = workflow
-        workflow_runtime = getattr(workflow, "runtime_hooks", None) if workflow else None
-        self.runtime = runtime or workflow_runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
-        if self.runtime.spinner is None:
-            self.runtime.spinner = st.spinner
-        self.workflow_executor = WorkflowExecutor(self.runtime.executor_registry)
+        self._init_registry_and_components(workflow, custom_tools)
 
+    def _validate_and_build_agents(
+        self,
+        workflow: Optional[StateGraph],
+        agents: Optional[List[Agent]],
+    ) -> Dict[str, Agent]:
+        """Validate `workflow`/`agents` combination and build agent map."""
+        agent_map: Dict[str, Agent] = {}
         if agents:
             if not workflow and len(agents) > 1:
                 raise ValueError(
@@ -108,20 +110,41 @@ class LangGraphChat:
             for agent in agents:
                 if agent.human_in_loop and not workflow:
                     raise ValueError("Human-in-the-loop is only available for multiagent workflows.")
-                self.agents[agent.name] = agent
+                agent_map[agent.name] = agent
 
+        if not agent_map:
+            raise ValueError("At least one agent is required to initialize LangGraphChat.")
+        return agent_map
+
+    def _init_registry_and_components(
+        self,
+        workflow: Optional[StateGraph],
+        custom_tools: Optional[List[CustomTool]],
+    ) -> None:
+        """Initialize all registry and components."""
+
+        # Initialize runtime hooks and workflow executor
+        workflow_runtime = getattr(workflow, "runtime_hooks", None) if workflow else None
+        self.runtime = workflow_runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
+        if self.runtime.spinner is None:
+            self.runtime.spinner = st.spinner
+        self.workflow_executor = WorkflowExecutor(self.runtime.executor_registry)
+
+        # Register custom tools
         if custom_tools:
             for tool in custom_tools:
                 CustomTool.register_tool(
-                    tool.name, tool.description, tool.function,
-                    parameters=tool.parameters, return_direct=tool.return_direct,
+                    tool.name,
+                    tool.description,
+                    tool.function,
+                    parameters=tool.parameters,
+                    return_direct=tool.return_direct,
                 )
 
-        if not self.agents:
-            raise ValueError("At least one agent is required to initialize LangGraphChat.")
-
+        # Initialize file handler and LLM client
         first_agent = next(iter(self.agents.values()))
-        
+
+        # Best-effort access to OpenAI client when using ResponseAPIExecutor
         openai_client = None
         if (first_agent.provider.lower() == "openai" and
             ExecutorRegistry.has_native_tools(first_agent)):
@@ -131,6 +154,7 @@ class LangGraphChat:
             if isinstance(executor, ResponseAPIExecutor):
                 openai_client = executor.openai_client
 
+        # Initialize FileHandler
         self.file_handler = FileHandler(
             openai_client=openai_client,
             model=first_agent.model,
@@ -147,19 +171,20 @@ class LangGraphChat:
         # Sync container_id to ALL agents with code_interpreter enabled
         # This ensures all agents use the same container where files are uploaded
         if self.file_handler._container_id:
-            all_agents = list(self.agents.values())
-            Agent.sync_container_ids(all_agents)
+            Agent.sync_container_ids(list(self.agents.values()))
 
         vector_store_ids = self.file_handler.get_vector_store_ids()
         self.llm = get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
         self._container_id = first_agent.container_id
+
         if self.runtime.stream_renderer is None:
             self.runtime.stream_renderer = StreamlitStreamRenderer(
                 config=self.config,
                 state_manager=self.state_manager,
                 client=openai_client,
             )
+
         self.interrupt_handler = HITLHandler(
             self.agents,
             self.config,
@@ -167,6 +192,7 @@ class LangGraphChat:
             self.display_manager,
             self.runtime.executor_registry,
         )
+
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
         self.nonstream_processor = NonStreamProcessor()
     
