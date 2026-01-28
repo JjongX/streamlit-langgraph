@@ -186,11 +186,8 @@ class LangGraphChat:
             )
 
         self.interrupt_handler = HITLHandler(
-            self.agents,
-            self.config,
-            self.state_manager,
-            self.display_manager,
-            self.runtime.executor_registry,
+            self.agents, self.config,
+            self.state_manager, self.display_manager, self.runtime.executor_registry,
         )
 
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
