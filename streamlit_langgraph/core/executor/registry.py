@@ -22,7 +22,8 @@ class ExecutorRegistry:
         
         Selection logic:
         - If HITL enabled → use CreateAgentExecutor (native tools automatically disabled)
-        - If native tools enabled AND HITL disabled → use ResponseAPIExecutor
+        - If OpenAI native tools enabled AND HITL disabled → use ResponseAPIExecutor
+        - If Gemini native tools enabled → use CreateAgentExecutor (Gemini tools handled via LangChain)
         - Otherwise → use CreateAgentExecutor
         
         Args:
@@ -35,8 +36,9 @@ class ExecutorRegistry:
         """
         executor_key = "single_agent_executor" if executor_type == "single_agent" else f"workflow_executor_{agent.name}"
         
-        has_native = ExecutorRegistry.has_native_tools(agent)
-        use_response_api = has_native and not agent.human_in_loop
+        # Only use ResponseAPIExecutor for OpenAI provider with native tools
+        has_openai_native = ExecutorRegistry.has_openai_native_tools(agent)
+        use_response_api = has_openai_native and not agent.human_in_loop
         desired_executor_cls = ResponseAPIExecutor if use_response_api else CreateAgentExecutor
         desired_tools = tools if tools is not None else agent.get_tools()
         
@@ -61,10 +63,49 @@ class ExecutorRegistry:
     
     @staticmethod
     def has_native_tools(agent: Agent) -> bool:
-        """Check if agent has native OpenAI tools enabled."""
+        """Check if agent has any native tools enabled (OpenAI or Gemini)."""
         return (
             agent.allow_file_search or
             agent.allow_code_interpreter or
             agent.allow_web_search or
             agent.allow_image_generation
+        )
+    
+    @staticmethod
+    def has_openai_native_tools(agent: Agent) -> bool:
+        """
+        Check if agent has native OpenAI tools enabled.
+        
+        Only returns True for OpenAI provider with native tools enabled.
+        Gemini native tools are handled differently via LangChain's ChatGoogleGenerativeAI.
+        """
+        provider = agent.provider.lower()
+        if provider != "openai":
+            return False
+        return (
+            agent.allow_file_search or
+            agent.allow_code_interpreter or
+            agent.allow_web_search or
+            agent.allow_image_generation
+        )
+    
+    @staticmethod
+    def has_gemini_native_tools(agent: Agent) -> bool:
+        """
+        Check if agent has native Gemini tools enabled.
+        
+        Gemini supports:
+        - google_search (web search grounding)
+        - code_execution (Python code execution)
+        - file_search (RAG with file search stores)
+        
+        Note: image_generation is not directly supported as a Gemini tool.
+        """
+        provider = agent.provider.lower()
+        if provider != "google":
+            return False
+        return (
+            agent.allow_web_search or
+            agent.allow_code_interpreter or
+            agent.allow_file_search
         )

@@ -147,7 +147,7 @@ class LangGraphChat:
         # Best-effort access to OpenAI client when using ResponseAPIExecutor
         openai_client = None
         if (first_agent.provider.lower() == "openai" and
-            ExecutorRegistry.has_native_tools(first_agent)):
+            ExecutorRegistry.has_openai_native_tools(first_agent)):
             executor = self.runtime.executor_registry.get_or_create(
                 first_agent, executor_type="single_agent"
             )

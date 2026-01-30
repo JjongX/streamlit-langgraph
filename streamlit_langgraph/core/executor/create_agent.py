@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
@@ -12,7 +13,7 @@ from langgraph.types import Command
 
 from ...agent import Agent
 from ..history import ConversationHistoryMixin
-from .extractors import extract_langchain_reasoning, extract_langchain_text
+from .extractors import extract_langchain_reasoning, extract_langchain_text, extract_langchain_text_with_gemini_extras
 
 
 class CreateAgentExecutor(ConversationHistoryMixin):
@@ -98,8 +99,14 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         
         if isinstance(out, dict) and "__interrupt__" in out:
             return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
-        
-        result_text = extract_langchain_text(out)
+
+        # Inline result text extraction for readability:
+        # Use Gemini-specific extractor when Gemini native tools are enabled.
+        from .registry import ExecutorRegistry
+        if ExecutorRegistry.has_gemini_native_tools(self.agent):
+            result_text = extract_langchain_text_with_gemini_extras(out)
+        else:
+            result_text = extract_langchain_text(out)
         self._record_assistant_history(result_text)
         return {"id": str(uuid.uuid4()), "role": "assistant", "content": result_text, "agent": self.agent.name}
     
@@ -120,11 +127,14 @@ class CreateAgentExecutor(ConversationHistoryMixin):
         
         all_tools = list(self.tools) if self.tools else []
         
-        # Use original system message (conversation history will be in input messages)
+        # Prepend current date/time for single-agent (OpenAI, Gemini, etc.) for recency and web search
+        now = datetime.now()
+        date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
+        system_prompt = date_line + self._original_system_message
         agent_kwargs = {
             "model": llm_chat_model,
             "tools": all_tools,
-            "system_prompt": self._original_system_message,
+            "system_prompt": system_prompt,
         }
         
         if middleware:
@@ -266,8 +276,14 @@ class CreateAgentExecutor(ConversationHistoryMixin):
             out = self.invoke_agent(llm_client, prompt, messages, file_messages, config=config)
             if isinstance(out, dict) and "__interrupt__" in out:
                 return self.create_interrupt_response(out["__interrupt__"], workflow_thread_id, config)
-            
-            result_text = extract_langchain_text(out)
+
+            # Inline result text extraction for readability:
+            # Use Gemini-specific extractor when Gemini native tools are enabled.
+            from .registry import ExecutorRegistry
+            if ExecutorRegistry.has_gemini_native_tools(self.agent):
+                result_text = extract_langchain_text_with_gemini_extras(out)
+            else:
+                result_text = extract_langchain_text(out)
             self._record_assistant_history(result_text)
             reasoning_texts = extract_langchain_reasoning(out)
             if reasoning_texts:

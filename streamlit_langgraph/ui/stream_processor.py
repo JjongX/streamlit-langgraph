@@ -110,30 +110,32 @@ class StreamProcessor:
         return ""
     
     def _process_langchain_message_token(self, token, section) -> str:
-        """
-        Process a single token from LangChain stream_mode="messages".
+        """Process a single LangChain stream_mode='messages' token."""
+        if not isinstance(token, AIMessage):
+            return ""
         
-        This method handles LangChain's stream_mode="messages" format, which returns
-        (token, metadata) tuples where token is an AIMessage with content_blocks attribute.
+        # Handle content_blocks if available
+        content_blocks = getattr(token, 'content_blocks', None)
         
-        Handles various content block types:
-        - text: Regular text content
-        - server_tool_call: Tool calls (code_interpreter, file_search, etc.)
-        - server_tool_result: Tool execution results (text, images, etc.)
+        # Gemini may emit list content blocks directly.
+        if content_blocks is None:
+            content = token.content
+            if isinstance(content, list):
+                content_blocks = content
+            elif isinstance(content, str) and content:
+                # Simple text content
+                section.update("text", content)
+                section.stream()
+                return content
         
-        Args:
-            token: AIMessage with content_blocks attribute from stream_mode="messages"
-            section: Display section to update
-            
-        Returns:
-            Delta text to append to response
-        """
-        if not isinstance(token, AIMessage) or not hasattr(token, 'content_blocks') or not token.content_blocks:
+        if not content_blocks:
             return ""
         
         text_parts = []
-        for block in token.content_blocks:
+        for block in content_blocks:
             if not isinstance(block, dict):
+                if isinstance(block, str):
+                    text_parts.append(block)
                 continue
                 
             block_type = block.get('type')
@@ -151,6 +153,14 @@ class StreamProcessor:
                 self._message_tool_call(block, section)
             elif block_type == 'server_tool_result':
                 self._message_tool_result(block, section, text_parts)
+            # Gemini-only (LangChain): code execution blocks
+            elif block_type == 'executable_code':
+                self._gemini_executable_code(block, section)
+            elif block_type == 'code_execution_result':
+                self._gemini_code_execution_result(block, section)
+        
+        # Gemini-only (LangChain): Google Search citations
+        self._gemini_grounding(token, section)
         
         if text_parts:
             delta = ''.join(text_parts)
@@ -160,7 +170,51 @@ class StreamProcessor:
                 return delta
         
         return ""
-    
+
+    def _gemini_executable_code(self, block, section) -> None:
+        """Render executable_code."""
+        exec_code = block.get("executable_code", block)
+        if isinstance(exec_code, dict):
+            code = exec_code.get("code", "")
+        else:
+            code = getattr(exec_code, "code", "")
+        if code:
+            section.update("code", code)
+            section.stream()
+
+    def _gemini_code_execution_result(self, block, section) -> None:
+        """Render code_execution_result."""
+        exec_result = block.get("code_execution_result", block)
+        if isinstance(exec_result, dict):
+            output = exec_result.get("output", "")
+        else:
+            output = getattr(exec_result, "output", "")
+        if output:
+            section.update("text", f"\n**Output:**\n```\n{output}\n```\n")
+            section.stream()
+
+    def _gemini_grounding(self, token, section) -> None:
+        """Render grounding citations, if present."""
+        response_metadata = getattr(token, "response_metadata", None)
+        if not response_metadata:
+            return
+        grounding_metadata = response_metadata.get("grounding_metadata", {})
+        if not grounding_metadata:
+            return
+        chunks = grounding_metadata.get("grounding_chunks", [])
+        if not chunks:
+            return
+        citations = []
+        for i, chunk in enumerate(chunks):
+            web = chunk.get("web", {})
+            uri = web.get("uri", "")
+            title = web.get("title", f"Source {i+1}")
+            if uri:
+                citations.append(f"[{i+1}] [{title}]({uri})")
+        if citations:
+            section.update("text", "\n\n**Sources:**\n" + "\n".join(citations))
+            section.stream()
+
     def _message_annotations(self, block, section):
         """Process container_file_citation annotations in text blocks."""
         annotations = block.get('annotations', [])
@@ -214,6 +268,13 @@ class StreamProcessor:
     def _message_tool_result(self, block, section, text_parts):
         """Process server_tool_result blocks (outputs from tool execution)."""
         outputs = block.get('output', block.get('outputs', []))
+        # Gemini code execution often returns a plain string under `output`
+        if isinstance(outputs, str) and outputs:
+            if block.get("name") == "code_interpreter":
+                text_parts.append(f"\n**Output:**\n```\n{outputs}\n```\n")
+            else:
+                text_parts.append(str(outputs))
+            return
         if not isinstance(outputs, list):
             outputs = [outputs] if outputs else []
         
@@ -225,7 +286,11 @@ class StreamProcessor:
             if output_type == 'text':
                 output_text = output.get('text', '')
                 if output_text:
-                    text_parts.append(output_text)
+                    # For code execution, render tool output clearly as a fenced block
+                    if block.get("name") == "code_interpreter":
+                        text_parts.append(f"\n**Output:**\n```\n{output_text}\n```\n")
+                    else:
+                        text_parts.append(output_text)
             elif output_type == 'image':
                 image_data = output.get('image', {})
                 if isinstance(image_data, dict):

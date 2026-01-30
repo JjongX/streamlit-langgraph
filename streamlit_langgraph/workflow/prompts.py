@@ -1,6 +1,14 @@
 # Prompt templates and builders for different workflow patterns.
 
+from datetime import datetime
 from typing import List, Optional
+
+
+def _date_context() -> str:
+    """Current date/time prefix."""
+    now = datetime.now()
+    return f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
+
 
 SUPERVISOR_PROMPT_TEMPLATE = """You are {role}.
 
@@ -61,12 +69,13 @@ class SupervisorPromptBuilder:
     ) -> str:
         """Get full supervisor instructions template."""
         outputs_text = "\n".join(worker_outputs) if worker_outputs else "No worker outputs yet"
-        return SUPERVISOR_PROMPT_TEMPLATE.format(
+        body = SUPERVISOR_PROMPT_TEMPLATE.format(
             role=role,
             user_query=user_query,
             worker_list=worker_list,
             worker_outputs=outputs_text
         )
+        return _date_context() + body
     
     @staticmethod
     def get_worker_agent_instructions(
@@ -92,7 +101,7 @@ class SupervisorPromptBuilder:
         
         instruction_parts.append("\nPlease complete the task assigned to you.")
         
-        return chr(10).join(instruction_parts)
+        return _date_context() + chr(10).join(instruction_parts)
 
 
 class NetworkPromptBuilder:    
@@ -106,12 +115,13 @@ class NetworkPromptBuilder:
     ) -> str:
         """Get full network agent instructions template."""
         outputs_text = "\n".join(peer_outputs) if peer_outputs else "No peer outputs yet"
-        return NETWORK_PROMPT_TEMPLATE.format(
+        body = NETWORK_PROMPT_TEMPLATE.format(
             role=role,
             user_query=user_query,
             peer_list=peer_list,
             peer_outputs=outputs_text
         )
+        return _date_context() + body
 
 
 

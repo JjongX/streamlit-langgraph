@@ -3,6 +3,7 @@
 import json
 import os
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import StructuredTool
@@ -137,10 +138,12 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             if delegation_tool else
             self._build_base_tools_config(self._vector_store_ids, stream=stream)
         )
+        now = datetime.now()
+        date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
         response = self.openai_client.responses.create(
             model=self.agent.model,
             input=api_input,
-            instructions=self._original_system_message,
+            instructions=date_line + self._original_system_message,
             temperature=self.agent.temperature,
             tools=tools_config if tools_config else [],
             stream=stream,
@@ -474,10 +477,12 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         self, accumulated_input: List[Dict[str, Any]], tools_config: List[Dict[str, Any]]
     ) -> Any:
         """Call Response API with accumulated input and function results."""
+        now = datetime.now()
+        date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
         return self.openai_client.responses.create(
             model=self.agent.model,
             input=accumulated_input,
-            instructions=self._original_system_message,
+            instructions=date_line + self._original_system_message,
             temperature=self.agent.temperature,
             tools=tools_config if tools_config else [],
             stream=False,  # Don't stream during function call loop
