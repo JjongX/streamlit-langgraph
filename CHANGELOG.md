@@ -1,6 +1,8 @@
 # CHANGELOG
 
-## 0.2.1 (2026-02-05)
+## 0.2.2 (in development)
+
+## 0.2.1 (2025-02-05)
 ### Features
 - **YAML-Only Agent Configuration**: Agents must now be configured via YAML files. The `Agent(file_path)` constructor automatically loads from YAML, supporting both single and multiple agents.
 - **Reasoning Support for Both Executors**: Both executors now fully support reasoning from OpenAI (streaming and non-streaming).
