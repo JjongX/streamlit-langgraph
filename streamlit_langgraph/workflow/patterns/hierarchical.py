@@ -41,7 +41,6 @@ class HierarchicalPattern:
         supervisor_teams: List[SupervisorTeam],
         execution_mode: str = "sequential",
         checkpointer: Optional[Any] = None,
-        runtime: Optional[RuntimeHooks] = None,
     ) -> StateGraph:
         """
         Create a hierarchical workflow with a top supervisor coordinating multiple
@@ -66,7 +65,7 @@ class HierarchicalPattern:
         else:
             workflow_checkpointer = checkpointer
         
-        runtime_hooks = runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
+        runtime_hooks = RuntimeHooks(executor_registry=ExecutorRegistry())
         node_factory = AgentNodeFactory(runtime_hooks)
         graph = StateGraph(WorkflowState)
         

@@ -1,36 +1,94 @@
 # Pure extraction helpers for LLM responses.
 
-from typing import Any, List
+from typing import Any, List, Tuple
 
 from langchain_core.messages import AIMessage
 
 from ...utils.text_extraction import extract_text_from_content
 
 
-def extract_langchain_text(out: Any) -> str:
-    """Extract text content from LangChain agent output."""
+def _extract_langchain_text_base(out: Any) -> Tuple[str, Any]:
+    """Return (text, response_msg) from LangChain output."""
+    text = ""
+    response_msg = None
+    
     if isinstance(out, dict):
         if out.get("output"):
-            return extract_text_from_content(out["output"])
+            text = extract_text_from_content(out["output"])
+        else:
+            messages = out.get("messages") or []
+            if messages:
+                for msg in reversed(messages):
+                    if isinstance(msg, AIMessage):
+                        text = extract_text_from_content(msg.content) if msg.content else ""
+                        response_msg = msg
+                        break
+                
+                if not text:
+                    last_message = messages[-1]
+                    if hasattr(last_message, "content"):
+                        text = extract_text_from_content(last_message.content)
+                    else:
+                        text = str(last_message) if last_message else ""
+                    response_msg = last_message
 
-        messages = out.get("messages") or []
-        if messages:
-            for msg in reversed(messages):
-                if isinstance(msg, AIMessage):
-                    return extract_text_from_content(msg.content) if msg.content else ""
+    elif isinstance(out, str):
+        text = out
 
-            last_message = messages[-1]
-            if hasattr(last_message, "content"):
-                return extract_text_from_content(last_message.content)
-            return str(last_message) if last_message else ""
+    elif hasattr(out, "content"):
+        text = extract_text_from_content(out.content)
+        response_msg = out
 
-    if isinstance(out, str):
-        return out
+    else:
+        text = str(out) if out else ""
+    
+    return (text, response_msg)
 
-    if hasattr(out, "content"):
-        return extract_text_from_content(out.content)
 
-    return str(out) if out else ""
+def extract_langchain_text(out: Any) -> str:
+    """Extract plain text from LangChain output."""
+    text, _ = _extract_langchain_text_base(out)
+    return text
+
+
+def extract_langchain_text_with_gemini_extras(out: Any) -> str:
+    """Gemini-only: append code execution + grounding citations when present."""
+    text, response_msg = _extract_langchain_text_base(out)
+    if response_msg:
+        text = _append_gemini_extras(text, response_msg)
+    return text
+
+
+def _append_gemini_extras(text: str, response_msg: Any) -> str:
+    """Append Gemini code execution and grounding info to text."""
+    extras = []
+    
+    # Check for code execution results
+    code_results = extract_gemini_code_execution(response_msg)
+    if code_results:
+        code_text = format_gemini_code_execution(code_results)
+        if code_text:
+            extras.append(code_text)
+    
+    # Check for grounding metadata (Google Search results)
+    grounding = extract_gemini_grounding_metadata(response_msg)
+    if grounding and grounding.get("grounding_chunks"):
+        # Don't duplicate text, just add citations
+        chunks = grounding.get("grounding_chunks", [])
+        if chunks:
+            citations = []
+            for i, chunk in enumerate(chunks):
+                uri = chunk.get("uri", "")
+                title = chunk.get("title", f"Source {i+1}")
+                if uri:
+                    citations.append(f"[{i+1}] [{title}]({uri})")
+            if citations:
+                extras.append("**Sources:**\n" + "\n".join(citations))
+    
+    if extras:
+        return text + "\n\n" + "\n\n".join(extras)
+    
+    return text
 
 
 def extract_langchain_reasoning(out: Any) -> List[str]:
@@ -172,3 +230,151 @@ def extract_reasoning_blocks(response: Any) -> List[str]:
                 summary_texts.append(str(text).strip())
 
     return summary_texts
+
+
+# Gemini-specific extractors
+
+def extract_gemini_grounding_metadata(response: Any) -> dict:
+    """Extract Google Search grounding metadata from a Gemini AIMessage."""
+    if not response:
+        return {}
+    
+    # Get response_metadata from AIMessage
+    metadata = None
+    if hasattr(response, "response_metadata"):
+        metadata = response.response_metadata
+    elif isinstance(response, dict):
+        metadata = response.get("response_metadata", {})
+    
+    if not metadata:
+        return {}
+    
+    grounding_metadata = metadata.get("grounding_metadata", {})
+    if not grounding_metadata:
+        return {}
+    
+    result = {}
+    
+    # Extract web search queries
+    web_queries = grounding_metadata.get("web_search_queries", [])
+    if web_queries:
+        result["web_search_queries"] = web_queries
+    
+    # Extract grounding chunks (citations)
+    chunks = grounding_metadata.get("grounding_chunks", [])
+    if chunks:
+        result["grounding_chunks"] = [
+            {"uri": chunk.get("web", {}).get("uri", ""), "title": chunk.get("web", {}).get("title", "")}
+            for chunk in chunks if chunk.get("web")
+        ]
+    
+    # Extract grounding supports (text segments mapped to sources)
+    supports = grounding_metadata.get("grounding_supports", [])
+    if supports:
+        result["grounding_supports"] = supports
+    
+    return result
+
+
+def extract_gemini_code_execution(response: Any) -> List[dict]:
+    """Extract code execution blocks from a Gemini AIMessage."""
+    if not response:
+        return []
+    
+    # Get content from AIMessage
+    content = None
+    if hasattr(response, "content"):
+        content = response.content
+    elif isinstance(response, dict):
+        content = response.get("content")
+    
+    if not isinstance(content, list):
+        return []
+    
+    results = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        
+        # Look for Gemini 2.5/3 content blocks
+        if block.get("type") == "executable_code" or "executable_code" in block:
+            exec_code = block.get("executable_code", block)
+            code = exec_code.get("code", "")
+            if code:
+                results.append({
+                    "type": "code",
+                    "code": code,
+                    "language": exec_code.get("language", "python")
+                })
+        
+        if block.get("type") == "code_execution_result" or "code_execution_result" in block:
+            exec_result = block.get("code_execution_result", block)
+            output = exec_result.get("output", "")
+            if output:
+                results.append({
+                    "type": "output",
+                    "output": output
+                })
+
+        # LangChain server tool blocks (Gemini code execution).
+        if block.get("type") == "server_tool_call" and block.get("name") == "code_interpreter":
+            args = block.get("args", {}) if isinstance(block.get("args"), dict) else {}
+            code = args.get("code", "") or args.get("input", "")
+            if code:
+                results.append({
+                    "type": "code",
+                    "code": code,
+                    "language": "python",
+                })
+
+        if block.get("type") == "server_tool_result" and block.get("name") == "code_interpreter":
+            # Gemini often returns a plain string under `output`
+            output = block.get("output", "")
+            if isinstance(output, str) and output:
+                results.append({
+                    "type": "output",
+                    "output": output,
+                })
+    
+    return results
+
+
+def format_gemini_grounding_citations(text: str, grounding_metadata: dict) -> str:
+    """Append a Sources section from grounding metadata."""
+    if not grounding_metadata or not grounding_metadata.get("grounding_chunks"):
+        return text
+    
+    chunks = grounding_metadata.get("grounding_chunks", [])
+    if not chunks:
+        return text
+    
+    # Build citation list
+    citations = []
+    for i, chunk in enumerate(chunks):
+        uri = chunk.get("uri", "")
+        title = chunk.get("title", f"Source {i+1}")
+        if uri:
+            citations.append(f"[{i+1}] [{title}]({uri})")
+    
+    if citations:
+        return f"{text}\n\n**Sources:**\n" + "\n".join(citations)
+    
+    return text
+
+
+def format_gemini_code_execution(code_results: List[dict]) -> str:
+    """Format code execution blocks as markdown."""
+    if not code_results:
+        return ""
+    
+    parts = []
+    for result in code_results:
+        if result.get("type") == "code":
+            lang = result.get("language", "python")
+            code = result.get("code", "")
+            parts.append(f"```{lang}\n{code}\n```")
+        elif result.get("type") == "output":
+            output = result.get("output", "")
+            parts.append(f"**Output:**\n```\n{output}\n```")
+    
+    return "\n\n".join(parts)

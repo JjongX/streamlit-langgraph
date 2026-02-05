@@ -25,7 +25,6 @@ class NetworkPattern:
     def create_network_workflow(
         agents: List[Agent],
         checkpointer: Optional[Any] = None,
-        runtime: Optional[RuntimeHooks] = None,
     ) -> StateGraph:
         """
         Create a network workflow where agents can communicate peer-to-peer.
@@ -51,7 +50,7 @@ class NetworkPattern:
         # Ensure all agents with code_interpreter share the same container_id
         Agent.sync_container_ids(agents)
         
-        runtime_hooks = runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
+        runtime_hooks = RuntimeHooks(executor_registry=ExecutorRegistry())
         node_factory = AgentNodeFactory(runtime_hooks)
         graph = StateGraph(WorkflowState)
         

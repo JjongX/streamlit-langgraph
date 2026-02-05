@@ -11,17 +11,14 @@ def main():
         page_icon="💬",
         welcome_message="""Welcome to the **Simple Chat Assistant**!
 
-💬 **Single Agent Mode**: This example demonstrates direct single-agent interaction without workflow complexity.
+Single-agent example. Try the sample prompts below to test different features.
 
-I'm a helpful AI assistant ready to chat with you about anything. I can help with:
-
-- 💡 **Questions & Answers**: Ask me about any topic
-- 🤔 **Problem Solving**: Work through challenges together  
-- 📚 **Learning**: Explain concepts and ideas
-- 🔍 **Research**: Search the web for current information
-- 💬 **Conversation**: Just chat about your day!
-
-What would you like to talk about?""",
+**Sample prompts (FAQ):**
+- **General chat**: "What is 2+2?" or "Tell me a short joke."
+- **Web search**: "What is the latest news about AI today?"
+- **File search**: "Summarize the file I uploaded." (enable `allow_file_search` in config)
+- **Code interpreter**: "Plot a sine wave from 0 to 2π" or "Run: print('Hello')"
+- **Image generation**: "Generate an image of a sunset over the ocean." (enable `allow_image_generation` in config)""",
     )
     if "chat" not in st.session_state:
         st.session_state.chat = slg.LangGraphChat(

@@ -29,7 +29,6 @@ class SupervisorPattern:
         execution_mode: str = "sequential",
         delegation_mode: str = "handoff",
         checkpointer: Optional[Any] = None,
-        runtime: Optional[RuntimeHooks] = None,
     ) -> StateGraph:
         """
         Create a supervisor workflow where a supervisor agent coordinates and delegates tasks 
@@ -57,7 +56,7 @@ class SupervisorPattern:
         # Ensure all agents with code_interpreter share the same container_id
         Agent.sync_container_ids([supervisor_agent] + worker_agents)
     
-        runtime_hooks = runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
+        runtime_hooks = RuntimeHooks(executor_registry=ExecutorRegistry())
         node_factory = AgentNodeFactory(runtime_hooks)
 
         # Tool calling mode - single node, agents as tools
@@ -103,8 +102,6 @@ class SupervisorPattern:
         node_factory: Optional[AgentNodeFactory] = None,
     ) -> StateGraph:
         """Create sequential workflow: supervisor -> worker -> supervisor loop."""
-        if node_factory is None:
-            node_factory = AgentNodeFactory(RuntimeHooks(executor_registry=ExecutorRegistry()))
         for worker in worker_agents:
             graph.add_node(worker.name, node_factory.create_worker_agent_node(worker, supervisor_agent))
 
@@ -130,9 +127,6 @@ class SupervisorPattern:
     ) -> StateGraph:
         """Create parallel workflow: supervisor -> fanout -> all workers -> supervisor."""
         graph.add_node("parallel_fanout", lambda state: state)
-
-        if node_factory is None:
-            node_factory = AgentNodeFactory(RuntimeHooks(executor_registry=ExecutorRegistry()))
         
         for worker in worker_agents:
             graph.add_node(worker.name, node_factory.create_worker_agent_node(worker, supervisor_agent))

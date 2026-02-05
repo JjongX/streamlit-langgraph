@@ -4,6 +4,7 @@
 ### Features
 - **YAML-Only Agent Configuration**: Agents must now be configured via YAML files. The `Agent(file_path)` constructor automatically loads from YAML, supporting both single and multiple agents.
 - **Reasoning Support for Both Executors**: Both executors now fully support reasoning from OpenAI (streaming and non-streaming).
+- **Google Gemini Support**: Added full support for Google Gemini models via `langchain-google-genai`. The `google` provider is automatically mapped to `google_genai` to ensure correct SDK usage and prevent defaulting to Vertex AI.
 
 ### Refactor
 - **Simplified Agent API**: 
@@ -19,6 +20,7 @@
 - **Code organization**: Improved inline class documentation and structure
 - **Method inlining**: Inlined some single-use methods to reduce indirection and improve code clarity
 - **Stream Processing Simplification**: Removed unused LangChain `stream_mode="updates"` handling from `StreamProcessor`.
+- **LLM Client Initialization Refactor**: Improved readability of `get_llm_client()` function by consolidating provider normalization, simplifying Google provider mapping, and better organizing initialization arguments.
 
 ### Bug Fix
 - None
