@@ -85,7 +85,7 @@ This project is in **alpha**. Features and APIs are subject to change.
 |----------|---------|-------|
 | **OpenAI** | ✅ | Uses **ResponseAPIExecutor** (Responses API) when native tools enabled and HITL disabled. Uses **CreateAgentExecutor** (ChatCompletion API) for HITL or when native tools disabled. |
 | **Anthropic (Claude)** | ❓ | May work but not explicitly tested. |
-| **Google (Gemini)** | ✅ | Full support via LangChain's `init_chat_model` and `langchain-google-genai` |
+| **Google (Gemini)** | ✅ | Via LangChain's `init_chat_model` and `langchain-google-genai`. Web search and code interpreter only; see notes below. |
 | **Other LangChain Providers** | ❓ | May work but not explicitly tested.|
 
 **Legend:**
@@ -97,6 +97,7 @@ This project is in **alpha**. Features and APIs are subject to change.
 - **OpenAI**: Automatically selects ResponseAPIExecutor (Responses API) or CreateAgentExecutor (ChatCompletion API) based on native tool configuration and HITL settings
   - ResponseAPIExecutor: Used when native tools enabled and HITL disabled
   - CreateAgentExecutor: Used for HITL scenarios or when native tools are disabled
+- **Google (Gemini)**: Supported via LangChain (`langchain-google-genai`). Currently supported: **web search** (grounding/citations) and **code interpreter**. OpenAI equivalents for file search and image generation are not yet supported and may be added in a later release.
 - Support depends on LangChain's provider compatibility
 
 ## Installation

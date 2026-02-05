@@ -159,7 +159,6 @@ class StreamProcessor:
             elif block_type == 'code_execution_result':
                 self._gemini_code_execution_result(block, section)
         
-        # Gemini-only (LangChain): Google Search citations
         self._gemini_grounding(token, section)
         
         if text_parts:
