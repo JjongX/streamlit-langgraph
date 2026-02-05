@@ -57,6 +57,9 @@
   - Updated path handling guidance
 - Updated all example files to use `Agent(config_path)` instead of `Agent.load_from_yaml(config_path)`
 
+### Dependencies
+- Added `langchain-google-genai>=4.0.0` to `install_requires` in setup.py so Gemini support is installed by default.
+
 ## 0.2.0 (2025-12-23)
 - Alpha release
 
