@@ -3,24 +3,33 @@
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-import streamlit as st
+from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from ...agent import Agent, AgentManager
-from ...core.executor.conversation_history import extract_text_from_content
-from ...core.executor.registry import ExecutorRegistry
+from ...agent import Agent, get_llm_client
+from ...utils.text_extraction import extract_text_from_content
+from ...core.runtime import RuntimeHooks
 from ...core.state import WorkflowState, WorkflowStateManager
 from .factory import AgentNodeBase
 
 
 class HandoffDelegation:
     """Handoff delegation pattern for supervisor-worker workflows."""
-    
-    @staticmethod
-    def execute_supervisor_with_routing(agent: Agent, state: WorkflowState, 
-                                        input_message: str, workers: List[Agent],
-                                        allow_parallel: bool = False) -> Tuple[str, Dict[str, Any]]:
+
+    def __init__(self, runtime: RuntimeHooks, agent_executor: AgentNodeBase):
+        self.runtime = runtime
+        self.agent_executor = agent_executor
+
+    # Public API
+    def execute_supervisor_with_routing(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+        workers: List[Agent],
+        allow_parallel: bool = False,
+    ) -> Tuple[str, Dict[str, Any]]:
         """
         Execute supervisor agent with structured routing via function calling.
         
@@ -40,19 +49,26 @@ class HandoffDelegation:
         """
         from ...core.executor.response_api import ResponseAPIExecutor
         
-        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
+        executor = self.runtime.executor_registry.get_or_create(
+            agent,
+            executor_type="workflow",
+        )
         
         if isinstance(executor, ResponseAPIExecutor):
-            return HandoffDelegation._execute_with_response_api_executor(
+            return self._execute_with_response_api_executor(
                 agent, state, input_message, workers, allow_parallel
             )
         else:
-            return HandoffDelegation._execute_with_create_agent_executor(
+            return self._execute_with_create_agent_executor(
                 agent, state, input_message, workers, allow_parallel
             )
     
     @staticmethod
-    def build_worker_context(state: WorkflowState, worker: Agent, supervisor: Agent) -> Tuple[Optional[str], Optional[List[str]]]:
+    def build_worker_context(
+        state: WorkflowState,
+        worker: Agent,
+        supervisor: Agent,
+    ) -> Tuple[Optional[str], Optional[List[str]]]:
         """Build context data for worker based on context mode."""
         context_mode = worker.context
         supervisor_output = state["agent_outputs"].get(supervisor.name, "")
@@ -68,7 +84,10 @@ class HandoffDelegation:
             return None, None
     
     @staticmethod
-    def build_worker_outputs_summary(state: WorkflowState, workers: List[Agent]) -> List[str]:
+    def build_worker_outputs_summary(
+        state: WorkflowState,
+        workers: List[Agent],
+    ) -> List[str]:
         """Build summary of worker outputs from state."""
         worker_outputs = []
         worker_names = [w.name for w in workers]
@@ -78,76 +97,73 @@ class HandoffDelegation:
                 worker_outputs.append(f"**{worker_name}**: {output}")
         return worker_outputs
     
-    @staticmethod
-    def _execute_with_response_api_executor(agent: Agent, state: WorkflowState,
-                                           input_message: str, workers: List[Agent],
-                                           allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
+    # Private execution
+    def _execute_with_response_api_executor(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+        workers: List[Agent],
+        allow_parallel: bool,
+    ) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using ResponseAPIExecutor approach with Response API function calling."""
         if not workers:
-            content = AgentNodeBase.execute_agent(agent, state, input_message)
-            return content, {"action": "finish"}
+            return self._finish_without_delegation(agent, state, input_message)
         
         delegation_tool = HandoffDelegation._build_openai_delegation_tool(workers, allow_parallel)
         if not delegation_tool:
-            content = AgentNodeBase.execute_agent(agent, state, input_message)
-            return content, {"action": "finish"}
+            return self._finish_without_delegation(agent, state, input_message)
         
-        llm_client = AgentManager.get_llm_client(agent)
-        
-        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow")
-        
-        # Update vector_store_ids before invoking
-        executor.update_vector_store_ids(llm_client)
-        
-        # Extract conversation history and file messages from workflow state
-        conversation_messages = state.get("messages", [])
-        file_messages = state.get("metadata", {}).get("file_messages")
-        with st.spinner(f"🤖 {agent.name} is working..."):
+        executor = self.runtime.executor_registry.get_or_create(
+            agent,
+            executor_type="workflow",
+        )
+        conversation_messages, file_messages, vector_store_ids = HandoffDelegation._extract_state_context(state)
+        executor.set_vector_store_ids(vector_store_ids)
+
+        with self.runtime.spinner_context(f"🤖 {agent.name} is working..."):
             out = executor.invoke_response_api(
                 prompt=input_message,
                 messages=conversation_messages,
                 file_messages=file_messages,
-                delegation_tool=delegation_tool if delegation_tool else None
+                delegation_tool=delegation_tool if delegation_tool else None,
             )
         
         # Extract routing decision from Response API output
         routing_decision = HandoffDelegation._extract_response_api_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
     
-    @staticmethod
-    def _execute_with_create_agent_executor(agent: Agent, state: WorkflowState,
-                                           input_message: str, workers: List[Agent],
-                                           allow_parallel: bool) -> Tuple[str, Dict[str, Any]]:
+    def _execute_with_create_agent_executor(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+        workers: List[Agent],
+        allow_parallel: bool,
+    ) -> Tuple[str, Dict[str, Any]]:
         """Execute supervisor using CreateAgentExecutor approach with LangChain tool calling."""
         if not workers:
-            content = AgentNodeBase.execute_agent(agent, state, input_message)
-            return content, {"action": "finish"}
+            return self._finish_without_delegation(agent, state, input_message)
         
         delegation_tool = HandoffDelegation._build_langchain_delegation_tool(workers, allow_parallel)
         if not delegation_tool:
-            content = AgentNodeBase.execute_agent(agent, state, input_message)
-            return content, {"action": "finish"}
+            return self._finish_without_delegation(agent, state, input_message)
         
-        llm_client = AgentManager.get_llm_client(agent)
+        llm_client = get_llm_client(agent)
         
-        existing_tools = agent.get_tools()
-        executor = ExecutorRegistry().get_or_create(agent, executor_type="workflow", tools=existing_tools + [delegation_tool])
-        
-        # ensure delegation tool is always added to executor tools
-        if executor.tools is None:
-            executor.tools = [delegation_tool]
-        elif "delegate_task" not in [tool.name for tool in executor.tools]:
-            executor.tools = list(executor.tools) + [delegation_tool]
-        # force to use new agent_obj that has delegation tool
-        if hasattr(executor, 'agent_obj'):
-            executor.agent_obj = None
+        executor = self.runtime.executor_registry.get_or_create(
+            agent,
+            executor_type="workflow",
+            tools=agent.get_tools(),
+        )
+        HandoffDelegation._ensure_delegation_tool(executor, delegation_tool)
         
         executor_key = f"workflow_executor_{agent.name}"
         config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
-        conversation_messages = state.get("messages", [])
-        file_messages = state.get("metadata", {}).get("file_messages")
-        with st.spinner(f"🤖 {agent.name} is working..."):
+        conversation_messages, file_messages, _ = HandoffDelegation._extract_state_context(state)
+        
+        with self.runtime.spinner_context(f"🤖 {agent.name} is working..."):
             if executor.agent_obj is None:
                 executor.build_agent(llm_client)
             
@@ -182,6 +198,27 @@ class HandoffDelegation:
         
         routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, input_message)
         return routing_decision[1], routing_decision[0]
+    
+    def _finish_without_delegation(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Execute agent directly when delegation is not possible."""
+        response = self.agent_executor.execute_agent(agent, state, input_message)
+        return response.get("content", ""), {"action": "finish"}
+    
+    # Private Tool Building Methods
+    @staticmethod
+    def _build_worker_options(workers: List[Agent], allow_parallel: bool) -> Tuple[List[str], List[str]]:
+        """Build worker name options and description parts for delegation tools."""
+        worker_name_options = [w.name for w in workers]
+        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
+        if allow_parallel and len(workers) > 1:
+            worker_name_options.append("PARALLEL")
+            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
+        return worker_name_options, worker_desc_parts
     
     @staticmethod
     def _build_delegation_parameters(workers: List[Agent], allow_parallel: bool) -> Dict[str, Any]:
@@ -267,6 +304,13 @@ class HandoffDelegation:
             args_schema=DelegationParams
         )
     
+    # Private Extraction/Parsing Methods
+    @staticmethod
+    def _extract_state_context(state: WorkflowState) -> Tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]], Optional[List[str]]]:
+        """Extract shared context (messages, files, vector stores) from workflow state."""
+        metadata = state.get("metadata", {})
+        return (state.get("messages", []), metadata.get("file_messages"), metadata.get("vector_store_ids"))
+    
     @staticmethod
     def _extract_response_api_routing_decision(out: Any, prompt: str) -> Tuple[Dict[str, Any], str]:
         """Extract routing decision from Response API output."""
@@ -310,8 +354,35 @@ class HandoffDelegation:
                     text = item.get("text") or item.get("content", "")
                 else:
                     text = getattr(item, "text", "") or getattr(item, "content", "")
-                if text and not content:
-                    content = str(text)
+                if text:
+                    content = content + str(text) if content else str(text)
+            elif item_type == "code_interpreter_call":
+                # Extract code from code_interpreter_call
+                code = None
+                if isinstance(item, dict):
+                    code = item.get('code', '') or item.get('input', '')
+                else:
+                    code = getattr(item, 'code', '') or getattr(item, 'input', '')
+                if code:
+                    # Include code block in content
+                    code_block = f"\n\n```python\n{code}\n```\n\n"
+                    content = content + code_block if content else code_block
+                
+                # Extract output from code_interpreter_call
+                output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
+                if output:
+                    if isinstance(output, list):
+                        for output_item in output:
+                            if isinstance(output_item, dict):
+                                output_type = output_item.get('type', '')
+                                if output_type == 'text':
+                                    output_text = output_item.get('text', '')
+                                    if output_text:
+                                        content = content + str(output_text) if content else str(output_text)
+                                elif output_type == 'image':
+                                    content = content + "\n[Code generated an image]\n" if content else "\n[Code generated an image]\n"
+                    elif isinstance(output, str):
+                        content = content + str(output) if content else str(output)
             elif item_type == "message":
                 # Response API message items contain content blocks
                 if isinstance(item, dict):
@@ -321,7 +392,7 @@ class HandoffDelegation:
                 
                 # Extract text from content blocks
                 # Blocks can be ResponseOutputText objects (with .text attribute) or dicts
-                if content_blocks and not content:
+                if content_blocks:
                     text_parts = []
                     for block in content_blocks:
                         # Handle ResponseOutputText objects (from OpenAI SDK)
@@ -340,7 +411,8 @@ class HandoffDelegation:
                         elif isinstance(block, str):
                             text_parts.append(block)
                     if text_parts:
-                        content = ''.join(text_parts)
+                        message_text = ''.join(text_parts)
+                        content = content + message_text if content else message_text
         
         return routing_decision, content or ""
     
@@ -362,7 +434,6 @@ class HandoffDelegation:
             content = out.content
         
         if messages:
-            from langchain_core.messages import AIMessage
             for msg in reversed(messages):
                 if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
                     for tool_call in msg.tool_calls:
@@ -414,6 +485,7 @@ class HandoffDelegation:
         
         return routing_decision, content or ""
     
+    # Private Utility Methods
     @staticmethod
     def _get_previous_worker_outputs(state: WorkflowState, supervisor_name: str, current_worker_name: str) -> Optional[List[str]]:
         """Get formatted list of previous worker outputs."""
@@ -425,11 +497,13 @@ class HandoffDelegation:
         return worker_outputs if worker_outputs else None
     
     @staticmethod
-    def _build_worker_options(workers: List[Agent], allow_parallel: bool) -> Tuple[List[str], List[str]]:
-        """Build worker name options and description parts for delegation tools."""
-        worker_name_options = [w.name for w in workers]
-        worker_desc_parts = [f'{w.name} ({w.role})' for w in workers]
-        if allow_parallel and len(workers) > 1:
-            worker_name_options.append("PARALLEL")
-            worker_desc_parts.append("PARALLEL (delegate to ALL workers simultaneously)")
-        return worker_name_options, worker_desc_parts
+    def _ensure_delegation_tool(executor: Any, delegation_tool: StructuredTool) -> None:
+        """Attach delegation tool to executor once and invalidate cached agent if needed."""
+        if not delegation_tool:
+            return
+        existing_tools = getattr(executor, "tools", None) or []
+        tool_names = [getattr(tool, "name", None) for tool in existing_tools if hasattr(tool, "name")]
+        if delegation_tool.name not in tool_names:
+            executor.tools = list(existing_tools) + [delegation_tool]
+            if hasattr(executor, "agent_obj"):
+                executor.agent_obj = None

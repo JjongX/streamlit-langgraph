@@ -77,4 +77,3 @@ class WorkflowBuilder:
             StateGraph: Compiled network workflow graph
         """
         return NetworkPattern.create_network_workflow(agents, checkpointer)
-

@@ -7,8 +7,8 @@ import streamlit_langgraph as slg
 def create_network_workflow_example():
     """Create a network workflow with peer-to-peer agent collaboration."""
     
-    config_path = os.path.join(os.path.dirname(__file__), "./configs/network.yaml")
-    agents = slg.AgentManager.load_from_yaml(config_path)
+    config_path = os.path.join(os.path.dirname(__file__), "./configs/05_network.yaml")
+    agents = slg.Agent(config_path)
     
     return agents
 
@@ -26,7 +26,6 @@ def main():
     config = slg.UIConfig(
         title="Strategic Consulting Network",
         page_icon="🕸️",
-        stream=True,
         welcome_message="""Welcome to the **Strategic Consulting Network**!
 
 This demonstrates a **true network pattern** where specialists collaborate dynamically, handing work back and forth as needed - not just passing it sequentially.

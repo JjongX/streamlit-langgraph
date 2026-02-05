@@ -1,14 +1,17 @@
 # Executor registry for managing executor lifecycle.
 
-from typing import Any, Optional
-
-import streamlit as st
+from typing import Any, Dict, Optional
 
 from ...agent import Agent
+from .create_agent import CreateAgentExecutor
+from .response_api import ResponseAPIExecutor
 
 
 class ExecutorRegistry:
     """Registry for managing executor instances."""
+
+    def __init__(self):
+        self._executors: Dict[str, Any] = {}
     
     def get_or_create(
         self, agent: Agent, executor_type: str = "workflow",
@@ -19,7 +22,8 @@ class ExecutorRegistry:
         
         Selection logic:
         - If HITL enabled → use CreateAgentExecutor (native tools automatically disabled)
-        - If native tools enabled AND HITL disabled → use ResponseAPIExecutor
+        - If OpenAI native tools enabled AND HITL disabled → use ResponseAPIExecutor
+        - If Gemini native tools enabled → use CreateAgentExecutor (Gemini tools handled via LangChain)
         - Otherwise → use CreateAgentExecutor
         
         Args:
@@ -30,59 +34,78 @@ class ExecutorRegistry:
         Returns:
             CreateAgentExecutor or ResponseAPIExecutor instance
         """
-        from .create_agent import CreateAgentExecutor
-        from .response_api import ResponseAPIExecutor
-
         executor_key = "single_agent_executor" if executor_type == "single_agent" else f"workflow_executor_{agent.name}"
         
-        has_native = ExecutorRegistry.has_native_tools(agent)
-        use_response_api = has_native and not agent.human_in_loop
+        # Only use ResponseAPIExecutor for OpenAI provider with native tools
+        has_openai_native = ExecutorRegistry.has_openai_native_tools(agent)
+        use_response_api = has_openai_native and not agent.human_in_loop
+        desired_executor_cls = ResponseAPIExecutor if use_response_api else CreateAgentExecutor
+        desired_tools = tools if tools is not None else agent.get_tools()
         
-        # Check if executor exists and is the correct type
-        existing_executor = st.session_state.agent_executors.get(executor_key)
-        executor_needs_recreation = False
-        
-        if existing_executor is not None:
-            is_response_api = isinstance(existing_executor, ResponseAPIExecutor)
-            is_create_agent = isinstance(existing_executor, CreateAgentExecutor)
-            
-            if use_response_api and not is_response_api:
-                executor_needs_recreation = True
-            elif not use_response_api and not is_create_agent:
-                executor_needs_recreation = True
-            elif hasattr(existing_executor, 'agent') and existing_executor.agent.name != agent.name:
-                executor_needs_recreation = True
-        
-        if executor_key not in st.session_state.agent_executors or executor_needs_recreation:
-            if use_response_api:
-                executor = ResponseAPIExecutor(agent, tools=agent.get_tools())
-            else:
-                executor = CreateAgentExecutor(agent, tools=tools)
-            st.session_state.agent_executors[executor_key] = executor
+        existing_executor = self._executors.get(executor_key)
+        if not isinstance(existing_executor, desired_executor_cls):
+            executor = desired_executor_cls(agent, tools=desired_tools)
+            self._executors[executor_key] = executor
         else:
             executor = existing_executor
-            if hasattr(executor, 'tools'):
-                executor.tools = agent.get_tools()
+            if hasattr(executor, "tools"):
+                executor.tools = desired_tools
         
         return executor
-    
-    def create_for_hitl(self, agent: Agent, executor_key: Optional[str] = None) -> Any:
-        """Create executor for HITL scenarios."""
-        from .create_agent import CreateAgentExecutor
 
-        if executor_key is None:
-            executor_key = f"workflow_executor_{agent.name}"
-        executor = CreateAgentExecutor(agent)
-        
-        st.session_state.agent_executors[executor_key] = executor
-        return executor
+    def get(self, executor_key: str) -> Optional[Any]:
+        """Get an executor by key if available."""
+        return self._executors.get(executor_key)
+
+    def clear(self) -> None:
+        """Clear all cached executors."""
+        self._executors.clear()
     
     @staticmethod
     def has_native_tools(agent: Agent) -> bool:
-        """Check if agent has native OpenAI tools enabled."""
+        """Check if agent has any native tools enabled (OpenAI or Gemini)."""
         return (
             agent.allow_file_search or
             agent.allow_code_interpreter or
             agent.allow_web_search or
             agent.allow_image_generation
+        )
+    
+    @staticmethod
+    def has_openai_native_tools(agent: Agent) -> bool:
+        """
+        Check if agent has native OpenAI tools enabled.
+        
+        Only returns True for OpenAI provider with native tools enabled.
+        Gemini native tools are handled differently via LangChain's ChatGoogleGenerativeAI.
+        """
+        provider = agent.provider.lower()
+        if provider != "openai":
+            return False
+        return (
+            agent.allow_file_search or
+            agent.allow_code_interpreter or
+            agent.allow_web_search or
+            agent.allow_image_generation
+        )
+    
+    @staticmethod
+    def has_gemini_native_tools(agent: Agent) -> bool:
+        """
+        Check if agent has native Gemini tools enabled.
+        
+        Gemini supports:
+        - google_search (web search grounding)
+        - code_execution (Python code execution)
+        - file_search (RAG with file search stores)
+        
+        Note: image_generation is not directly supported as a Gemini tool.
+        """
+        provider = agent.provider.lower()
+        if provider != "google":
+            return False
+        return (
+            agent.allow_web_search or
+            agent.allow_code_interpreter or
+            agent.allow_file_search
         )

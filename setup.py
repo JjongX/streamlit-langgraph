@@ -23,6 +23,7 @@ setup(
         "langchain>=1.0.1",
         "langgraph>=1.0.1",
         "langchain-openai>=1.0.0",
+        "langchain-google-genai>=4.0.0",
         "openai>=2.3.0",
         "typing-extensions>=4.15.0",
         "pyyaml>=6.0",

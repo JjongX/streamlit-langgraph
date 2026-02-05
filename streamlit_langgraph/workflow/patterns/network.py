@@ -6,6 +6,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, START, END
 
 from ...agent import Agent
+from ...core.executor.registry import ExecutorRegistry
+from ...core.runtime import RuntimeHooks
 from ..agent_nodes.factory import AgentNodeFactory
 from ..agent_nodes.routing import RoutingHelper
 from ...core.state import WorkflowState
@@ -22,7 +24,7 @@ class NetworkPattern:
     @staticmethod
     def create_network_workflow(
         agents: List[Agent],
-        checkpointer: Optional[Any] = None
+        checkpointer: Optional[Any] = None,
     ) -> StateGraph:
         """
         Create a network workflow where agents can communicate peer-to-peer.
@@ -48,13 +50,15 @@ class NetworkPattern:
         # Ensure all agents with code_interpreter share the same container_id
         Agent.sync_container_ids(agents)
         
+        runtime_hooks = RuntimeHooks(executor_registry=ExecutorRegistry())
+        node_factory = AgentNodeFactory(runtime_hooks)
         graph = StateGraph(WorkflowState)
         
         # Add all agents as nodes
         for agent in agents:
             # Get peer agents (all agents except the current one)
             peer_agents = [a for a in agents if a.name != agent.name]
-            node = AgentNodeFactory.create_network_agent_node(agent, peer_agents)
+            node = node_factory.create_network_agent_node(agent, peer_agents)
             graph.add_node(agent.name, node)
         
         # Connect first agent to START
@@ -71,5 +75,6 @@ class NetworkPattern:
             routes["__end__"] = END
             graph.add_conditional_edges(agent.name, route_fn, routes)
         
-        return graph.compile(checkpointer=workflow_checkpointer)
-
+        compiled = graph.compile(checkpointer=workflow_checkpointer)
+        compiled.runtime_hooks = runtime_hooks
+        return compiled

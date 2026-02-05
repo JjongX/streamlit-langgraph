@@ -3,9 +3,7 @@
 import json
 from typing import Any, Dict, List
 
-import streamlit as st
-
-from ...agent import Agent, AgentManager
+from ...agent import Agent, get_llm_client
 from .factory import AgentNodeBase
 from ...core.state.state_schema import WorkflowState
 from ..prompts import ToolCallingPromptBuilder
@@ -14,10 +12,17 @@ from ..prompts import ToolCallingPromptBuilder
 class ToolCallingDelegation:
     """Tool calling delegation pattern for supervisor-worker workflows."""
 
-    @staticmethod
-    def execute_agent_with_tools(agent: Agent, state: WorkflowState, 
-                                  input_message: str, tools: List[Dict[str, Any]],
-                                  tool_agents_map: Dict[str, Agent]) -> str:
+    def __init__(self, agent_executor: AgentNodeBase):
+        self.agent_executor = agent_executor
+
+    def execute_agent_with_tools(
+        self,
+        agent: Agent,
+        state: WorkflowState,
+        input_message: str,
+        tools: List[Dict[str, Any]],
+        tool_agents_map: Dict[str, Agent],
+    ) -> str:
         """Execute an agent with access to tools (other agents wrapped as tools)."""
         if agent.provider.lower() != "openai":
             raise ValueError(
@@ -25,18 +30,21 @@ class ToolCallingDelegation:
                 f"Agent '{agent.name}' uses provider '{agent.provider}'."
             )
 
-        client = AgentManager.get_llm_client(agent)
+        client = get_llm_client(agent)
         messages = []
-        if agent.system_message:
-            messages.append({"role": "system", "content": agent.system_message})
+        system_message = f"You are a {agent.role}. {agent.instructions}"
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": input_message})
         
         for iteration in range(10):
-            with st.spinner(f"🤖 {agent.name} is working..."):
-                response = client.chat.completions.create(
-                    model=agent.model, messages=messages, temperature=agent.temperature,
-                    tools=tools if tools else None, tool_choice="auto" if tools else None
-                )
+            response = client.chat.completions.create(
+                model=agent.model,
+                messages=messages,
+                temperature=agent.temperature,
+                tools=tools if tools else None,
+                tool_choice="auto" if tools else None,
+            )
             message = response.choices[0].message
             messages.append(message)
 
@@ -44,9 +52,7 @@ class ToolCallingDelegation:
                 return message.content or ""
             
             for tool_call in message.tool_calls:
-                tool_result = ToolCallingDelegation._execute_tool_call(
-                    tool_call, tool_agents_map, state
-                )
+                tool_result = self._execute_tool_call(tool_call, tool_agents_map, state)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -68,15 +74,20 @@ class ToolCallingDelegation:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "task": {"type": "string", "description": f"Clear description of the task for {agent.name} to perform. Be specific about what you need."}
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                f"Clear description of the task for {agent.name} to perform. "
+                                "Be specific about what you need."
+                            ),
+                        }
                     },
                     "required": ["task"]
                 }
             }
         } for agent in tool_agents]
     
-    @staticmethod
-    def _execute_tool_call(tool_call, tool_agents_map: Dict[str, Agent], state: WorkflowState) -> str:
+    def _execute_tool_call(self, tool_call, tool_agents_map: Dict[str, Agent], state: WorkflowState) -> str:
         """Execute a tool call by invoking the corresponding agent."""
         tool_name = tool_call.function.name
         args = json.loads(tool_call.function.arguments)
@@ -88,4 +99,5 @@ class ToolCallingDelegation:
             instructions=tool_agent.instructions,
             task=args.get("task", "")
         )
-        return AgentNodeBase.execute_agent(tool_agent, state, tool_instructions)
+        response = self.agent_executor.execute_agent(tool_agent, state, tool_instructions, allow_stream=False)
+        return response.get("content", "")

@@ -1,6 +1,7 @@
 # MCP (Model Context Protocol) tool integration utilities.
 
 import asyncio
+import concurrent.futures
 from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import StructuredTool
@@ -59,12 +60,10 @@ class MCPToolManager:
         
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            import warnings
-            warnings.warn(
+            raise ValueError(
                 "Cannot load MCP tools synchronously when event loop is running. "
                 "Consider using get_tools_async() or configuring MCP tools before starting the event loop."
             )
-            return []
         async_tools = loop.run_until_complete(self.get_tools_async())
         
         return [self._wrap_async_tool(tool) for tool in async_tools]
@@ -78,8 +77,6 @@ class MCPToolManager:
             
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                import concurrent.futures
-                
                 def run_in_thread():
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
@@ -145,4 +142,3 @@ class MCPToolManager:
             tools.append(tool_dict)
         
         return tools
-

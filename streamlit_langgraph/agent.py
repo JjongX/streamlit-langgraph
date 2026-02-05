@@ -1,25 +1,42 @@
 # Main agent class.
 
 import os
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional
 
 import yaml
 from langchain.chat_models import init_chat_model
 
+from .utils import CustomTool, MCPToolManager
 
-@dataclass
+
 class Agent:
     """
     Agent configuration for multiagent workflows.
     
-    This class represents a single agent in a multi-agent system with its configuration,
-    capabilities, and behavior settings.
+    This class represents a single agent in a multi-agent system, including its 
+    configuration, capabilities, and behavior settings.
+    
+    **Configuration via YAML:**
+        Load agents from YAML file:
+        
+        Single agent:
+        ```python
+        agent = Agent("configs/agent.yaml")
+        ```
+        
+        Multiple agents:
+        ```python
+        agents = Agent("configs/agents.yaml")
+        supervisor = agents[0]
+        workers = agents[1:]
+        ```
     
     Executor selection logic:
-    - HITL enabled → CreateAgentExecutor (native tools disabled)
-    - Native tools + no HITL → ResponseAPIExecutor
-    - Otherwise → CreateAgentExecutor
+    - HITL enabled -> CreateAgentExecutor (HITL requires tool interception, 
+    which is not available in the Response API)
+    - Native OpenAI tools enabled + HITL disabled -> ResponseAPIExecutor 
+    (to utilize native tools and access full Response API features such as partial image support, streaming, and more)
+    - Default -> CreateAgentExecutor
     
     Attributes:
         name: Unique identifier for the agent
@@ -27,11 +44,11 @@ class Agent:
         instructions: Detailed instructions guiding agent behavior
         provider: LLM provider name (default: "openai")
         model: Model name to use (default: "gpt-4.1-mini")
-        system_message: Custom system message (auto-generated if None)
-        temperature: Sampling temperature for responses (default: 0.0)
+        temperature: Sampling temperature for responses (None if not specified)
+        reasoning_effort: Reasoning effort for OpenAI Responses API ("low", "medium", "high")
         allow_file_search: Enable file search capability
         allow_code_interpreter: Enable code interpreter capability
-        container_id: Container ID for code interpreter (required for code_interpreter)
+        container_id: Container ID for code interpreter (auto-created by FileHandler when code_interpreter is enabled, not loaded from YAML)
         allow_web_search: Enable web search capability
         allow_image_generation: Enable image generation capability
         tools: List of custom tool names available to the agent
@@ -39,104 +56,27 @@ class Agent:
         context: Context mode ("full", "summary", or "least")
         human_in_loop: Enable human-in-the-loop approval
         interrupt_on: HITL configuration per tool
-        hitl_description_prefix: Prefix for HITL approval messages
         conversation_history_mode: Conversation history mode ("full", "filtered", or "disable")
     """
-    name: str
-    role: str
-    instructions: str
-    provider: Optional[str] = "openai"
-    model: Optional[str] = "gpt-4.1-mini"
-    system_message: Optional[str] = None
-    temperature: float = 0.0
-    allow_file_search: bool = False
-    allow_code_interpreter: bool = False
-    container_id: Optional[str] = None  # Required for code_interpreter functionality
-    allow_web_search: bool = False
-    allow_image_generation: bool = False
-    tools: List[str] = field(default_factory=list)
-    mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None
-    context: Optional[str] = "least"
-    human_in_loop: bool = False
-    interrupt_on: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None
-    hitl_description_prefix: Optional[str] = "Tool execution pending approval"
-    conversation_history_mode: str = "filtered"  # Options: "full", "filtered", "disable"
+    
+    def __new__(cls, file_path: str = None, **kwargs):
+        """
+        Create Agent instance(s) from YAML file.
 
-    def __post_init__(self):
-        """Initialize system message and validate settings."""
-        if self.system_message is None:
-            self.system_message = f"You are a {self.role}. {self.instructions}"
-            
-        if "file_search" in self.tools:
-            self.allow_file_search = True
-        if "code_interpreter" in self.tools:
-            self.allow_code_interpreter = True
-        if "web_search" in self.tools:
-            self.allow_web_search = True
-        if "image_generation" in self.tools:
-            self.allow_image_generation = True
-        
-        valid_modes = ["full", "filtered", "disable"]
-        if self.conversation_history_mode not in valid_modes:
-            raise ValueError(
-                f"conversation_history_mode must be one of {valid_modes}, "
-                f"got '{self.conversation_history_mode}'"
-            )
+        Returns:
+            Agent instance if single agent, or List[Agent] if multiple agents
+        """
+        agents = cls._load_from_yaml(file_path)
+        if len(agents) == 1:
+            return agents[0]
+        elif len(agents) > 1:
+            return agents
+        return agents
 
-    def to_dict(self) -> Dict:
-        """Convert agent configuration to dictionary for serialization."""
-        return {
-            "name": self.name,
-            "role": self.role,
-            "instructions": self.instructions,
-            "provider": self.provider,
-            "model": self.model,
-            "system_message": self.system_message,
-            "temperature": self.temperature,
-            "allow_file_search": self.allow_file_search,
-            "allow_code_interpreter": self.allow_code_interpreter,
-            "container_id": self.container_id,
-            "allow_web_search": self.allow_web_search,
-            "allow_image_generation": self.allow_image_generation,
-            "tools": self.tools,
-            "mcp_servers": self.mcp_servers,
-            "context": self.context,
-            "human_in_loop": self.human_in_loop,
-            "interrupt_on": self.interrupt_on,
-            "hitl_description_prefix": self.hitl_description_prefix,
-            "conversation_history_mode": self.conversation_history_mode,
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict) -> "Agent":
-        """Create an Agent instance from a dictionary configuration."""
-        return cls(**data)
-    
-    @staticmethod
-    def sync_container_ids(agents):
-        """Share container_id across all code_interpreter agents."""
-        code_interpreter_agents = [a for a in agents if a.allow_code_interpreter]
-        if not code_interpreter_agents:
-            return
-        
-        # Find first agent with a container_id set
-        shared_container_id = next(
-            (a.container_id for a in code_interpreter_agents 
-             if a.container_id and isinstance(a.container_id, str)), 
-            None
-        )
-        
-        # Apply the shared container_id to all code_interpreter agents
-        if shared_container_id:
-            for agent in code_interpreter_agents:
-                agent.container_id = shared_container_id
-    
     def get_tools(self) -> List[Any]:
         """
         Get all tools for this agent (custom tools + MCP tools).
         """
-        from .utils import CustomTool, MCPToolManager
-        
         tools = []
         if self.tools:
             tools.extend(CustomTool.get_langchain_tools(self.tools))
@@ -145,102 +85,146 @@ class Agent:
             mcp_manager.add_servers(self.mcp_servers)
             tools.extend(mcp_manager.get_tools())
         return tools
-
-
-class AgentManager:
-    """Manager class for handling multiple agents and their interactions."""
-    
-    def __init__(self):
-        self.agents: Dict[str, Agent] = {}
-        self.active_agent: Optional[str] = None
-    
-    def add_agent(self, agent):
-        """Add an agent to the manager."""
-        self.agents[agent.name] = agent
-        if self.active_agent is None:
-            self.active_agent = agent.name
-    
-    def remove_agent(self, name):
-        """Remove an agent from the manager."""
-        if name in self.agents:
-            del self.agents[name]
-            if self.active_agent == name:
-                self.active_agent = next(iter(self.agents.keys())) if self.agents else None
     
     @staticmethod
-    def load_from_yaml(yaml_path: str) -> List[Agent]:
-        """
-        Load multiple Agent instances from a YAML configuration file.
+    def sync_container_ids(agents):
+        """Share container_id across all code_interpreter agents."""
+        code_interpreter_agents = [a for a in agents if a.allow_code_interpreter]
+        if not code_interpreter_agents:
+            return # No code_interpreter agents to sync
         
-        This method is designed for multi-agent configurations. For single agents,
-        use the Agent class directly: Agent(name="...", role="...", ...)
-        
-        Example:
-            # Load agents from a config file
-            agents = AgentManager.load_from_yaml("./configs/supervisor_sequential.yaml")
-            supervisor = agents[0]
-            workers = agents[1:]
-            
-            # Or use relative to current file
-            config_path = os.path.join(os.path.dirname(__file__), "./configs/my_agents.yaml")
-            agents = AgentManager.load_from_yaml(config_path)
+        # Find first agent with a container_id set
+        shared_container_id = next(
+            (a.container_id for a in code_interpreter_agents 
+             if a.container_id and isinstance(a.container_id, str)), 
+            None
+        )
+        # Apply the shared container_id to all code_interpreter agents
+        if shared_container_id:
+            for agent in code_interpreter_agents:
+                agent.container_id = shared_container_id
+    
+    @classmethod
+    def _load_from_yaml(cls, yaml_path: str) -> List["Agent"]:
         """
-        if not os.path.isabs(yaml_path):
-            yaml_path = os.path.abspath(yaml_path)
+        Internal method to load Agent instances from a YAML configuration file.
+        Creates agents directly without going through constructor to avoid double initialization.
+        """
         if not os.path.exists(yaml_path):
             raise FileNotFoundError(f"YAML config file not found: {yaml_path}")
-        
+
         with open(yaml_path, "r", encoding="utf-8") as f:
             agent_configs = yaml.safe_load(f)
-        
+        if agent_configs is None:
+            raise ValueError("YAML file is empty or contains no configuration.")
         if not isinstance(agent_configs, list):
-            raise ValueError(
-                f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}"
-            )
-        
-        agents: List[Agent] = []
-        for cfg in agent_configs:
-            if not isinstance(cfg, dict):
-                raise ValueError(
-                    f"Each agent configuration must be a dictionary. Got: {type(cfg)}"
-                )
-            agents.append(Agent(**cfg))
-        
-        return agents
-    
+            raise ValueError(f"YAML file must contain a list of agent configurations. Got: {type(agent_configs)}")
+
+        return [cls._build_agent_from_config(cfg) for cfg in agent_configs]
+
+    @classmethod
+    def _build_agent_from_config(cls, cfg: dict) -> "Agent":
+        """Create an Agent instance from a single configuration dict."""
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Each agent configuration must be a dictionary. Got: {type(cfg)}")
+
+        agent = object.__new__(cls)
+        agent.name = cfg.get("name")
+        agent.role = cfg.get("role")
+        agent.instructions = cfg.get("instructions")
+        agent.provider = cfg.get("provider", "openai")
+        agent.model = cfg.get("model", "gpt-4.1-mini")
+        agent.temperature = cfg.get("temperature")
+        agent.reasoning_effort = cfg.get("reasoning_effort")
+        agent.allow_file_search = cfg.get("allow_file_search", False)
+        agent.allow_code_interpreter = cfg.get("allow_code_interpreter", False)
+        agent.container_id = None
+        agent.allow_web_search = cfg.get("allow_web_search", False)
+        agent.allow_image_generation = cfg.get("allow_image_generation", False)
+        agent.tools = cfg.get("tools", [])
+        agent.mcp_servers = cfg.get("mcp_servers")
+        agent.context = cfg.get("context", "least")
+        agent.human_in_loop = cfg.get("human_in_loop", False)
+        agent.interrupt_on = cfg.get("interrupt_on")
+        agent.conversation_history_mode = cfg.get("conversation_history_mode", "filtered")
+        cls._apply_agent_settings(agent)
+        return agent
+
     @staticmethod
-    def get_llm_client(agent: Agent, vector_store_ids: Optional[List[str]] = None) -> Any:
-        """
-        Get the appropriate LLM client for an agent based on its configuration.
+    def _apply_agent_settings(agent: "Agent") -> None:
+        """Normalize tool flags and validate conversation history mode."""
+        tools = agent.tools or []
+        if "file_search" in tools:
+            agent.allow_file_search = True
+        if "code_interpreter" in tools:
+            agent.allow_code_interpreter = True
+        if "web_search" in tools:
+            agent.allow_web_search = True
+        if "image_generation" in tools:
+            agent.allow_image_generation = True
         
-        When HITL is enabled, native tools are automatically disabled to ensure
-        CreateAgentExecutor is used (Response API does not support HITL).
-        
-        When native tools are enabled (and HITL is disabled) with OpenAI provider,
-        ResponseAPIExecutor will be used. In this case, returns a minimal client
-        object that only holds vector_store_ids, since ResponseAPIExecutor uses
-        its own OpenAI client and doesn't need a LangChain client.
-        
-        Otherwise, returns a LangChain chat model via init_chat_model for CreateAgentExecutor.
-        """
-        if agent.human_in_loop:
-            has_native_tools = False
-        else:
-            from .core.executor.registry import ExecutorRegistry
-            has_native_tools = ExecutorRegistry.has_native_tools(agent)
-        
-        if agent.provider.lower() == "openai" and has_native_tools:
-            class MinimalClient:
-                """Minimal client object for ResponseAPIExecutor to read vector_store_ids."""
-                def __init__(self, vector_store_ids: Optional[List[str]] = None):
-                    if vector_store_ids:
-                        self._vector_store_ids = vector_store_ids
-                    self._provider = agent.provider.lower()
-            return MinimalClient(vector_store_ids)
-        else:
-            chat_model = init_chat_model(
-                model=agent.model,
-                temperature=agent.temperature
+        valid_modes = {"full", "filtered", "disable"}
+        if agent.conversation_history_mode not in valid_modes:
+            raise ValueError(
+                f"conversation_history_mode must be one of {sorted(valid_modes)}, "
+                f"got '{agent.conversation_history_mode}'"
             )
-            setattr(chat_model, "_provider", agent.provider.lower())
-            return chat_model
+
+        valid_reasoning_efforts = {"low", "medium", "high"}
+        if agent.reasoning_effort is not None and agent.reasoning_effort not in valid_reasoning_efforts:
+            raise ValueError(
+                f"reasoning_effort must be one of {sorted(valid_reasoning_efforts)}, "
+                f"got '{agent.reasoning_effort}'"
+            )
+
+
+def get_llm_client(
+    agent: Agent,
+    vector_store_ids: Optional[List[str]] = None,
+    file_search_store_names: Optional[List[str]] = None
+) -> Any:
+    """Return a provider-appropriate LLM client (LangChain or minimal wrapper)."""
+    provider = agent.provider.lower()
+
+    # If OpenAI native tools are enabled (and HITL is off), we use ResponseAPIExecutor.
+    # In that case, return a minimal client that only carries vector_store_ids.
+    from .core.executor.registry import ExecutorRegistry
+    use_response_api = (
+        provider == "openai"
+        and not agent.human_in_loop
+        and ExecutorRegistry.has_openai_native_tools(agent)
+    )
+    if use_response_api:
+        class MinimalClient:
+            """Minimal client object for ResponseAPIExecutor to read vector_store_ids."""
+            def __init__(self, vector_store_ids: Optional[List[str]] = None):
+                if vector_store_ids:
+                    self._vector_store_ids = vector_store_ids
+                self._provider = provider
+        return MinimalClient(vector_store_ids)
+    else:
+        # CreateAgentExecutor path (LangChain chat model). Use model_provider "google_genai" for Google (not "google").
+        model_provider = "google_genai" if provider == "google" else provider
+        init_kwargs = {
+            "model": agent.model,
+            "temperature": agent.temperature,
+            "model_provider": model_provider,
+        }
+
+        if provider == "openai" and agent.reasoning_effort:
+            init_kwargs["reasoning"] = {"effort": agent.reasoning_effort, "summary": "auto"}
+
+        chat_model = init_chat_model(**init_kwargs)
+        setattr(chat_model, "_provider", provider)
+
+        if provider == "google" and ExecutorRegistry.has_gemini_native_tools(agent):
+            tools = []
+            if agent.allow_web_search:
+                tools.append({"google_search": {}})
+            if agent.allow_code_interpreter:
+                tools.append({"code_execution": {}})
+            if tools:
+                chat_model = chat_model.bind_tools(tools)
+            setattr(chat_model, "_has_gemini_native_tools", True)
+
+        return chat_model

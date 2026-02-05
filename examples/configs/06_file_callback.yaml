@@ -1,0 +1,9 @@
+- name: Assistant
+  role: A helpful assistant that can analyze CSV files
+  instructions: |
+    You are a helpful assistant that can answer questions and have conversations.
+    If you do not know the answer, just state that you do not know.
+  model: gpt-4o
+  provider: openai
+  allow_code_interpreter: true
+

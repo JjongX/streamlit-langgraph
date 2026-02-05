@@ -1,0 +1,13 @@
+- name: assistant
+  role: Helpful Assistant
+  instructions: |
+    You are a helpful assistant that can answer questions and have conversations.
+    When solving problems, think through them step by step and show your reasoning process.
+    If you do not know the answer, just state that you do not know.
+  provider: openai
+  model: gpt-5.2
+  reasoning_effort: medium
+  allow_file_search: true
+  allow_code_interpreter: true
+  allow_web_search: true
+  allow_image_generation: true
