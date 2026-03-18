@@ -3,7 +3,6 @@
   instructions: |
     You are a helpful assistant that can answer questions and have conversations.
     If you do not know the answer, just state that you do not know.
-  model: gpt-4o
+  model: gpt-4.1-mini
   provider: openai
   allow_code_interpreter: true
-

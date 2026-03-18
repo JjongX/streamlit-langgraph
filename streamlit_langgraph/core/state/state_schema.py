@@ -35,6 +35,25 @@ class WorkflowStateManager:
         if nested_key not in metadata:
             metadata[nested_key] = {}
         return metadata[nested_key]
+
+    @staticmethod
+    def ensure_stream_flag(state: "WorkflowState", default_stream: bool) -> bool:
+        """Ensure metadata['stream'] exists and return it."""
+        metadata = WorkflowStateManager._ensure_metadata(state)
+        if "stream" not in metadata:
+            metadata["stream"] = bool(default_stream)
+        return bool(metadata["stream"])
+
+    @staticmethod
+    def require_stream_flag(state: "WorkflowState") -> bool:
+        """Return metadata['stream'] or raise a descriptive error when missing."""
+        metadata = state.get("metadata")
+        if not isinstance(metadata, dict) or "stream" not in metadata:
+            raise KeyError(
+                "Missing required metadata['stream'] in workflow state. "
+                "Initialize workflow state through WorkflowStateManager.ensure_stream_flag(...)."
+            )
+        return bool(metadata["stream"])
     
     @staticmethod
     def set_pending_interrupt(state: "WorkflowState", agent_name: str, interrupt_data: Dict[str, Any], executor_key: str) -> Dict[str, Any]:

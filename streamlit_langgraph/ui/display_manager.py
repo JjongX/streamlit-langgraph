@@ -49,11 +49,12 @@ class Block:
     def _render_download(self):
         """Render download button for file content."""
         _, file_extension = os.path.splitext(self.filename)
+        mime_type = MIME_TYPES.get(file_extension.lstrip("."), "application/octet-stream")
         st.download_button(
             label=self.filename,
             data=self.content,
             file_name=self.filename,
-            mime=MIME_TYPES[file_extension.lstrip(".")],
+            mime=mime_type,
             key=self.display_manager._download_button_key,
         )
         self.display_manager._download_button_key += 1
@@ -204,39 +205,25 @@ class DisplayManager:
             
             with st.chat_message(section_data["role"], avatar=avatar):
                 for block_data in section_data.get("blocks", []):
-                    category = block_data.get("category")
-                    if category == "text":
-                        st.markdown(block_data.get("content", ""))
-                    elif category in ["image", "generated_image"]:
-                        if "content_b64" in block_data:
-                            content = base64.b64decode(block_data["content_b64"])
-                            st.image(content, caption=block_data.get("filename"))
-                        elif "content" in block_data and block_data["content"]:
-                            st.image(block_data["content"], caption=block_data.get("filename"))
-                    elif category == "download":
-                        if "content_b64" in block_data:
-                            content = base64.b64decode(block_data["content_b64"])
-                        else:
-                            content = block_data.get("content", b"")
-                        if content:
-                            _, file_extension = os.path.splitext(block_data.get("filename", ""))
-                            st.download_button(
-                                label=block_data.get("filename", "Download"),
-                                data=content,
-                                file_name=block_data.get("filename", "file"),
-                                mime=MIME_TYPES.get(file_extension.lstrip("."), "application/octet-stream"),
-                                key=f"download_{block_data.get('file_id', self._download_button_key)}",
-                            )
-                            self._download_button_key += 1
-                    elif category == "code":
-                        with st.expander("", expanded=False, icon=":material/code:"):
-                            st.code(block_data.get("content", ""))
-                    elif category == "reasoning":
-                        with st.expander("", expanded=False, icon=":material/lightbulb:"):
-                            st.markdown(block_data.get("content", ""))
+                    block = self._block_from_serialized_data(block_data)
+                    block.write()
                 
                 if "agent_info" in section_data and "agent" in section_data["agent_info"]:
                     st.caption(f"Agent: {section_data['agent_info']['agent']}")
+
+    def _block_from_serialized_data(self, block_data: Dict[str, Any]) -> Block:
+        """Rehydrate a serialized block dict to a Block instance."""
+        content: Any
+        if "content_b64" in block_data:
+            content = base64.b64decode(block_data["content_b64"])
+        else:
+            content = block_data.get("content")
+        return self.create_block(
+            block_data.get("category", "text"),
+            content=content,
+            filename=block_data.get("filename"),
+            file_id=block_data.get("file_id"),
+        )
     
     def render_welcome_message(self):
         """Render welcome message if configured."""

@@ -87,13 +87,19 @@ class AgentNodeBase:
     @staticmethod
     def _should_stream(agent, state, allow_stream):
         """Decide whether to stream agent output in workflows."""
-        metadata = state["metadata"]
+        metadata = state.get("metadata")
+        if not isinstance(metadata, dict):
+            raise RuntimeError(
+                "Workflow state is missing metadata. Initialize state via WorkflowStateManager "
+                "or LangGraphChat so metadata contracts are present."
+            )
+        stream_flag = WorkflowStateManager.require_stream_flag(state)
         routing = metadata.get("routing_decision", {})
         if routing.get("target_worker") == "PARALLEL":
             return False
         if getattr(agent, "human_in_loop", False):
             return False
-        return allow_stream and metadata["stream"]
+        return allow_stream and stream_flag
     
     @staticmethod
     def extract_user_query(state) -> str:

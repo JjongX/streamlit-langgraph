@@ -11,6 +11,10 @@ from langchain_core.tools import StructuredTool
 class CustomTool:
     """
     A custom tool that can be used by agents in the multiagent system.
+
+    Registry scope note:
+    The internal registry is process-global for this phase. Tool registrations
+    are shared across sessions running in the same Python process.
     """
     # Class-level registry for storing all registered tools
     _registry: ClassVar[Dict[str, "CustomTool"]] = {}

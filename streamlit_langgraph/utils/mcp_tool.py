@@ -57,15 +57,17 @@ class MCPToolManager:
         """
         if not self._server_configs:
             return []
-        
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            raise ValueError(
-                "Cannot load MCP tools synchronously when event loop is running. "
-                "Consider using get_tools_async() or configuring MCP tools before starting the event loop."
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "Cannot load MCP tools synchronously when an event loop is running. "
+                "Use get_tools_async() before entering async mode."
             )
-        async_tools = loop.run_until_complete(self.get_tools_async())
-        
+
+        async_tools = self._run_coroutine_in_new_loop(self.get_tools_async())
         return [self._wrap_async_tool(tool) for tool in async_tools]
     
     def _wrap_async_tool(self, async_tool: Any) -> StructuredTool:
@@ -74,21 +76,18 @@ class MCPToolManager:
             """Sync wrapper that runs the async tool."""
             async def run_async():
                 return await async_tool.ainvoke(kwargs)
-            
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                def run_in_thread():
-                    new_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(new_loop)
-                    result = new_loop.run_until_complete(run_async())
-                    new_loop.close()
-                    return result
-                
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(run_in_thread)
-                    return future.result()
-            else:
-                return loop.run_until_complete(run_async())
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return self._run_coroutine_in_new_loop(run_async())
+
+            def run_in_thread():
+                return self._run_coroutine_in_new_loop(run_async())
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
         
         args_schema = None
         if hasattr(async_tool, 'args_schema') and async_tool.args_schema:
@@ -100,6 +99,15 @@ class MCPToolManager:
             description=async_tool.description,
             args_schema=args_schema,
         )
+
+    @staticmethod
+    def _run_coroutine_in_new_loop(coro):
+        """Run a coroutine to completion in a dedicated event loop."""
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
     
     def get_openai_tools(self) -> List[Dict[str, Any]]:
         """Get MCP tools in OpenAI Responses API format."""

@@ -342,7 +342,7 @@ streamlit run examples/05_workflow_network_example.py
 
 Demonstrates HITL with tool execution approval. Users can approve, reject, or edit tool calls before execution.
 
-**Config**: `examples/configs/human_in_the_loop.yaml`
+**Config**: `examples/configs/07_human_in_the_loop.yaml`
 
 ```bash
 streamlit run examples/07_feature_human_in_the_loop_example.py
@@ -358,6 +358,8 @@ streamlit run examples/07_feature_human_in_the_loop_example.py
 **File**: `examples/08_feature_mcp_example.py`
 
 Demonstrates integration with MCP (Model Context Protocol) servers to access external tools and resources.
+The default example config connects to an already-running MCP server at `http://127.0.0.1:8000/mcp`.
+See `examples/mcp_servers/README.md` for MCP server startup instructions.
 
 ```bash
 streamlit run examples/08_feature_mcp_example.py
@@ -369,7 +371,7 @@ pip install fastmcp langchain-mcp-adapters
 ```
 
 **Features**:
-- Connect to MCP servers via stdio or HTTP transport
+- Connect to MCP servers via streamable HTTP by default (stdio also supported via config)
 - Access tools from external MCP servers
 - Works with both ResponseAPIExecutor and CreateAgentExecutor
 - Example MCP servers included (math, weather)
@@ -697,7 +699,9 @@ Peer-to-peer mesh topology where agents can communicate directly:
 
 ### Executor Architecture
 
-The system uses two executors that are automatically selected based on agent configuration:
+The system uses two executors that are automatically selected based on agent configuration.
+Selection logic is implemented in `ExecutorRegistry.get_or_create(...)`.
+For a code-level breakdown, see `docs/llm/02_EXECUTOR_SELECTION.md`.
 
 #### **ResponseAPIExecutor**
 - **When Used**: Native OpenAI tools enabled (`allow_code_interpreter`, `allow_web_search`, `allow_file_search`, `allow_image_generation`) AND HITL disabled
@@ -710,15 +714,15 @@ The system uses two executors that are automatically selected based on agent con
 - **Limitations**: Does not support HITL (human-in-the-loop)
 
 #### **CreateAgentExecutor**
-- **When Used**: HITL enabled OR native tools disabled
-- **API**: Uses ChatCompletion API via LangChain's `create_agent`
+- **When Used**: All other cases (including HITL, non-OpenAI providers, or OpenAI without native tool flags)
+- **API**: Uses LangChain `create_agent` with provider chat models
 - **Features**:
   - Full HITL support with approval workflows
   - Multi-provider support (OpenAI, Anthropic, Google, etc.)
   - Custom tools support (LangChain StructuredTool)
   - MCP tools support (via LangChain MCP adapters)
   - Streaming support
-- **Note**: When HITL is enabled, native OpenAI tools are automatically disabled (HITL requires CreateAgentExecutor)
+- **Note**: For OpenAI models, this path is separate from `ResponseAPIExecutor` and does not call OpenAI Responses API directly.
 
 #### **Automatic Selection**
 
@@ -726,10 +730,21 @@ The `ExecutorRegistry` automatically selects the appropriate executor:
 
 ```python
 # Selection logic:
-# - If HITL enabled → CreateAgentExecutor (native tools disabled)
-# - If native tools enabled AND HITL disabled → ResponseAPIExecutor
+# - If provider is OpenAI AND native tools enabled AND HITL disabled → ResponseAPIExecutor
 # - Otherwise → CreateAgentExecutor
 ```
+
+#### **Decision Matrix**
+
+| Provider | OpenAI native tool flags enabled | `human_in_loop` | Selected Executor |
+|---|---|---|---|
+| OpenAI | Yes | No | `ResponseAPIExecutor` |
+| OpenAI | Yes | Yes | `CreateAgentExecutor` |
+| OpenAI | No | No | `CreateAgentExecutor` |
+| OpenAI | No | Yes | `CreateAgentExecutor` |
+| Google / Anthropic / Others | Any | Any | `CreateAgentExecutor` |
+
+This means Chat Completions-style execution (via LangChain model path) uses `CreateAgentExecutor`, not `ResponseAPIExecutor`.
 
 **Example**:
 ```yaml
@@ -766,7 +781,7 @@ agent = slg.Agent(os.path.join(os.path.dirname(__file__), "configs/hitl_agent.ya
 #### **Handoff Delegation Support**
 
 Both executors work seamlessly with handoff delegation patterns:
-- **ResponseAPIExecutor**: Uses OpenAI ChatCompletion API with function calling for delegation
+- **ResponseAPIExecutor**: Uses OpenAI Responses API function calling for delegation
 - **CreateAgentExecutor**: Uses LangChain tool calling for delegation
 - The delegation system automatically routes to the appropriate execution method based on executor type
 
@@ -1052,12 +1067,12 @@ MCP servers can communicate via different transport protocols:
    - Communicates through standard input/output
    - Perfect for local development and command-line tools
    - Each client spawns a new server process
-   - Works with all agents (unified executor)
+   - Supported by CreateAgentExecutor; not supported by OpenAI Responses API MCP tools
 
 2. **HTTP Transport (streamable_http)**
    - Network-accessible web service
    - Supports multiple concurrent clients
-   - Works with all agents (unified executor)
+   - Supported by both ResponseAPIExecutor and CreateAgentExecutor
    - When using native OpenAI tools with Responses API: Server must be publicly accessible (not localhost)
 
 3. **SSE Transport** (Legacy)
@@ -1076,7 +1091,7 @@ Configure MCP servers in your agent YAML:
   role: Calculator
   instructions: Use MCP tools to perform calculations
   provider: openai
-  model: gpt-4o-mini
+  model: gpt-4.1-mini
   mcp_servers:
     math:
       transport: stdio
@@ -1092,10 +1107,10 @@ Configure MCP servers in your agent YAML:
   role: Calculator
   instructions: Use MCP tools to perform calculations
   provider: openai
-  model: gpt-4o-mini
+  model: gpt-4.1-mini
   mcp_servers:
     math:
-      transport: http  # or "streamable_http" (both accepted)
+      transport: streamable_http
       url: http://your-server.com:8000/mcp  # Public URL required when using Responses API
 ```
 
@@ -1129,7 +1144,6 @@ def multiply(a: int, b: int) -> int:
 
 if __name__ == "__main__":
     mcp.run()  # STDIO transport (default)
-    # Or: mcp.run(transport="http", port=8000)  # HTTP transport
 ```
 
 **Running MCP Servers**:
@@ -1139,7 +1153,7 @@ if __name__ == "__main__":
 fastmcp run math_server.py
 
 # Using FastMCP CLI with HTTP transport
-fastmcp run math_server.py --transport http
+fastmcp run math_server.py --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
 #### **Transport Compatibility**
@@ -1147,7 +1161,7 @@ fastmcp run math_server.py --transport http
 | Transport | Support | Notes |
 |-----------|---------|-------|
 | **stdio** | ✅ Supported | Local only, perfect for development |
-| **http** | ✅ Supported | Network-accessible, supports multiple clients |
+| **streamable_http** | ✅ Supported | Network-accessible, supports multiple clients |
 | **sse** | ✅ Supported | Legacy, use HTTP instead |
 
 **Important Notes**:
@@ -1155,9 +1169,8 @@ fastmcp run math_server.py --transport http
 - When using native OpenAI tools (code_interpreter, web_search, etc.) without HITL, ResponseAPIExecutor is used
 - **For ResponseAPIExecutor with MCP tools**: MCP servers must be **publicly accessible** (not localhost)
 - OpenAI's servers connect to your MCP server when using Responses API, so `localhost` won't work
-- For local development with native tools, use stdio transport or deploy MCP servers publicly
-- For local development without native tools, stdio or localhost HTTP works fine
-- CreateAgentExecutor supports all MCP transport types (stdio, HTTP, localhost)
+- For local development without native tools, CreateAgentExecutor can use stdio or localhost streamable HTTP
+- CreateAgentExecutor supports stdio, streamable_http/http, and sse transports
 
 #### **Example: Local Development**
 
@@ -1270,7 +1283,7 @@ For agents using native OpenAI tools (Responses API) with HTTP transport:
     Analyze data and provide insights.
     Use available tools to process and visualize data.
   provider: openai
-  model: gpt-4o-mini
+  model: gpt-4.1-mini
   temperature: 0.0
   tools:
     - analyze_data

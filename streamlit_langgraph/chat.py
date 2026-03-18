@@ -10,8 +10,8 @@ from langgraph.graph import StateGraph
 
 from .agent import Agent, get_llm_client
 from .core.executor import WorkflowExecutor
-from .core.executor.response_api import ResponseAPIExecutor
 from .core.executor.registry import ExecutorRegistry
+from .core.executor.response_api import ResponseAPIExecutor
 from .core.middleware import HITLUtils
 from .core.runtime import RuntimeHooks
 from .core.state import WorkflowState, WorkflowStateManager
@@ -122,39 +122,46 @@ class LangGraphChat:
         custom_tools: Optional[List[CustomTool]],
     ) -> None:
         """Initialize all registry and components."""
+        self._initialize_runtime(workflow)
+        self._register_custom_tools(custom_tools)
+        _, openai_client = self._initialize_file_and_clients()
+        self._initialize_ui_components(openai_client)
 
-        # Initialize runtime hooks and workflow executor
+    def _initialize_runtime(self, workflow: Optional[StateGraph]) -> None:
+        """Initialize runtime hooks and workflow executor."""
         workflow_runtime = getattr(workflow, "runtime_hooks", None) if workflow else None
         self.runtime = workflow_runtime or RuntimeHooks(executor_registry=ExecutorRegistry())
         if self.runtime.spinner is None:
             self.runtime.spinner = st.spinner
         self.workflow_executor = WorkflowExecutor(self.runtime.executor_registry)
 
-        # Register custom tools
-        if custom_tools:
-            for tool in custom_tools:
-                CustomTool.register_tool(
-                    tool.name,
-                    tool.description,
-                    tool.function,
-                    parameters=tool.parameters,
-                    return_direct=tool.return_direct,
-                )
+    def _register_custom_tools(self, custom_tools: Optional[List[CustomTool]]) -> None:
+        """Register user-provided custom tools."""
+        if not custom_tools:
+            return
+        for tool in custom_tools:
+            CustomTool.register_tool(
+                tool.name,
+                tool.description,
+                tool.function,
+                parameters=tool.parameters,
+                return_direct=tool.return_direct,
+            )
 
-        # Initialize file handler and LLM client
+    def _initialize_file_and_clients(self) -> tuple[Agent, Any]:
+        """Initialize file handler and model clients."""
         first_agent = next(iter(self.agents.values()))
-
-        # Best-effort access to OpenAI client when using ResponseAPIExecutor
         openai_client = None
-        if (first_agent.provider.lower() == "openai" and
-            ExecutorRegistry.has_openai_native_tools(first_agent)):
+        if (
+            first_agent.provider.lower() == "openai"
+            and ExecutorRegistry.has_openai_native_tools(first_agent)
+        ):
             executor = self.runtime.executor_registry.get_or_create(
                 first_agent, executor_type="single_agent"
             )
             if isinstance(executor, ResponseAPIExecutor):
-                openai_client = executor.openai_client
+                openai_client = getattr(executor, "openai_client", None)
 
-        # Initialize FileHandler
         self.file_handler = FileHandler(
             openai_client=openai_client,
             model=first_agent.model,
@@ -163,33 +170,33 @@ class LangGraphChat:
             container_id=first_agent.container_id,
             preprocessing_callback=self.config.file_callback,
         )
-        
-        # Sync container_id from FileHandler back to agent if it was auto-created
-        if self.file_handler._container_id and not first_agent.container_id:
-            first_agent.container_id = self.file_handler._container_id
-        
-        # Sync container_id to ALL agents with code_interpreter enabled
-        # This ensures all agents use the same container where files are uploaded
-        if self.file_handler._container_id:
-            Agent.sync_container_ids(list(self.agents.values()))
+        self._sync_container_ids(first_agent)
 
         vector_store_ids = self.file_handler.get_vector_store_ids()
         self.llm = get_llm_client(first_agent, vector_store_ids=vector_store_ids)
         self._client = openai_client
         self._container_id = first_agent.container_id
+        return first_agent, openai_client
 
+    def _sync_container_ids(self, first_agent: Agent) -> None:
+        """Sync container_id from FileHandler to all code-interpreter agents."""
+        if self.file_handler._container_id and not first_agent.container_id:
+            first_agent.container_id = self.file_handler._container_id
+        if self.file_handler._container_id:
+            Agent.sync_container_ids(list(self.agents.values()))
+
+    def _initialize_ui_components(self, openai_client: Any) -> None:
+        """Initialize UI processors and interrupt handling."""
         if self.runtime.stream_renderer is None:
             self.runtime.stream_renderer = StreamlitStreamRenderer(
                 config=self.config,
                 state_manager=self.state_manager,
                 client=openai_client,
             )
-
         self.interrupt_handler = HITLHandler(
             self.agents, self.config,
             self.state_manager, self.display_manager, self.runtime.executor_registry,
         )
-
         self.stream_processor = StreamProcessor(client=self._client, container_id=self._container_id)
         self.nonstream_processor = NonStreamProcessor()
     
@@ -201,7 +208,12 @@ class LangGraphChat:
                 current_agent=None,
                 agent_outputs={},
                 files=[],
-                metadata={}
+                metadata={"stream": self.config.stream},
+            )
+        else:
+            WorkflowStateManager.ensure_stream_flag(
+                st.session_state.workflow_state,
+                self.config.stream,
             )
         if "uploaded_files" not in st.session_state:
             st.session_state.uploaded_files = []
@@ -211,8 +223,7 @@ class LangGraphChat:
     def _get_workflow_state(self) -> Dict[str, Any]:
         """Get workflow state, initializing metadata if needed."""
         workflow_state = st.session_state.workflow_state
-        if "metadata" not in workflow_state:
-            workflow_state["metadata"] = {}
+        WorkflowStateManager.ensure_stream_flag(workflow_state, self.config.stream)
         return workflow_state
 
     def run(self):
@@ -283,6 +294,7 @@ class LangGraphChat:
     def _run_workflow(self, prompt):
         """Execute multiagent workflow and handle UI updates."""
         self.state_manager.update_workflow_state({"metadata": {"stream": self.config.stream}})
+        WorkflowStateManager.ensure_stream_flag(st.session_state.workflow_state, self.config.stream)
         self._update_file_messages_in_state()
         
         result_state = self.workflow_executor.execute_workflow(

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from openai import NotFoundError
+
 
 MIME_TYPES = {
     "txt" : "text/plain",
@@ -385,8 +387,12 @@ class FileHandler:
             try:
                 self._dynamic_vector_store = self.openai_client.vector_stores.retrieve(existing_vs_id)
                 return self._dynamic_vector_store
-            except Exception:
+            except NotFoundError:
                 pass  # fall through to creation
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed retrieving existing vector store '{existing_vs_id}'"
+                ) from exc
 
         self._dynamic_vector_store = self.openai_client.vector_stores.create(
             name="streamlit-langgraph"

@@ -4,7 +4,12 @@ import unittest
 from dataclasses import dataclass
 from typing import List
 
-from langgraph.graph import StateGraph
+try:
+    from langgraph.graph import StateGraph
+except ModuleNotFoundError as exc:
+    raise unittest.SkipTest(f"langgraph is not available in this environment: {exc}")
+if not hasattr(StateGraph, "add_node"):
+    raise unittest.SkipTest("langgraph runtime features are unavailable in this environment.")
 
 from streamlit_langgraph.core.executor import WorkflowExecutor
 from streamlit_langgraph.core.executor.registry import ExecutorRegistry
