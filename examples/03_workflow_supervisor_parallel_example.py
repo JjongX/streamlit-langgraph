@@ -63,7 +63,7 @@ def main():
 ## 🧠 How It Works:
 
 ### 🎯 Team Structure
-- 📊 Analysis Supervisor**: Coordinates parallel analysis and synthesizes results
+- 📊 **Analysis Supervisor**: Coordinates parallel analysis and synthesizes results
 - 🔍 **Market Analyst**: Market trends and competitive analysis
 - ⚙️ **Technical Analyst**: Technical specifications and features
 - 👥 **Customer Analyst**: Customer feedback and sentiment analysis

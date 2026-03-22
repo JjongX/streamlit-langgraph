@@ -54,13 +54,19 @@ class HandoffDelegation:
         )
         
         if isinstance(executor, ResponseAPIExecutor):
-            return self._execute_with_response_api_executor(
+            content, routing_decision = self._execute_with_response_api_executor(
                 agent, state, input_message, workers, allow_parallel
             )
         else:
-            return self._execute_with_create_agent_executor(
+            content, routing_decision = self._execute_with_create_agent_executor(
                 agent, state, input_message, workers, allow_parallel
             )
+        normalized_routing_decision = HandoffDelegation._normalize_routing_decision(
+            routing_decision,
+            workers,
+            allow_parallel,
+        )
+        return content, normalized_routing_decision
     
     @staticmethod
     def build_worker_context(
@@ -314,7 +320,54 @@ class HandoffDelegation:
     def _extract_state_context(state: WorkflowState) -> Tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]], Optional[List[str]]]:
         """Extract shared context (messages, files, vector stores) from workflow state."""
         metadata = state.get("metadata", {})
-        return (state.get("messages", []), metadata.get("file_messages"), metadata.get("vector_store_ids"))
+        visible_messages = AgentNodeBase.get_visible_conversation_messages(state)
+        return (visible_messages, metadata.get("file_messages"), metadata.get("vector_store_ids"))
+
+    @staticmethod
+    def _extract_target_worker(arguments: Dict[str, Any]) -> Optional[str]:
+        """Extract delegated worker name, supporting both worker_name and target_worker."""
+        if not isinstance(arguments, dict):
+            return None
+        target_worker = arguments.get("worker_name")
+        if target_worker is None:
+            target_worker = arguments.get("target_worker")
+        return target_worker
+
+    @staticmethod
+    def _normalize_routing_decision(
+        routing_decision: Dict[str, Any],
+        workers: List[Agent],
+        allow_parallel: bool,
+    ) -> Dict[str, Any]:
+        """Normalize routing decision for resilient worker routing."""
+        normalized = dict(routing_decision or {})
+        action = str(normalized.get("action", "finish")).strip().lower()
+        if action not in {"delegate", "finish"}:
+            action = "finish"
+        normalized["action"] = action
+
+        if action != "delegate":
+            return normalized
+
+        target_worker = normalized.get("target_worker")
+        target_worker_text = str(target_worker).strip() if target_worker is not None else ""
+        worker_name_lookup = {worker.name.lower(): worker.name for worker in workers}
+
+        if allow_parallel and len(workers) > 1:
+            if target_worker_text.upper() == "PARALLEL":
+                normalized["target_worker"] = "PARALLEL"
+                return normalized
+            if target_worker_text.lower() in worker_name_lookup:
+                normalized["target_worker"] = "PARALLEL"
+                return normalized
+
+        canonical_worker_name = worker_name_lookup.get(target_worker_text.lower())
+        if canonical_worker_name:
+            normalized["target_worker"] = canonical_worker_name
+            return normalized
+
+        normalized["action"] = "finish"
+        return normalized
     
     @staticmethod
     def _extract_response_api_routing_decision(out: Any, prompt: str) -> Tuple[str, Dict[str, Any]]:
@@ -326,15 +379,17 @@ class HandoffDelegation:
         for item in output_items:
             delegate_args = HandoffDelegation._parse_delegate_task_call(item)
             if delegate_args is not None:
+                target_worker = HandoffDelegation._extract_target_worker(delegate_args)
+                target_worker_label = target_worker if target_worker is not None else "unknown worker"
                 routing_decision = {
                     "action": "delegate",
-                    "target_worker": delegate_args.get("worker_name"),
+                    "target_worker": target_worker,
                     "task_description": delegate_args.get("task_description"),
                     "priority": delegate_args.get("priority", "medium"),
                 }
                 prefix = "".join(content_parts)
                 delegation_text = (
-                    f"\n\n**🔄 Delegating to {delegate_args.get('worker_name')}**: "
+                    f"\n\n**🔄 Delegating to {target_worker_label}**: "
                     f"{delegate_args.get('task_description')}"
                 )
                 if prefix:
@@ -464,15 +519,20 @@ class HandoffDelegation:
                         if tool_name == "delegate_task":
                             if isinstance(tool_args, str):
                                 tool_args = json.loads(tool_args)
+                            target_worker = HandoffDelegation._extract_target_worker(tool_args)
+                            target_worker_label = target_worker if target_worker is not None else "unknown worker"
                             
                             routing_decision = {
                                 "action": "delegate",
-                                "target_worker": tool_args.get("worker_name"),
+                                "target_worker": target_worker,
                                 "task_description": tool_args.get("task_description"),
                                 "priority": tool_args.get("priority", "medium")
                             }
                             
-                            delegation_text = f"\n\n**🔄 Delegating to {tool_args.get('worker_name')}**: {tool_args.get('task_description')}"
+                            delegation_text = (
+                                f"\n\n**🔄 Delegating to {target_worker_label}**: "
+                                f"{tool_args.get('task_description')}"
+                            )
                             if hasattr(msg, 'content') and msg.content:
                                 content = extract_text_from_content(msg.content)
                             content = content + delegation_text if content else delegation_text[2:]

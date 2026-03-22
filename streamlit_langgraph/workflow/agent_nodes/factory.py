@@ -27,7 +27,7 @@ class AgentNodeBase:
         config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
         llm_client = get_llm_client(agent)
-        conversation_messages = state.get("messages", [])
+        conversation_messages = AgentNodeBase.get_visible_conversation_messages(state)
         stream = AgentNodeBase._should_stream(agent, state, allow_stream)
         
         file_messages = state.get("metadata", {}).get("file_messages")
@@ -83,6 +83,15 @@ class AgentNodeBase:
             )
             result.pop("stream", None)
         return {"id": result["id"], "content": result["content"], "agent": agent.name}
+
+    @staticmethod
+    def get_visible_conversation_messages(state):
+        """Return workflow messages excluding runtime status events."""
+        messages = state.get("messages", [])
+        return [
+            msg for msg in messages
+            if isinstance(msg, dict) and not msg.get("is_status_event")
+        ]
 
     @staticmethod
     def _should_stream(agent, state, allow_stream):
@@ -199,14 +208,24 @@ class AgentNodeFactory:
                     "current_agent": worker.name,
                     "metadata": state.get("metadata", {}),
                 }
+            completed_status = {
+                "id": str(uuid.uuid4()),
+                "role": "assistant",
+                "content": "[status] Completed",
+                "agent": worker.name,
+                "is_status_event": True,
+            }
             return {
                 "current_agent": worker.name,
-                "messages": [{
-                    "id": response["id"],
-                    "role": "assistant",
-                    "content": response["content"],
-                    "agent": worker.name,
-                }],
+                "messages": [
+                    completed_status,
+                    {
+                        "id": response["id"],
+                        "role": "assistant",
+                        "content": response["content"],
+                        "agent": worker.name,
+                    },
+                ],
                 "agent_outputs": {worker.name: response["content"]},
             }
         return worker_agent_node

@@ -45,6 +45,8 @@ class Block:
                 st.image(self.content, caption=self.filename)
         elif self.category == "download":
             self._render_download()
+        elif self.category == "parallel_workers":
+            self._render_parallel_workers()
     
     def _render_download(self):
         """Render download button for file content."""
@@ -58,6 +60,35 @@ class Block:
             key=self.display_manager._download_button_key,
         )
         self.display_manager._download_button_key += 1
+
+    def _render_parallel_workers(self):
+        """Render grouped parallel worker status/output panels."""
+        if not isinstance(self.content, dict):
+            return
+
+        title = self.content.get("title", "Parallel Execution")
+        st.markdown(f"**{title}**")
+
+        worker_items = self.content.get("workers", [])
+        if not isinstance(worker_items, list):
+            return
+
+        for worker_item in worker_items:
+            if not isinstance(worker_item, dict):
+                continue
+            agent = worker_item.get("agent", "Worker")
+            status = worker_item.get("status", "Pending")
+            expander_title = f"{agent} - {status}"
+            expanded = status != "Completed"
+            with st.expander(expander_title, expanded=expanded):
+                events = worker_item.get("events", [])
+                if isinstance(events, list):
+                    for event in events:
+                        if event:
+                            st.caption(str(event))
+                result_text = worker_item.get("result")
+                if result_text:
+                    st.markdown(result_text)
 
 
 class Section:
@@ -115,6 +146,20 @@ class Section:
             self.blocks.append(self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             ))
+
+    def update_parallel_workers(self, content: Dict[str, Any]) -> None:
+        """Create or replace grouped parallel worker block."""
+        if self.empty:
+            self.blocks = [self.display_manager.create_block("parallel_workers", content)]
+            return
+
+        for i in range(len(self.blocks) - 1, -1, -1):
+            block = self.blocks[i]
+            if block.category == "parallel_workers":
+                self.blocks[i] = self.display_manager.create_block("parallel_workers", content)
+                return
+
+        self.blocks.append(self.display_manager.create_block("parallel_workers", content))
     
     def stream(self):
         """Render this section and persist it."""
@@ -182,6 +227,7 @@ class DisplayManager:
         self.state_manager = state_manager
         self._sections = []
         self._download_button_key = 0
+        self._parallel_sections: Dict[str, Dict[str, Any]] = {}
     
     def create_block(self, category, content=None, filename=None, file_id=None) -> Block:
         """Create a new Block instance."""
@@ -244,6 +290,9 @@ class DisplayManager:
         if msg_id in displayed_ids:
             return False
         
+        if self._render_parallel_grouped_message(message):
+            return True
+
         # Only render assistant messages with valid agents
         if (message.get("role") == "assistant" and 
             message.get("agent") and 
@@ -258,3 +307,61 @@ class DisplayManager:
             return True
         
         return False
+
+    def _render_parallel_grouped_message(self, message: Dict[str, Any]) -> bool:
+        """Render parallel worker status/output inside a single grouped section."""
+        if message.get("role") != "assistant":
+            return False
+        agent = message.get("agent")
+        if not agent or agent == "system":
+            return False
+
+        is_status_event = bool(message.get("is_status_event"))
+        run_key = None
+        if self.state_manager and hasattr(self.state_manager, "get_latest_user_message_id"):
+            run_key = self.state_manager.get_latest_user_message_id()
+        if not run_key:
+            return False
+
+        parallel_state = self._parallel_sections.get(run_key)
+        if not is_status_event and parallel_state is None:
+            return False
+        if not is_status_event and parallel_state is not None and agent not in parallel_state["workers"]:
+            return False
+
+        if parallel_state is None:
+            section = self.add_section("assistant")
+            section._agent_info = {"agent": "Parallel Execution"}
+            section._message_id = message.get("id")
+            parallel_state = {"section": section, "workers": {}}
+            self._parallel_sections[run_key] = parallel_state
+
+        workers = parallel_state["workers"]
+        worker_entry = workers.setdefault(
+            agent,
+            {"agent": agent, "status": "Pending", "events": [], "result": ""},
+        )
+
+        if is_status_event:
+            status_text = str(message.get("content", "")).strip()
+            if status_text:
+                worker_entry["events"].append(status_text)
+            normalized = status_text.lower()
+            if "started" in normalized:
+                worker_entry["status"] = "Running"
+            elif "completed" in normalized:
+                worker_entry["status"] = "Completed"
+        else:
+            result_text = message.get("content", "")
+            worker_entry["result"] = result_text
+            worker_entry["status"] = "Completed"
+            if "[status] Completed" not in worker_entry["events"]:
+                worker_entry["events"].append("[status] Completed")
+
+        panel_content = {
+            "title": "Parallel Execution",
+            "workers": [workers[name] for name in workers],
+        }
+        parallel_state["section"].update_parallel_workers(panel_content)
+        parallel_state["section"].stream()
+        return True
