@@ -85,12 +85,25 @@ class AgentNodeBase:
         return {"id": result["id"], "content": result["content"], "agent": agent.name}
 
     @staticmethod
+    def is_runtime_status_message(message):
+        """Return True when message is a runtime status marker."""
+        if not isinstance(message, dict):
+            return False
+        if message.get("is_status_event"):
+            return True
+        content = message.get("content")
+        if not isinstance(content, str):
+            return False
+        normalized = content.strip().lower()
+        return normalized in {"[status] started", "[status] completed"}
+
+    @staticmethod
     def get_visible_conversation_messages(state):
         """Return workflow messages excluding runtime status events."""
         messages = state.get("messages", [])
         return [
             msg for msg in messages
-            if isinstance(msg, dict) and not msg.get("is_status_event")
+            if isinstance(msg, dict) and not AgentNodeBase.is_runtime_status_message(msg)
         ]
 
     @staticmethod
@@ -208,24 +221,15 @@ class AgentNodeFactory:
                     "current_agent": worker.name,
                     "metadata": state.get("metadata", {}),
                 }
-            completed_status = {
-                "id": str(uuid.uuid4()),
+            worker_result_message = {
+                "id": response["id"],
                 "role": "assistant",
-                "content": "[status] Completed",
+                "content": response["content"],
                 "agent": worker.name,
-                "is_status_event": True,
             }
             return {
                 "current_agent": worker.name,
-                "messages": [
-                    completed_status,
-                    {
-                        "id": response["id"],
-                        "role": "assistant",
-                        "content": response["content"],
-                        "agent": worker.name,
-                    },
-                ],
+                "messages": [worker_result_message],
                 "agent_outputs": {worker.name: response["content"]},
             }
         return worker_agent_node

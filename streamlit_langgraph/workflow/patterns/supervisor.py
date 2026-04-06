@@ -134,7 +134,6 @@ class SupervisorPattern:
                     "role": "assistant",
                     "content": "[status] Started",
                     "agent": worker.name,
-                    "is_status_event": True,
                 }
                 for worker in worker_agents
             ]

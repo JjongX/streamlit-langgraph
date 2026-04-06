@@ -292,6 +292,10 @@ class DisplayManager:
         
         if self._render_parallel_grouped_message(message):
             return True
+        # Runtime status events are UI-only signals and should not appear as
+        # standalone chat messages.
+        if self._is_status_message(message):
+            return True
 
         # Only render assistant messages with valid agents
         if (message.get("role") == "assistant" and 
@@ -308,6 +312,23 @@ class DisplayManager:
         
         return False
 
+    @staticmethod
+    def _is_status_message(message: Dict[str, Any]) -> bool:
+        """Return True when message text is a runtime status marker."""
+        if message.get("is_status_event"):
+            return True
+        content = message.get("content")
+        if not isinstance(content, str):
+            return False
+        normalized = content.strip().lower()
+        return normalized in {"[status] started", "[status] completed"}
+
+    @staticmethod
+    def _is_started_status_message(message: Dict[str, Any]) -> bool:
+        """Return True when message is a started status marker."""
+        content = message.get("content")
+        return isinstance(content, str) and content.strip().lower() == "[status] started"
+
     def _render_parallel_grouped_message(self, message: Dict[str, Any]) -> bool:
         """Render parallel worker status/output inside a single grouped section."""
         if message.get("role") != "assistant":
@@ -316,7 +337,7 @@ class DisplayManager:
         if not agent or agent == "system":
             return False
 
-        is_status_event = bool(message.get("is_status_event"))
+        is_status_event = self._is_status_message(message)
         run_key = None
         if self.state_manager and hasattr(self.state_manager, "get_latest_user_message_id"):
             run_key = self.state_manager.get_latest_user_message_id()
@@ -324,6 +345,8 @@ class DisplayManager:
             return False
 
         parallel_state = self._parallel_sections.get(run_key)
+        if parallel_state is None and not self._is_started_status_message(message):
+            return False
         if not is_status_event and parallel_state is None:
             return False
         if not is_status_event and parallel_state is not None and agent not in parallel_state["workers"]:
