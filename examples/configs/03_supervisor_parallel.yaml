@@ -14,7 +14,7 @@
     2. After receiving all parallel results, synthesize them into a final comprehensive report
     3. You can delegate to PARALLEL multiple times if needed for different aspects
     
-    IMPORTANT: To trigger parallel execution, set target_worker to "PARALLEL" in your delegation.
+    IMPORTANT: To trigger parallel execution, set worker_name to "PARALLEL" in your delegation.
   provider: openai
   model: gpt-4.1
   temperature: 0.0
@@ -77,4 +77,3 @@
   allow_web_search: true
   tools:
     - analyze_sentiment
-

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import StructuredTool
-from openai import OpenAI
+from openai import APIError, APIStatusError, OpenAI
 
 from ...agent import Agent
 from ...utils import MCPToolManager
@@ -25,7 +25,6 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
     The Response API does not support HITL because it cannot intercept tool calls.
     For HITL scenarios, use CreateAgentExecutor instead.
     """
-    
     def __init__(self, agent: Agent, tools: Optional[List] = None):
         """
         Initialize ResponseAPIExecutor.
@@ -97,11 +96,18 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             Dict with keys 'role', 'content', 'agent', and optionally 'stream'
         """
         self.set_vector_store_ids(vector_store_ids)
-        
-        if stream:
-            return self._stream_response_api(prompt, messages, file_messages)
-        else:
+        try:
+            if stream:
+                return self._stream_response_api(prompt, messages, file_messages)
             return self.invoke_response_api(prompt, messages, file_messages)
+        except APIError as exc:
+            raise RuntimeError(
+                f"Provider API error while executing agent '{self.agent.name}' with ResponseAPIExecutor"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unexpected execution failure for agent '{self.agent.name}' in ResponseAPIExecutor"
+            ) from exc
     
     def _stream_response_api(
         self, prompt: str,
@@ -132,15 +138,52 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         Returns:
             Dict with 'role', 'content', 'agent', and optionally 'stream' or 'output' key
         """
+        api_input, tools_config = self._prepare_response_api_request(
+            prompt=prompt,
+            stream=stream,
+            messages=messages,
+            file_messages=file_messages,
+            delegation_tool=delegation_tool,
+        )
+        response = self._create_response_api_response(
+            api_input=api_input,
+            tools_config=tools_config,
+            stream=stream,
+        )
+
+        if stream:
+            return self._create_response_dict(stream=response)
+        if delegation_tool:
+            return {"output": getattr(response, "output", [])}
+        return self._build_nonstream_response(response, api_input, tools_config)
+
+    def _prepare_response_api_request(
+        self,
+        prompt: str,
+        stream: bool,
+        messages: Optional[List[Dict[str, Any]]],
+        file_messages: Optional[List],
+        delegation_tool: Optional[List[Dict[str, Any]]],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Prepare API input and tools config for Responses API calls."""
         api_input = self._convert_messages_to_input(messages, prompt, file_messages)
         tools_config = (
             self._build_tools_config_for_delegation(delegation_tool)
-            if delegation_tool else
-            self._build_base_tools_config(self._vector_store_ids, stream=stream)
+            if delegation_tool
+            else self._build_base_tools_config(self._vector_store_ids, stream=stream)
         )
+        return api_input, tools_config
+
+    def _create_response_api_response(
+        self,
+        api_input: List[Dict[str, Any]],
+        tools_config: List[Dict[str, Any]],
+        stream: bool,
+    ) -> Any:
+        """Call the OpenAI Responses API."""
         now = datetime.now()
         date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
-        response = self.openai_client.responses.create(
+        return self.openai_client.responses.create(
             model=self.agent.model,
             input=api_input,
             instructions=date_line + self._original_system_message,
@@ -149,30 +192,27 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
             stream=stream,
             reasoning=self._build_reasoning_config(),
         )
-        
-        if stream:
-            return self._create_response_dict(stream=response)
-        
-        # For delegation scenarios, return output items directly
-        if delegation_tool:
-            return {"output": getattr(response, 'output', [])}
-        
-        # Check if there are function calls that need to be executed
-        response_with_tool_results = self._handle_function_calls(response, api_input, tools_config, stream)
-        
-        # For regular execution, extract content and reasoning, then update history
+
+    def _build_nonstream_response(
+        self,
+        response: Any,
+        api_input: List[Dict[str, Any]],
+        tools_config: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Process non-streaming response and return standardized payload."""
+        response_with_tool_results = self._handle_function_calls(
+            response,
+            api_input,
+            tools_config,
+        )
         content = extract_response_api_text(response_with_tool_results)
         self._record_assistant_history(content)
-        
-        # Extract reasoning blocks if present (for non-streaming responses)
+
         reasoning_texts = extract_reasoning_blocks(response_with_tool_results)
-        reasoning_blocks = [
-            self._create_block("reasoning", text)
-            for text in reasoning_texts
-        ]
-        if reasoning_blocks:
+        if reasoning_texts:
+            reasoning_blocks = [self._create_block("reasoning", text) for text in reasoning_texts]
             self._add_to_conversation_history("assistant", reasoning_blocks)
-        
+
         response_dict = self._create_response_dict(content=content)
         if reasoning_texts:
             response_dict["blocks"] = [
@@ -444,18 +484,34 @@ class ResponseAPIExecutor(ConversationHistoryMixin):
         call_id = item.get("call_id", f"call_{iteration}") if isinstance(item, dict) else getattr(item, "call_id", f"call_{iteration}")
         
         if function_name not in function_map:
-            return {"call_id": call_id, "name": function_name, "result": f"Error: Function {function_name} not found"}
-        
+            raise RuntimeError(f"Unknown function call '{function_name}' from Responses API")
+
         try:
-            # Parse arguments
-            args_dict = json.loads(arguments) if isinstance(arguments, str) else (arguments if isinstance(arguments, dict) else {})
-            
-            # Execute the custom function
+            args_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Invalid JSON arguments for function '{function_name}' in Responses API"
+            ) from exc
+
+        if args_dict is None:
+            args_dict = {}
+        if not isinstance(args_dict, dict):
+            raise RuntimeError(
+                f"Function arguments for '{function_name}' must decode to a JSON object"
+            )
+
+        try:
             result = function_map[function_name](**args_dict)
-            
-            return {"call_id": call_id, "name": function_name, "result": str(result)}
-        except Exception as e:
-            return {"call_id": call_id, "name": function_name, "result": f"Error: {str(e)}"}
+        except (APIError, APIStatusError) as exc:
+            raise RuntimeError(
+                f"Provider API error while executing function '{function_name}' in Responses API loop"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unexpected failure while executing function '{function_name}' in Responses API loop"
+            ) from exc
+
+        return {"call_id": call_id, "name": function_name, "result": str(result)}
     
     def _accumulate_function_results(
         self,

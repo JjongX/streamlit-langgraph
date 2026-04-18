@@ -45,18 +45,50 @@ class Block:
                 st.image(self.content, caption=self.filename)
         elif self.category == "download":
             self._render_download()
+        elif self.category == "parallel_workers":
+            self._render_parallel_workers()
     
     def _render_download(self):
         """Render download button for file content."""
         _, file_extension = os.path.splitext(self.filename)
+        mime_type = MIME_TYPES.get(file_extension.lstrip("."), "application/octet-stream")
         st.download_button(
             label=self.filename,
             data=self.content,
             file_name=self.filename,
-            mime=MIME_TYPES[file_extension.lstrip(".")],
+            mime=mime_type,
             key=self.display_manager._download_button_key,
         )
         self.display_manager._download_button_key += 1
+
+    def _render_parallel_workers(self):
+        """Render grouped parallel worker status/output panels."""
+        if not isinstance(self.content, dict):
+            return
+
+        title = self.content.get("title", "Parallel Execution")
+        st.markdown(f"**{title}**")
+
+        worker_items = self.content.get("workers", [])
+        if not isinstance(worker_items, list):
+            return
+
+        for worker_item in worker_items:
+            if not isinstance(worker_item, dict):
+                continue
+            agent = worker_item.get("agent", "Worker")
+            status = worker_item.get("status", "Pending")
+            expander_title = f"{agent} - {status}"
+            expanded = status != "Completed"
+            with st.expander(expander_title, expanded=expanded):
+                events = worker_item.get("events", [])
+                if isinstance(events, list):
+                    for event in events:
+                        if event:
+                            st.caption(str(event))
+                result_text = worker_item.get("result")
+                if result_text:
+                    st.markdown(result_text)
 
 
 class Section:
@@ -114,6 +146,20 @@ class Section:
             self.blocks.append(self.display_manager.create_block(
                 category, content, filename=filename, file_id=file_id
             ))
+
+    def update_parallel_workers(self, content: Dict[str, Any]) -> None:
+        """Create or replace grouped parallel worker block."""
+        if self.empty:
+            self.blocks = [self.display_manager.create_block("parallel_workers", content)]
+            return
+
+        for i in range(len(self.blocks) - 1, -1, -1):
+            block = self.blocks[i]
+            if block.category == "parallel_workers":
+                self.blocks[i] = self.display_manager.create_block("parallel_workers", content)
+                return
+
+        self.blocks.append(self.display_manager.create_block("parallel_workers", content))
     
     def stream(self):
         """Render this section and persist it."""
@@ -181,6 +227,7 @@ class DisplayManager:
         self.state_manager = state_manager
         self._sections = []
         self._download_button_key = 0
+        self._parallel_sections: Dict[str, Dict[str, Any]] = {}
     
     def create_block(self, category, content=None, filename=None, file_id=None) -> Block:
         """Create a new Block instance."""
@@ -204,39 +251,25 @@ class DisplayManager:
             
             with st.chat_message(section_data["role"], avatar=avatar):
                 for block_data in section_data.get("blocks", []):
-                    category = block_data.get("category")
-                    if category == "text":
-                        st.markdown(block_data.get("content", ""))
-                    elif category in ["image", "generated_image"]:
-                        if "content_b64" in block_data:
-                            content = base64.b64decode(block_data["content_b64"])
-                            st.image(content, caption=block_data.get("filename"))
-                        elif "content" in block_data and block_data["content"]:
-                            st.image(block_data["content"], caption=block_data.get("filename"))
-                    elif category == "download":
-                        if "content_b64" in block_data:
-                            content = base64.b64decode(block_data["content_b64"])
-                        else:
-                            content = block_data.get("content", b"")
-                        if content:
-                            _, file_extension = os.path.splitext(block_data.get("filename", ""))
-                            st.download_button(
-                                label=block_data.get("filename", "Download"),
-                                data=content,
-                                file_name=block_data.get("filename", "file"),
-                                mime=MIME_TYPES.get(file_extension.lstrip("."), "application/octet-stream"),
-                                key=f"download_{block_data.get('file_id', self._download_button_key)}",
-                            )
-                            self._download_button_key += 1
-                    elif category == "code":
-                        with st.expander("", expanded=False, icon=":material/code:"):
-                            st.code(block_data.get("content", ""))
-                    elif category == "reasoning":
-                        with st.expander("", expanded=False, icon=":material/lightbulb:"):
-                            st.markdown(block_data.get("content", ""))
+                    block = self._block_from_serialized_data(block_data)
+                    block.write()
                 
                 if "agent_info" in section_data and "agent" in section_data["agent_info"]:
                     st.caption(f"Agent: {section_data['agent_info']['agent']}")
+
+    def _block_from_serialized_data(self, block_data: Dict[str, Any]) -> Block:
+        """Rehydrate a serialized block dict to a Block instance."""
+        content: Any
+        if "content_b64" in block_data:
+            content = base64.b64decode(block_data["content_b64"])
+        else:
+            content = block_data.get("content")
+        return self.create_block(
+            block_data.get("category", "text"),
+            content=content,
+            filename=block_data.get("filename"),
+            file_id=block_data.get("file_id"),
+        )
     
     def render_welcome_message(self):
         """Render welcome message if configured."""
@@ -257,6 +290,13 @@ class DisplayManager:
         if msg_id in displayed_ids:
             return False
         
+        if self._render_parallel_grouped_message(message):
+            return True
+        # Runtime status events are UI-only signals and should not appear as
+        # standalone chat messages.
+        if self._is_status_message(message):
+            return True
+
         # Only render assistant messages with valid agents
         if (message.get("role") == "assistant" and 
             message.get("agent") and 
@@ -271,3 +311,80 @@ class DisplayManager:
             return True
         
         return False
+
+    @staticmethod
+    def _is_status_message(message: Dict[str, Any]) -> bool:
+        """Return True when message text is a runtime status marker."""
+        if message.get("is_status_event"):
+            return True
+        content = message.get("content")
+        if not isinstance(content, str):
+            return False
+        normalized = content.strip().lower()
+        return normalized in {"[status] started", "[status] completed"}
+
+    @staticmethod
+    def _is_started_status_message(message: Dict[str, Any]) -> bool:
+        """Return True when message is a started status marker."""
+        content = message.get("content")
+        return isinstance(content, str) and content.strip().lower() == "[status] started"
+
+    def _render_parallel_grouped_message(self, message: Dict[str, Any]) -> bool:
+        """Render parallel worker status/output inside a single grouped section."""
+        if message.get("role") != "assistant":
+            return False
+        agent = message.get("agent")
+        if not agent or agent == "system":
+            return False
+
+        is_status_event = self._is_status_message(message)
+        run_key = None
+        if self.state_manager and hasattr(self.state_manager, "get_latest_user_message_id"):
+            run_key = self.state_manager.get_latest_user_message_id()
+        if not run_key:
+            return False
+
+        parallel_state = self._parallel_sections.get(run_key)
+        if parallel_state is None and not self._is_started_status_message(message):
+            return False
+        if not is_status_event and parallel_state is None:
+            return False
+        if not is_status_event and parallel_state is not None and agent not in parallel_state["workers"]:
+            return False
+
+        if parallel_state is None:
+            section = self.add_section("assistant")
+            section._agent_info = {"agent": "Parallel Execution"}
+            section._message_id = message.get("id")
+            parallel_state = {"section": section, "workers": {}}
+            self._parallel_sections[run_key] = parallel_state
+
+        workers = parallel_state["workers"]
+        worker_entry = workers.setdefault(
+            agent,
+            {"agent": agent, "status": "Pending", "events": [], "result": ""},
+        )
+
+        if is_status_event:
+            status_text = str(message.get("content", "")).strip()
+            if status_text:
+                worker_entry["events"].append(status_text)
+            normalized = status_text.lower()
+            if "started" in normalized:
+                worker_entry["status"] = "Running"
+            elif "completed" in normalized:
+                worker_entry["status"] = "Completed"
+        else:
+            result_text = message.get("content", "")
+            worker_entry["result"] = result_text
+            worker_entry["status"] = "Completed"
+            if "[status] Completed" not in worker_entry["events"]:
+                worker_entry["events"].append("[status] Completed")
+
+        panel_content = {
+            "title": "Parallel Execution",
+            "workers": [workers[name] for name in workers],
+        }
+        parallel_state["section"].update_parallel_workers(panel_content)
+        parallel_state["section"].stream()
+        return True

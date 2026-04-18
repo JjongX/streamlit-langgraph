@@ -164,9 +164,13 @@ class HITLHandler:
                 default_value = json.dumps(tool_input, indent=2) if tool_input else ""
                 edit_text = st.text_area("Edit input (optional)", value=default_value, key=edit_key, height=80)
                 if st.button("✏️ Approve with Edit", key=f"edit_btn_{executor_key}_{action_id}"):
-                    parsed_input, error_msg = HITLUtils.parse_edit_input(edit_text, tool_input)
-                    if error_msg:
-                        st.error(error_msg)
+                    try:
+                        parsed_input = HITLUtils.parse_edit_input(edit_text, tool_input)
+                    except json.JSONDecodeError as exc:
+                        st.error(
+                            f"Invalid JSON input: {exc.msg} "
+                            f"(line {exc.lineno}, column {exc.colno})."
+                        )
                     else:
                         self._save_decision(
                             workflow_state,

@@ -85,3 +85,11 @@ class StreamlitStateSynchronizer:
         """Get set of message IDs that have been displayed."""
         display_sections = self.get_display_sections()
         return {s.get("message_id") for s in display_sections if s.get("message_id")}
+
+    def get_latest_user_message_id(self):
+        """Get the most recent user message ID from workflow_state."""
+        workflow_state = st.session_state.workflow_state
+        for msg in reversed(workflow_state.get("messages", [])):
+            if isinstance(msg, dict) and msg.get("role") == "user" and msg.get("id"):
+                return msg.get("id")
+        return None

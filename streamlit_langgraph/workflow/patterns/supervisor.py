@@ -1,5 +1,6 @@
 # Supervisor workflow pattern.
 
+import uuid
 from typing import List, Optional, Any
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -126,12 +127,25 @@ class SupervisorPattern:
         node_factory: Optional[AgentNodeFactory] = None,
     ) -> StateGraph:
         """Create parallel workflow: supervisor -> fanout -> all workers -> supervisor."""
-        graph.add_node("parallel_fanout", lambda state: state)
+        def parallel_fanout_node(_state: WorkflowState) -> WorkflowState:
+            started_messages = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "role": "assistant",
+                    "content": "[status] Started",
+                    "agent": worker.name,
+                }
+                for worker in worker_agents
+            ]
+            return {"messages": started_messages}
+
+        graph.add_node("parallel_fanout", parallel_fanout_node)
         
         for worker in worker_agents:
             graph.add_node(worker.name, node_factory.create_worker_agent_node(worker, supervisor_agent))
         
-        supervisor_parallel_route = RoutingHelper.create_parallel_route()
+        worker_names = [worker.name for worker in worker_agents]
+        supervisor_parallel_route = RoutingHelper.create_parallel_route(worker_names=worker_names)
         
         supervisor_routes = {"parallel_fanout": "parallel_fanout", "__end__": END}
         graph.add_conditional_edges(supervisor_agent.name, supervisor_parallel_route, supervisor_routes)

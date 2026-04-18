@@ -27,7 +27,7 @@ class AgentNodeBase:
         config, workflow_thread_id = WorkflowStateManager.get_or_create_workflow_config(state, executor_key)
         
         llm_client = get_llm_client(agent)
-        conversation_messages = state.get("messages", [])
+        conversation_messages = AgentNodeBase.get_visible_conversation_messages(state)
         stream = AgentNodeBase._should_stream(agent, state, allow_stream)
         
         file_messages = state.get("metadata", {}).get("file_messages")
@@ -85,15 +85,43 @@ class AgentNodeBase:
         return {"id": result["id"], "content": result["content"], "agent": agent.name}
 
     @staticmethod
+    def is_runtime_status_message(message):
+        """Return True when message is a runtime status marker."""
+        if not isinstance(message, dict):
+            return False
+        if message.get("is_status_event"):
+            return True
+        content = message.get("content")
+        if not isinstance(content, str):
+            return False
+        normalized = content.strip().lower()
+        return normalized in {"[status] started", "[status] completed"}
+
+    @staticmethod
+    def get_visible_conversation_messages(state):
+        """Return workflow messages excluding runtime status events."""
+        messages = state.get("messages", [])
+        return [
+            msg for msg in messages
+            if isinstance(msg, dict) and not AgentNodeBase.is_runtime_status_message(msg)
+        ]
+
+    @staticmethod
     def _should_stream(agent, state, allow_stream):
         """Decide whether to stream agent output in workflows."""
-        metadata = state["metadata"]
+        metadata = state.get("metadata")
+        if not isinstance(metadata, dict):
+            raise RuntimeError(
+                "Workflow state is missing metadata. Initialize state via WorkflowStateManager "
+                "or LangGraphChat so metadata contracts are present."
+            )
+        stream_flag = WorkflowStateManager.require_stream_flag(state)
         routing = metadata.get("routing_decision", {})
         if routing.get("target_worker") == "PARALLEL":
             return False
         if getattr(agent, "human_in_loop", False):
             return False
-        return allow_stream and metadata["stream"]
+        return allow_stream and stream_flag
     
     @staticmethod
     def extract_user_query(state) -> str:
@@ -193,14 +221,15 @@ class AgentNodeFactory:
                     "current_agent": worker.name,
                     "metadata": state.get("metadata", {}),
                 }
+            worker_result_message = {
+                "id": response["id"],
+                "role": "assistant",
+                "content": response["content"],
+                "agent": worker.name,
+            }
             return {
                 "current_agent": worker.name,
-                "messages": [{
-                    "id": response["id"],
-                    "role": "assistant",
-                    "content": response["content"],
-                    "agent": worker.name,
-                }],
+                "messages": [worker_result_message],
                 "agent_outputs": {worker.name: response["content"]},
             }
         return worker_agent_node

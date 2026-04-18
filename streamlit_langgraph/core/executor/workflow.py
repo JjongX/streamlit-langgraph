@@ -47,6 +47,7 @@ class WorkflowExecutor:
         state = copy.deepcopy(initial_state)
         if "metadata" not in state:
             state["metadata"] = {}
+        WorkflowStateManager.ensure_stream_flag(state, default_stream=True)
         
         configurable = {}
         if "configurable" in state.get("metadata", {}):

@@ -14,6 +14,7 @@ def main():
         welcome_message="""Welcome to the **MCP Tools Example**!
 
 This example demonstrates using MCP (Model Context Protocol) tools with agents.
+This example connects to an already-running MCP server endpoint.
 
 ## 🧮 Available Tools:
 - **Add**: Add two numbers together
@@ -27,6 +28,9 @@ This example demonstrates using MCP (Model Context Protocol) tools with agents.
 - *"Calculate 100 divided by 4"*
 - *"Subtract 45 from 100"*
 - *"What's 12 * 7 + 5?"*
+
+Make sure your MCP server is running and serving streamable HTTP at:
+`http://127.0.0.1:8000/mcp`
 """
     )
     
@@ -40,4 +44,3 @@ This example demonstrates using MCP (Model Context Protocol) tools with agents.
 
 if __name__ == "__main__":
     main()
-

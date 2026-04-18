@@ -50,12 +50,10 @@ class HITLUtils:
     
     @staticmethod
     def parse_edit_input(edit_text, default_input):
-        """Parse user edit input, attempting JSON parsing if applicable."""
+        """Parse user edit input as JSON; invalid JSON raises JSONDecodeError."""
         if not edit_text.strip():
-            return default_input, None
-
-        parsed = json.loads(edit_text)
-        return parsed, None
+            return default_input
+        return json.loads(edit_text)
     
     @staticmethod
     def get_valid_interrupts(workflow_state):

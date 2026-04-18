@@ -4,12 +4,6 @@ from datetime import datetime
 from typing import List, Optional
 
 
-def _date_context() -> str:
-    """Current date/time prefix."""
-    now = datetime.now()
-    return f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
-
-
 SUPERVISOR_PROMPT_TEMPLATE = """You are {role}.
 
 You are supervising the following workers: {worker_list}
@@ -75,7 +69,9 @@ class SupervisorPromptBuilder:
             worker_list=worker_list,
             worker_outputs=outputs_text
         )
-        return _date_context() + body
+        now = datetime.now()
+        date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
+        return date_line + body
     
     @staticmethod
     def get_worker_agent_instructions(
@@ -101,7 +97,9 @@ class SupervisorPromptBuilder:
         
         instruction_parts.append("\nPlease complete the task assigned to you.")
         
-        return _date_context() + chr(10).join(instruction_parts)
+        now = datetime.now()
+        date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
+        return date_line + chr(10).join(instruction_parts)
 
 
 class NetworkPromptBuilder:    
@@ -121,7 +119,9 @@ class NetworkPromptBuilder:
             peer_list=peer_list,
             peer_outputs=outputs_text
         )
-        return _date_context() + body
+        now = datetime.now()
+        date_line = f"Current date and time: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.\n\n"
+        return date_line + body
 
 
 

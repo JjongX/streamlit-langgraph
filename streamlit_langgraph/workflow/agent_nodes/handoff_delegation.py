@@ -11,6 +11,7 @@ from ...agent import Agent, get_llm_client
 from ...utils.text_extraction import extract_text_from_content
 from ...core.runtime import RuntimeHooks
 from ...core.state import WorkflowState, WorkflowStateManager
+from ...core.executor.response_api import ResponseAPIExecutor
 from .factory import AgentNodeBase
 
 
@@ -34,7 +35,7 @@ class HandoffDelegation:
         Execute supervisor agent with structured routing via function calling.
         
         Routes to appropriate executor based on executor type:
-        - ResponseAPIExecutor -> uses OpenAI ChatCompletion API with function calling
+        - ResponseAPIExecutor -> uses OpenAI Responses API function calling
         - CreateAgentExecutor -> uses LangChain tool calling
         
         Args:
@@ -47,21 +48,25 @@ class HandoffDelegation:
         Returns:
             Tuple of (response_content, routing_decision_dict)
         """
-        from ...core.executor.response_api import ResponseAPIExecutor
-        
         executor = self.runtime.executor_registry.get_or_create(
             agent,
             executor_type="workflow",
         )
         
         if isinstance(executor, ResponseAPIExecutor):
-            return self._execute_with_response_api_executor(
+            content, routing_decision = self._execute_with_response_api_executor(
                 agent, state, input_message, workers, allow_parallel
             )
         else:
-            return self._execute_with_create_agent_executor(
+            content, routing_decision = self._execute_with_create_agent_executor(
                 agent, state, input_message, workers, allow_parallel
             )
+        normalized_routing_decision = HandoffDelegation._normalize_routing_decision(
+            routing_decision,
+            workers,
+            allow_parallel,
+        )
+        return content, normalized_routing_decision
     
     @staticmethod
     def build_worker_context(
@@ -130,8 +135,11 @@ class HandoffDelegation:
             )
         
         # Extract routing decision from Response API output
-        routing_decision = HandoffDelegation._extract_response_api_routing_decision(out, input_message)
-        return routing_decision[1], routing_decision[0]
+        content, routing_decision = HandoffDelegation._extract_response_api_routing_decision(
+            out,
+            input_message,
+        )
+        return content, routing_decision
     
     def _execute_with_create_agent_executor(
         self,
@@ -196,8 +204,11 @@ class HandoffDelegation:
                 state["metadata"].update(interrupt_update["metadata"])
                 return "", {"action": "finish"}
         
-        routing_decision = HandoffDelegation._extract_langchain_routing_decision(out, input_message)
-        return routing_decision[1], routing_decision[0]
+        content, routing_decision = HandoffDelegation._extract_langchain_routing_decision(
+            out,
+            input_message,
+        )
+        return content, routing_decision
     
     def _finish_without_delegation(
         self,
@@ -309,115 +320,172 @@ class HandoffDelegation:
     def _extract_state_context(state: WorkflowState) -> Tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]], Optional[List[str]]]:
         """Extract shared context (messages, files, vector stores) from workflow state."""
         metadata = state.get("metadata", {})
-        return (state.get("messages", []), metadata.get("file_messages"), metadata.get("vector_store_ids"))
+        visible_messages = AgentNodeBase.get_visible_conversation_messages(state)
+        return (visible_messages, metadata.get("file_messages"), metadata.get("vector_store_ids"))
+
+    @staticmethod
+    def _extract_target_worker(arguments: Dict[str, Any]) -> Optional[str]:
+        """Extract delegated worker name, supporting both worker_name and target_worker."""
+        if not isinstance(arguments, dict):
+            return None
+        target_worker = arguments.get("worker_name")
+        if target_worker is None:
+            target_worker = arguments.get("target_worker")
+        return target_worker
+
+    @staticmethod
+    def _normalize_routing_decision(
+        routing_decision: Dict[str, Any],
+        workers: List[Agent],
+        allow_parallel: bool,
+    ) -> Dict[str, Any]:
+        """Normalize routing decision for resilient worker routing."""
+        normalized = dict(routing_decision or {})
+        action = str(normalized.get("action", "finish")).strip().lower()
+        if action not in {"delegate", "finish"}:
+            action = "finish"
+        normalized["action"] = action
+
+        if action != "delegate":
+            return normalized
+
+        target_worker = normalized.get("target_worker")
+        target_worker_text = str(target_worker).strip() if target_worker is not None else ""
+        worker_name_lookup = {worker.name.lower(): worker.name for worker in workers}
+
+        if allow_parallel and len(workers) > 1:
+            if target_worker_text.upper() == "PARALLEL":
+                normalized["target_worker"] = "PARALLEL"
+                return normalized
+            if target_worker_text.lower() in worker_name_lookup:
+                normalized["target_worker"] = "PARALLEL"
+                return normalized
+
+        canonical_worker_name = worker_name_lookup.get(target_worker_text.lower())
+        if canonical_worker_name:
+            normalized["target_worker"] = canonical_worker_name
+            return normalized
+
+        normalized["action"] = "finish"
+        return normalized
     
     @staticmethod
-    def _extract_response_api_routing_decision(out: Any, prompt: str) -> Tuple[Dict[str, Any], str]:
+    def _extract_response_api_routing_decision(out: Any, prompt: str) -> Tuple[str, Dict[str, Any]]:
         """Extract routing decision from Response API output."""
         routing_decision = {"action": "finish"}
-        content = ""
-        
-        output_items = out.get("output", []) if isinstance(out, dict) else []
-        
-        # Look for function_call items in the output
+        content_parts: List[str] = []
+
+        output_items = HandoffDelegation._get_response_api_output_items(out)
         for item in output_items:
-            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-            
-            # Handle function calls
-            if item_type == "function_call":
-                if isinstance(item, dict):
-                    function_name = item.get("name")
-                    arguments = item.get("arguments", "{}")
-                else:
-                    function_name = getattr(item, "name", None)
-                    arguments = getattr(item, "arguments", "{}")
-                
-                if function_name == "delegate_task":
-                    if isinstance(arguments, str):
-                        args = json.loads(arguments)
-                    else:
-                        args = arguments
-                    
-                    routing_decision = {
-                        "action": "delegate",
-                        "target_worker": args.get("worker_name"),
-                        "task_description": args.get("task_description"),
-                        "priority": args.get("priority", "medium")
-                    }
-                    delegation_text = f"\n\n**🔄 Delegating to {args.get('worker_name')}**: {args.get('task_description')}"
-                    content = delegation_text[2:] if not content else content + delegation_text
-                    return routing_decision, content
-            
-            # Also check for output_text and message items for content
-            elif item_type == "output_text":
-                if isinstance(item, dict):
-                    text = item.get("text") or item.get("content", "")
-                else:
-                    text = getattr(item, "text", "") or getattr(item, "content", "")
-                if text:
-                    content = content + str(text) if content else str(text)
-            elif item_type == "code_interpreter_call":
-                # Extract code from code_interpreter_call
-                code = None
-                if isinstance(item, dict):
-                    code = item.get('code', '') or item.get('input', '')
-                else:
-                    code = getattr(item, 'code', '') or getattr(item, 'input', '')
-                if code:
-                    # Include code block in content
-                    code_block = f"\n\n```python\n{code}\n```\n\n"
-                    content = content + code_block if content else code_block
-                
-                # Extract output from code_interpreter_call
-                output = item.get('output') if isinstance(item, dict) else getattr(item, 'output', None)
-                if output:
-                    if isinstance(output, list):
-                        for output_item in output:
-                            if isinstance(output_item, dict):
-                                output_type = output_item.get('type', '')
-                                if output_type == 'text':
-                                    output_text = output_item.get('text', '')
-                                    if output_text:
-                                        content = content + str(output_text) if content else str(output_text)
-                                elif output_type == 'image':
-                                    content = content + "\n[Code generated an image]\n" if content else "\n[Code generated an image]\n"
-                    elif isinstance(output, str):
-                        content = content + str(output) if content else str(output)
-            elif item_type == "message":
-                # Response API message items contain content blocks
-                if isinstance(item, dict):
-                    content_blocks = item.get("content", [])
-                else:
-                    content_blocks = getattr(item, "content", [])
-                
-                # Extract text from content blocks
-                # Blocks can be ResponseOutputText objects (with .text attribute) or dicts
-                if content_blocks:
-                    text_parts = []
-                    for block in content_blocks:
-                        # Handle ResponseOutputText objects (from OpenAI SDK)
-                        if hasattr(block, 'text'):
-                            text_parts.append(str(block.text))
-                        # Handle dict format
-                        elif isinstance(block, dict):
-                            block_type = block.get("type")
-                            if block_type == "output_text":
-                                text_parts.append(block.get("text", ""))
-                            elif block_type == "text":
-                                text_parts.append(block.get("text", ""))
-                            elif "text" in block:
-                                text_parts.append(block.get("text", ""))
-                        # Handle string format
-                        elif isinstance(block, str):
-                            text_parts.append(block)
-                    if text_parts:
-                        message_text = ''.join(text_parts)
-                        content = content + message_text if content else message_text
-        
-        return routing_decision, content or ""
+            delegate_args = HandoffDelegation._parse_delegate_task_call(item)
+            if delegate_args is not None:
+                target_worker = HandoffDelegation._extract_target_worker(delegate_args)
+                target_worker_label = target_worker if target_worker is not None else "unknown worker"
+                routing_decision = {
+                    "action": "delegate",
+                    "target_worker": target_worker,
+                    "task_description": delegate_args.get("task_description"),
+                    "priority": delegate_args.get("priority", "medium"),
+                }
+                prefix = "".join(content_parts)
+                delegation_text = (
+                    f"\n\n**🔄 Delegating to {target_worker_label}**: "
+                    f"{delegate_args.get('task_description')}"
+                )
+                if prefix:
+                    return prefix + delegation_text, routing_decision
+                return delegation_text[2:], routing_decision
+
+            item_text = HandoffDelegation._extract_response_api_item_text(item)
+            if item_text:
+                content_parts.append(item_text)
+
+        return "".join(content_parts), routing_decision
+
+    @staticmethod
+    def _get_response_api_output_items(out: Any) -> List[Any]:
+        """Get output items from a Response API dict payload."""
+        if not isinstance(out, dict):
+            return []
+        output_items = out.get("output", [])
+        return output_items if isinstance(output_items, list) else []
+
+    @staticmethod
+    def _parse_delegate_task_call(item: Any) -> Optional[Dict[str, Any]]:
+        """Parse delegate_task arguments from a Response API function_call item."""
+        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        if item_type != "function_call":
+            return None
+        function_name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+        if function_name != "delegate_task":
+            return None
+        arguments = item.get("arguments", "{}") if isinstance(item, dict) else getattr(item, "arguments", "{}")
+        parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
+        if not isinstance(parsed, dict):
+            raise RuntimeError("delegate_task arguments must be a JSON object")
+        return parsed
+
+    @staticmethod
+    def _extract_response_api_item_text(item: Any) -> str:
+        """Extract readable text from a single Response API output item."""
+        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        if item_type == "output_text":
+            text = item.get("text") if isinstance(item, dict) else getattr(item, "text", "")
+            if not text:
+                text = item.get("content", "") if isinstance(item, dict) else getattr(item, "content", "")
+            return str(text) if text else ""
+        if item_type == "code_interpreter_call":
+            return HandoffDelegation._extract_code_interpreter_text(item)
+        if item_type == "message":
+            return HandoffDelegation._extract_message_item_text(item)
+        return ""
+
+    @staticmethod
+    def _extract_code_interpreter_text(item: Any) -> str:
+        """Extract code and outputs from a code_interpreter_call item."""
+        text_parts: List[str] = []
+        code = item.get("code", "") if isinstance(item, dict) else getattr(item, "code", "")
+        if not code:
+            code = item.get("input", "") if isinstance(item, dict) else getattr(item, "input", "")
+        if code:
+            text_parts.append(f"\n\n```python\n{code}\n```\n\n")
+
+        output = item.get("output") if isinstance(item, dict) else getattr(item, "output", None)
+        if isinstance(output, list):
+            for output_item in output:
+                if not isinstance(output_item, dict):
+                    continue
+                output_type = output_item.get("type", "")
+                if output_type == "text" and output_item.get("text"):
+                    text_parts.append(str(output_item.get("text")))
+                elif output_type == "image":
+                    text_parts.append("\n[Code generated an image]\n")
+        elif isinstance(output, str):
+            text_parts.append(output)
+
+        return "".join(text_parts)
+
+    @staticmethod
+    def _extract_message_item_text(item: Any) -> str:
+        """Extract concatenated text from a Response API message item."""
+        content_blocks = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        if not isinstance(content_blocks, list):
+            return ""
+        text_parts: List[str] = []
+        for block in content_blocks:
+            if hasattr(block, "text"):
+                text_parts.append(str(block.text))
+                continue
+            if isinstance(block, dict):
+                if block.get("text"):
+                    text_parts.append(str(block.get("text")))
+                continue
+            if isinstance(block, str):
+                text_parts.append(block)
+        return "".join(text_parts)
     
     @staticmethod
-    def _extract_langchain_routing_decision(out: Any, prompt: str) -> Tuple[Dict[str, Any], str]:
+    def _extract_langchain_routing_decision(out: Any, prompt: str) -> Tuple[str, Dict[str, Any]]:
         """Extract routing decision from LangChain agent output."""
         routing_decision = {"action": "finish"}
         content = ""
@@ -451,19 +519,24 @@ class HandoffDelegation:
                         if tool_name == "delegate_task":
                             if isinstance(tool_args, str):
                                 tool_args = json.loads(tool_args)
+                            target_worker = HandoffDelegation._extract_target_worker(tool_args)
+                            target_worker_label = target_worker if target_worker is not None else "unknown worker"
                             
                             routing_decision = {
                                 "action": "delegate",
-                                "target_worker": tool_args.get("worker_name"),
+                                "target_worker": target_worker,
                                 "task_description": tool_args.get("task_description"),
                                 "priority": tool_args.get("priority", "medium")
                             }
                             
-                            delegation_text = f"\n\n**🔄 Delegating to {tool_args.get('worker_name')}**: {tool_args.get('task_description')}"
+                            delegation_text = (
+                                f"\n\n**🔄 Delegating to {target_worker_label}**: "
+                                f"{tool_args.get('task_description')}"
+                            )
                             if hasattr(msg, 'content') and msg.content:
                                 content = extract_text_from_content(msg.content)
                             content = content + delegation_text if content else delegation_text[2:]
-                            return routing_decision, content
+                            return content, routing_decision
                 
                 if hasattr(msg, 'content') and msg.content and not content:
                     content = extract_text_from_content(msg.content)
@@ -483,7 +556,7 @@ class HandoffDelegation:
             else:
                 content = str(out)
         
-        return routing_decision, content or ""
+        return content or "", routing_decision
     
     # Private Utility Methods
     @staticmethod

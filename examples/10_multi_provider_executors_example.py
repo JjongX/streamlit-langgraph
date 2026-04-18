@@ -12,8 +12,8 @@ def verify_executor_selection(agents: list) -> dict:
     """
     results = {}
     for agent in agents:
-        has_native = ExecutorRegistry.has_native_tools(agent)
-        if has_native and not agent.human_in_loop:
+        has_openai_native = ExecutorRegistry.has_openai_native_tools(agent)
+        if has_openai_native and not agent.human_in_loop:
             executor_type = "ResponseAPIExecutor"
         else:
             executor_type = "CreateAgentExecutor"
@@ -21,7 +21,7 @@ def verify_executor_selection(agents: list) -> dict:
         results[agent.name] = {
             "provider": agent.provider,
             "model": agent.model,
-            "has_native_tools": has_native,
+            "has_openai_native_tools": has_openai_native,
             "human_in_loop": agent.human_in_loop,
             "executor": executor_type,
         }
@@ -58,7 +58,7 @@ def display_executor_info(agents: list):
         with st.sidebar.expander(f"**{agent_name}**", expanded=True):
             st.markdown(f"**Provider:** `{info['provider']}`")
             st.markdown(f"**Model:** `{info['model']}`")
-            st.markdown(f"**Native Tools:** `{info['has_native_tools']}`")
+            st.markdown(f"**OpenAI Native Tools:** `{info['has_openai_native_tools']}`")
             st.markdown(f"**HITL:** `{info['human_in_loop']}`")
             
             # Color-code the executor type

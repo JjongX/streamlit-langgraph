@@ -72,18 +72,9 @@ def _append_gemini_extras(text: str, response_msg: Any) -> str:
     
     # Check for grounding metadata (Google Search results)
     grounding = extract_gemini_grounding_metadata(response_msg)
-    if grounding and grounding.get("grounding_chunks"):
-        # Don't duplicate text, just add citations
-        chunks = grounding.get("grounding_chunks", [])
-        if chunks:
-            citations = []
-            for i, chunk in enumerate(chunks):
-                uri = chunk.get("uri", "")
-                title = chunk.get("title", f"Source {i+1}")
-                if uri:
-                    citations.append(f"[{i+1}] [{title}]({uri})")
-            if citations:
-                extras.append("**Sources:**\n" + "\n".join(citations))
+    citation_text = format_gemini_grounding_citations("", grounding).strip()
+    if citation_text:
+        extras.append(citation_text)
     
     if extras:
         return text + "\n\n" + "\n\n".join(extras)

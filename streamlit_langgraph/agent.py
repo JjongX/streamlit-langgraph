@@ -185,10 +185,10 @@ def get_llm_client(
 ) -> Any:
     """Return a provider-appropriate LLM client (LangChain or minimal wrapper)."""
     provider = agent.provider.lower()
+    from .core.executor.registry import ExecutorRegistry
 
     # If OpenAI native tools are enabled (and HITL is off), we use ResponseAPIExecutor.
     # In that case, return a minimal client that only carries vector_store_ids.
-    from .core.executor.registry import ExecutorRegistry
     use_response_api = (
         provider == "openai"
         and not agent.human_in_loop
@@ -202,29 +202,29 @@ def get_llm_client(
                     self._vector_store_ids = vector_store_ids
                 self._provider = provider
         return MinimalClient(vector_store_ids)
-    else:
-        # CreateAgentExecutor path (LangChain chat model). Use model_provider "google_genai" for Google (not "google").
-        model_provider = "google_genai" if provider == "google" else provider
-        init_kwargs = {
-            "model": agent.model,
-            "temperature": agent.temperature,
-            "model_provider": model_provider,
-        }
 
-        if provider == "openai" and agent.reasoning_effort:
-            init_kwargs["reasoning"] = {"effort": agent.reasoning_effort, "summary": "auto"}
+    # CreateAgentExecutor path (LangChain chat model). Use model_provider "google_genai" for Google (not "google").
+    model_provider = "google_genai" if provider == "google" else provider
+    init_kwargs = {
+        "model": agent.model,
+        "temperature": agent.temperature,
+        "model_provider": model_provider,
+    }
 
-        chat_model = init_chat_model(**init_kwargs)
-        setattr(chat_model, "_provider", provider)
+    if provider == "openai" and agent.reasoning_effort:
+        init_kwargs["reasoning"] = {"effort": agent.reasoning_effort, "summary": "auto"}
 
-        if provider == "google" and ExecutorRegistry.has_gemini_native_tools(agent):
-            tools = []
-            if agent.allow_web_search:
-                tools.append({"google_search": {}})
-            if agent.allow_code_interpreter:
-                tools.append({"code_execution": {}})
-            if tools:
-                chat_model = chat_model.bind_tools(tools)
-            setattr(chat_model, "_has_gemini_native_tools", True)
+    chat_model = init_chat_model(**init_kwargs)
+    setattr(chat_model, "_provider", provider)
 
-        return chat_model
+    if provider == "google" and ExecutorRegistry.has_gemini_native_tools(agent):
+        tools = []
+        if agent.allow_web_search:
+            tools.append({"google_search": {}})
+        if agent.allow_code_interpreter:
+            tools.append({"code_execution": {}})
+        if tools:
+            chat_model = chat_model.bind_tools(tools)
+        setattr(chat_model, "_has_gemini_native_tools", True)
+
+    return chat_model

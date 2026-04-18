@@ -209,3 +209,4 @@ __marimo__/
 # Streamlit config and secrets
 /.streamlit
 /dev
+/docs/llm
